@@ -248,7 +248,12 @@ fn pair_chain(out: &mut Out, chain: &Chain) {
         end.push(log(&format!("ox default {}-{} ", chain.from, chain.to)));
     }
     end.extend([counter(), verdict(Action::Drop)]);
-    out.rule(&name, Some("default"), end);
+    // The comment is unique per pair so its counter can be read back.
+    out.rule(
+        &name,
+        Some(&format!("default {}-{}", chain.from, chain.to)),
+        end,
+    );
 
     out.stats.rules += chain.nft_rules();
     out.stats.longest_chain = out.stats.longest_chain.max(chain.nft_rules());

@@ -168,7 +168,11 @@ fn the_kernel_accepts_the_ruleset() {
             .map(|i| &i["add"]["rule"])
             .filter(|r| r["handle"].is_number())
             .filter(|r| r["chain"].as_str().is_some_and(|c| c.starts_with("p_")))
-            .filter(|r| r["comment"] != "default")
+            .filter(|r| {
+                !r["comment"]
+                    .as_str()
+                    .is_some_and(|c| c.starts_with("default "))
+            })
             .count();
         assert_eq!(sets, stats.sets, "{name}");
         assert_eq!(filter_rules, stats.rules, "{name}");

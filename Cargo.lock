@@ -627,7 +627,11 @@ name = "netoxide-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "ipnet",
+ "ox-client",
+ "ox-schema",
  "ratatui",
+ "serde_json",
 ]
 
 [[package]]
@@ -641,11 +645,19 @@ name = "ox-cli"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "ox-client",
  "ox-explain",
  "ox-import",
  "ox-nft",
  "ox-plan",
  "ox-schema",
+ "serde_json",
+]
+
+[[package]]
+name = "ox-client"
+version = "0.0.1"
+dependencies = [
  "serde_json",
 ]
 

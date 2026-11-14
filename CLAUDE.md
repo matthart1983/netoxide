@@ -15,7 +15,7 @@ decision. This file gives you what you need to start working.
 | --- | --- | --- |
 | Spec | `docs/spec.md` | Complete draft; open questions at the end |
 | Web UI design | `docs/design/` | 11 screens as Claude Design source, mock data |
-| TUI prototype | `tui/` | ratatui 0.29, 11 screens, **mock data only**, not wired to `oxd` |
+| TUI | `tui/` | ratatui 0.29. Live mode (`--socket`): 6 screens backed by `oxd`. Mock mode: the 11 designed screens with sample data |
 | Config schema | `crates/ox-schema` | Schema 1: zones, interfaces, groups, services, filter policy, NAT |
 | Rule compiler | `crates/ox-nft` | Config → `Ruleset` → libnftables JSON |
 | Explain | `crates/ox-explain` | One packet against a ruleset: forward, route, zone pair, rule, source NAT |
@@ -24,6 +24,7 @@ decision. This file gives you what you need to start working.
 | Kernel apply | `crates/ox-libnft` | FFI to libnftables. The only crate with `unsafe` |
 | Daemon | `crates/oxd` | HTTP+JSON API on a Unix socket, applies to the kernel, `--dry-run` |
 | CLI | `crates/ox-cli` | `ox`: daemon commands, `ox file ...` offline commands, `ox import` |
+| Socket client | `crates/ox-client` | The small HTTP client `ox` and the TUI share |
 | Importer | `crates/ox-import` | pfSense config.xml → config + report + differential verify |
 | Services, VPN, HA, API auth/RBAC, web UI, controller, OS image | — | **Not started** |
 
@@ -88,14 +89,15 @@ crates/
   ox-libnft/      the audited FFI crate for libnftables
   oxd/            the daemon: API on a Unix socket, commit-confirm clock
   ox-cli/         the `ox` binary
+  ox-client/      HTTP client for the oxd socket, shared by ox and the TUI
   ox-import/      pfSense backup → config, report, verify
 examples/         branch.toml, branch-candidate.toml, flows.jsonl, pfsense-config.xml
-tui/              netoxide-tui; replace tui/src/data.rs with an oxd API client
+tui/              netoxide-tui: live.rs + live_ui.rs (live mode), app.rs + ui.rs + data.rs (mock mode)
 ```
 
 Proposed next, not decided, roughly in this order:
 
-1. Wire the TUI to `oxd` (Policy, Changes, Explain, Audit first), replacing `tui/src/data.rs`.
+1. Rule and candidate editing in the live TUI. Today it reads, commits, confirms and reverts.
 2. API security: TLS listener, OIDC or token auth, the five roles, four-eyes approval. Today the socket's file permission is the only control.
 3. A rule merger so a zone pair over 32 nftables rules compiles instead of being refused.
 4. `ox-services`: Unbound, Kea, then WireGuard and strongSwan, each rendered from schema additions.
@@ -117,26 +119,30 @@ To run the daemon by hand without touching the host, start it under
 outside a namespace on Matt's machine: it would replace the host's `netoxide`
 nftables table.
 
-## The TUI prototype
+## The TUI
 
 ```sh
 cd tui
-cargo run --release                                  # needs ≥ 132×34 terminal
-cargo run -- --snapshot all --size 160x46            # print screens as text
-cargo run -- --snapshot changes --keys c             # replay keys first
-cargo run -- --html preview.html                     # coloured static preview
+cargo run --release -- --socket /path/to/oxd.sock    # live mode; needs ≥ 132×34
+cargo run --release                                  # mock mode: the 11 designed screens
+cargo run -- --socket S --snapshot all --size 160x46 # print live screens as text
+cargo run -- --socket S --snapshot changes --keys c  # replay keys first
+cargo run -- --snapshot all --size 160x46            # print mock screens as text
+cargo run -- --html preview.html                     # coloured static preview of mock mode
 ```
 
-- `src/app.rs` holds state and keys
-- `src/ui.rs` has one draw function per screen
-- `src/data.rs` is mock data that mirrors the web design
-- `src/html.rs` handles the HTML export
+Live mode:
 
-Screens are: Policy, NAT, VPN, IPS, Interfaces, HA, Changes (commit-confirm with a live countdown), Explain, Admin/Audit, Fleet and Import (key `i`).
+- `src/live.rs` holds the `Backend` trait, the socket implementation, state and keys. Everything the screens show comes through `Backend`. The test fixture in the same file implements it in memory.
+- `src/live_ui.rs` draws the six live screens: Policy, NAT, Interfaces, Changes, Explain, Audit.
+- Never put sample data in a live screen. If the daemon cannot back something, leave the screen out of live mode.
 
-Use `--snapshot` to check layout changes without a terminal. `cargo test` compares every screen with `tui/snapshots.txt`; regenerate it with `cargo run -- --snapshot all --size 160x46 > snapshots.txt` when a layout change is intended.
+Mock mode is the design reference and has not changed role:
 
-The TUI's HA screen says state sync runs over an "encrypted link". The spec requires an authenticated, encrypted channel and nobody has designed the mechanism. conntrackd has no TLS of its own.
+- `src/app.rs` holds state and keys, `src/ui.rs` one draw function per screen, `src/data.rs` the sample data, `src/html.rs` the HTML export.
+- Its HA screen says state sync runs over an "encrypted link". The spec requires an authenticated, encrypted channel and nobody has designed the mechanism. conntrackd has no TLS of its own.
+
+`cargo test` compares mock screens with `tui/snapshots.txt` and live screens with `tui/snapshots-live.txt`. Regenerate them with `cargo run -- --snapshot all --size 160x46 > snapshots.txt` and `UPDATE_SNAPSHOTS=1 cargo test -p netoxide-tui` when a layout change is intended.
 
 ## The web design
 

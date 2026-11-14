@@ -8,6 +8,7 @@ Netoxide is an open-source firewall and router OS for Linux with a Rust control 
 - [Try it without touching your machine](#try-it-without-touching-your-machine)
 - [The config](#the-config)
 - [How a change reaches the kernel](#how-a-change-reaches-the-kernel)
+- [The terminal UI](#the-terminal-ui)
 - [Explain a packet](#explain-a-packet)
 - [Import from pfSense](#import-from-pfsense)
 - [Command reference](#command-reference)
@@ -40,7 +41,7 @@ The research behind this is in [`docs/research/market-gap.md`](docs/research/mar
 | Explain | Says what happens to one packet and which rule decides: port forward, route, zone pair, rule, source NAT. Works for the running config and for a candidate that is not applied. |
 | pfSense import | Translates a `config.xml` backup into a config and a report, then checks its own translation against a model of the pfSense ruleset. |
 | CLI `ox` | Drives all of the above. |
-| TUI prototype | Eleven screens in the terminal, with mock data. It is not connected to the daemon yet. |
+| TUI | Six live screens backed by the daemon: Policy with kernel packet counters, NAT, Interfaces, Changes, Explain and Audit. You can commit, confirm and undo from it. A separate mock mode shows the eleven designed screens with sample data. |
 
 ## Try it without touching your machine
 
@@ -195,6 +196,27 @@ Plan output for the example candidate:
 ```
 
 The flows file is JSON Lines, one observed flow per line. See [`examples/flows.jsonl`](examples/flows.jsonl). Nothing collects flows yet, so you supply the file.
+
+## The terminal UI
+
+```sh
+cargo run -p netoxide-tui --release -- --socket $OX_SOCKET
+```
+
+It needs a terminal of at least 132×34. Everything on screen comes from the daemon and is read again once a second.
+
+| Screen | Shows | Keys |
+| --- | --- | --- |
+| Policy | Zone pairs and their rules from the running config, with the kernel's packet counter per rule | `←→` pair, `↑↓` rule, `x` explain a packet the rule is about |
+| NAT | Port forwards and outbound NAT | |
+| Interfaces | Interfaces, zones and addresses from the running config | |
+| Changes | Candidates, the plan for the selected one, the running commit | `c` commit, `w` confirm window |
+| Explain | A packet you type, judged by the running config and the selected candidate side by side | `e` edit, `enter` run, `m` compare on or off |
+| Audit | The audit log, newest first | `↑↓` |
+
+`y` keeps an unconfirmed commit and `r` undoes it, from any screen. A commit from the TUI always has a confirm window (30 s, 2, 5 or 10 min) and asks for a reason first.
+
+The TUI cannot edit rules or save candidates yet. Write the config in a file and use `ox candidate save`. Run it without `--socket` to see the eleven designed screens with sample data.
 
 ## Explain a packet
 
@@ -379,11 +401,11 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 63 tests. Two of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. The other starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
+There are 71 tests. Two of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. The other starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
-The TUI test compares every screen with `tui/snapshots.txt`.
+The TUI tests compare every mock screen with `tui/snapshots.txt` and every live screen, drawn against a test fixture, with `tui/snapshots-live.txt`.
 
 ## Limits today
 
@@ -400,7 +422,7 @@ The TUI test compares every screen with `tui/snapshots.txt`.
 
 Roughly in the order planned:
 
-1. Connect the TUI to the daemon in place of its mock data.
+1. Editing rules and candidates from the TUI.
 2. API security: TLS, OIDC or token login, roles, four-eyes approval.
 3. A rule merger, so long zone pairs compile.
 4. Services rendered from the config: DNS with Unbound, DHCP with Kea, then WireGuard and IPsec.
