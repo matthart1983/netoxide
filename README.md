@@ -41,7 +41,7 @@ The design rule is "easy first, advanced within reach". Each area has an easy pa
 | Interface | Terminal UI: view, commit, confirm, undo. **Works today.** Web UI is planned | CLI and HTTP API. **Work today.** Terraform provider is planned |
 | Scale | One box with no extra parts. **Works today** | Fleet controller, templates, staged rollouts. **Planned** |
 
-**If you run a home lab, be aware of where this is today.** There is no DHCP or DNS server and no web UI, so Netoxide cannot yet replace a home router. The rest of the easy path is what gets built next. See [Not built yet](#not-built-yet).
+**If you run a home lab, be aware of where this is today.** The pieces of a home router are here: firewall, NAT, DNS and DHCP from a guided setup. None of it has run on real hardware or served a real DHCP client yet, there is no IPv6 address handout, and there is no web UI. Treat it as something to try in a lab, not to put in front of your home network. See [Not built yet](#not-built-yet).
 
 ## Why
 
@@ -53,11 +53,13 @@ The research behind this is in [`docs/research/market-gap.md`](docs/research/mar
 
 | Piece | What it does |
 | --- | --- |
-| Config schema | One typed TOML or JSON document per box: zones, interfaces, address groups, services, zone-pair filter rules, port forwards and outbound NAT. Validation reports every problem with its location. The JSON Schema is published in [`schema/`](schema/netoxide-config-1.schema.json). |
+| Config schema | One typed TOML or JSON document per box: zones, interfaces, address groups, services, zone-pair filter rules, port forwards, outbound NAT, a DNS resolver and DHCP pools. Validation reports every problem with its location. The JSON Schema is published in [`schema/`](schema/netoxide-config-1.schema.json). |
 | Rule compiler | Turns a config into an nftables ruleset built from sets and verdict maps, loaded as one atomic transaction. IPv4 and IPv6 in the same rules. |
 | Daemon `oxd` | Owns the config. Stores candidates, applies commits to the kernel through libnftables, runs the confirm clock, and serves an HTTP and JSON API on a Unix socket. |
 | Commit-confirm | A commit made with a confirm window reverts by itself unless confirmed. The revert replays the previous commit. It does not reboot. A daemon restart with a commit still unconfirmed also reverts it. |
 | Rollback and history | The last 100 commits are kept with author, time, reason and the SHA-256 of the config. Rollback is a new commit with an old config. |
+| DNS and DHCP | The box answers DNS for its inside networks, with DNSSEC checking and local names, and hands out IPv4 addresses with fixed addresses per device. They are applied and reverted together with the firewall rules. Served by dnsmasq, which the daemon starts and restarts. |
+| Lockdown | With `oxd --lockdown`, a box with no config drops inbound and forwarded traffic until the first commit. |
 | Audit log | Every candidate save, commit, confirm and revert is appended to a hash-chained log. Editing or deleting a line breaks the chain, and the log says which line. |
 | Plan | Lists what a candidate changes, and replays observed flows through both configs to show which would get a different verdict. |
 | Explain | Says what happens to one packet and which rule decides: port forward, route, zone pair, rule, source NAT. Works for the running config and for a candidate that is not applied. |
@@ -129,19 +131,21 @@ This config will do the following:
   lan → wan: everything from anyone to anywhere is allowed (r-inside-out)
   lan → wan: everything else is dropped
   lan → the box itself: ssh, ping from anyone to anywhere is allowed (r-manage)
+  lan → the box itself: dns, dhcp from anyone to anywhere is allowed (r-services)
   lan → the box itself: everything else is dropped
   wan → the box itself: dhcpv6-client from fe80::/10 to anywhere is allowed (r-dhcpv6)
   wan → the box itself: everything else is dropped
   traffic from 192.168.10.0/24 leaving by wan appears to come from the box's own address (n-inside-out)
+  the box answers DNS for lan, forwarding to 1.1.1.1, 9.9.9.9, with DNSSEC checking
+  local names end in .home.arpa
+  devices on eth1 get an address from 192.168.10.100 to 192.168.10.199, kept for 12h
   wan → lan: no rules, so everything is dropped
-
-Not covered yet: Netoxide does not serve DHCP or DNS, so keep those running elsewhere.
 
 Saved as candidate starter. Nothing has been applied.
 Next: ox plan starter  then  ox commit starter --confirm 5m
 ```
 
-In short: the inside network can reach the internet and is hidden behind the box's address, the box can be managed over SSH from inside only, and everything arriving from the internet is dropped. Pass `--wan` and `--lan` to skip the questions, and `--out <file>` to write a file instead of saving a candidate. `ox init` only reads the machine. It changes nothing until you commit.
+In short: the inside network can reach the internet and is hidden behind the box's address, devices inside get an address and DNS from the box, the box can be managed over SSH from inside only, and everything arriving from the internet is dropped. DNS and DHCP need `dnsmasq` installed; `ox init --no-services` leaves them out. Pass `--wan` and `--lan` to skip the questions, and `--out <file>` to write a file instead of saving a candidate. `ox init` only reads the machine. It changes nothing until you commit.
 
 Two everyday changes are single commands. Each reads the running config, makes the change, and saves the result as a candidate for you to commit:
 
@@ -238,6 +242,31 @@ How to read it:
 - **Sources and destinations** are `"any"`, `"@group"`, a network in CIDR form, or one address. **Services** are `"any"`, a name from `[services]`, or `tcp/443`, `udp/137-138`, `icmp`, `icmpv6`.
 - **A port forward only rewrites the destination.** The packet still has to pass the filter rule named in `rule`, so there is no hidden pass rule.
 - **Rule IDs are stable.** They appear in logs, in `ox explain` and in the kernel as the rule's comment.
+
+DNS and DHCP are two more sections. This is from [`examples/home.toml`](examples/home.toml):
+
+```toml
+[dns]
+zones = ["lan"]                        # who may use the resolver
+upstream = ["1.1.1.1", "9.9.9.9"]      # where it forwards to
+domain = "home.arpa"                   # nas is also nas.home.arpa
+
+[[dns.host]]
+name = "nas"
+address = "192.168.10.5"
+
+[dhcp.eth1]                            # one pool per interface
+first = "192.168.10.100"
+last = "192.168.10.199"
+lease = "12h"
+
+[[dhcp.eth1.static]]                   # this device always gets this address
+mac = "aa:bb:cc:dd:ee:01"
+address = "192.168.10.5"
+name = "nas"
+```
+
+DNSSEC checking is on unless you set `dnssec = false`. Clients are told to use the box as their resolver and router. A service needs a visible rule like everything else: validation refuses a config that serves DNS or DHCP to a zone without an accept rule for it in that zone's policy to `self`, and says which rule to add.
 
 Validation catches things like unknown zones and groups, duplicate rule IDs, rules whose source and destination are different address families, and a forward that names a rule from the wrong zone. A typo such as `tcp/99999` or `10.20.4.17/16` fails with the value named and the fix suggested.
 
@@ -359,6 +388,7 @@ Daemon commands. All take `--socket <path>` or the `OX_SOCKET` variable. The def
 | `ox show <id>` | One commit and its config |
 | `ox explain --src --dst --proto --dport --in [--candidate <name>]` | What happens to one packet |
 | `ox audit` | The audit log, with the chain verified |
+| `ox leases` | The addresses DHCP has handed out |
 | `ox kernel` | The Netoxide table as the kernel holds it |
 | `ox forward --name <text> --port tcp/443 --to <host>[:port] [--address <outside address>]` | Forward a port to an inside host; saved as a candidate |
 | `ox block <address> [--name <text>]` | Drop everything a device sends; saved as a candidate |
@@ -373,12 +403,23 @@ Commands that need no daemon:
 | `ox file plan <running> <candidate> [--flows <file>]` | Plan from two files |
 | `ox file explain <file> --src ... [--candidate <file>]` | Explain from files |
 | `ox import <config.xml> [--out <file>] [--verify <flows>]` | Translate a pfSense backup |
-| `ox init [--wan <port>] [--lan <port>[=<addr/prefix>]] [--out <file> \| --save <name>]` | Guided setup. Reads the machine's ports; with `--out` it needs no daemon |
+| `ox init [--wan <port>] [--lan <port>[=<addr/prefix>]] [--no-services] [--dns-upstream <addr>] [--out <file> \| --save <name>]` | Guided setup. Reads the machine's ports; with `--out` it needs no daemon |
 | `ox schema` | Print the JSON Schema of the config |
 
 The confirm window is between 10 seconds and 1 hour. Only one commit can be pending at a time.
 
-`oxd` takes `--state-dir <dir>` (default `/var/lib/netoxide`), `--socket <path>` and `--dry-run`. Stopping it leaves the loaded ruleset in place, so the box keeps forwarding.
+`oxd` options:
+
+| Option | What it does |
+| --- | --- |
+| `--state-dir <dir>` | Where commits, candidates, the audit log and service files live. Default `/var/lib/netoxide` |
+| `--socket <path>` | The API socket. Default `/run/netoxide/oxd.sock` |
+| `--dry-run` | Keep state and serve the API, but load nothing and start no services |
+| `--lockdown` | Until the first commit, drop inbound and forwarded traffic. This cuts a remote session to the machine |
+| `--dnsmasq <path>` | The dnsmasq program to run. Default `dnsmasq` |
+| `--keep-service-privileges` | Do not switch services to an unprivileged user. Needed inside a user namespace |
+
+Stopping `oxd` leaves the loaded ruleset in place, so the box keeps forwarding. It does stop dnsmasq, so DNS and DHCP stop with it.
 
 ## API reference
 
@@ -400,6 +441,7 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `POST /v1/revert` | | The reverted commit |
 | `POST /v1/rollback` | `{"steps": 1, "confirm_secs": null, "reason": "..."}` | The new commit |
 | `POST /v1/explain` | `{"src", "dst", "proto", "dport", "in", "candidate"}` | Verdict, steps and text for running and candidate |
+| `GET /v1/leases` | | Addresses DHCP has handed out |
 | `GET /v1/audit` | | All entries. Fails if the hash chain is broken |
 | `GET /v1/kernel` | | The table as the kernel lists it |
 
@@ -436,6 +478,7 @@ The caller's name is read from the `x-ox-user` header and recorded as given. See
 | `oxd` | The daemon |
 | `ox-cli` | The `ox` binary |
 | `ox-import` | The pfSense importer and its model of the pfSense ruleset |
+| `ox-services` | Renders the config's DNS and DHCP settings as a dnsmasq config |
 | `ox-setup` | Interface detection, the starter config, and the one-step actions |
 | `ox-client` | The HTTP client for the daemon's socket, shared by `ox` and the TUI |
 | `tui/` | The terminal UI prototype |
@@ -478,7 +521,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 91 tests. Two of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. The other starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
+There are 112 tests. Four of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. One starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. One commits the home example and queries the resolver with `dig` over IPv4 and IPv6, changes a record with a confirm window, and checks the old answer returns when the window lapses. One checks that a service that cannot start refuses the commit and leaves the kernel unchanged. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
@@ -487,11 +530,13 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 ## Limits today
 
 - **The API has no security.** Whoever can open the socket file has full control. There is no TLS, login, role check or four-eyes approval, and the caller's name is taken from a header as given.
-- **Nothing is loaded before the first commit**, so the kernel's own defaults apply until then.
+- **Nothing is loaded before the first commit** unless you start `oxd --lockdown`, so by default the kernel's own defaults apply until then.
+- **DNS and DHCP are new and lightly tested.** DNS answers are tested against a real dnsmasq in a namespace. The DHCP config passes dnsmasq's own check and dnsmasq binds its socket, but no real client has asked it for an address. There is no IPv6 address handout (router advertisements or DHCPv6), no DNS blocklists, and the daemon runs dnsmasq directly, not as a systemd unit with a sandbox as the spec asks.
+- **dnsmasq is the only backend.** The spec names Unbound and Kea. The config does not name the program, so they can be added without changing configs.
 - **The box's own outbound traffic is not filtered.** There are no rules for traffic the box sends.
 - **Long zone pairs lose per-rule counters.** A pair that needs more than 32 nftables rules is merged: neighbouring rules with the same action become one set lookup and share a counter, so the TUI shows no packet count for them. Rules that log, match ICMP or any service, or overlap a neighbour are not merged. A pair that is still over 32 after merging is refused.
 - **Explain knows only connected networks and the default route.** A destination behind a static or dynamic route shows "no route".
-- **Schema 1 has no VPN, DNS, DHCP, routing protocols, traffic shaping, schedules or HA.**
+- **Schema 1 has no VPN, routing protocols, traffic shaping, schedules or HA.**
 - **The importer reads pfSense only** and has not been tested on a real backup.
 - **Nothing has run on real hardware or under real traffic.**
 
@@ -499,8 +544,8 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 
 Roughly in the order planned. Ease of use on one box comes first:
 
-1. A locked-down default before the first commit, and rules for traffic the box itself sends.
-2. DHCP with Kea and DNS with Unbound, rendered from the config.
+1. Rules for traffic the box itself sends, IPv6 address handout, and DHCP tested with real clients.
+2. Services as sandboxed systemd units, and Unbound and Kea as backends.
 3. More one-step actions such as "add a guest network", and rule editing in the TUI.
 4. A web UI.
 5. API security: TLS, OIDC or token login, roles, four-eyes approval.

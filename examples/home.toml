@@ -1,0 +1,94 @@
+# A home router: one port to the internet, one to the inside network. The box
+# hands out addresses and answers DNS for the inside. This is what `ox init`
+# writes, plus two local names and a fixed address for the NAS.
+schema = 1
+hostname = "homebox"
+
+[zones.wan]
+description = "Internet"
+[zones.lan]
+description = "Inside network"
+
+[interfaces.eth0]
+zone = "wan"
+default_route = true
+
+[interfaces.eth1]
+zone = "lan"
+addresses = ["192.168.10.1/24", "2001:db8:2::1/64"]
+
+[addresses]
+inside = ["192.168.10.0/24", "2001:db8:2::/64"]
+
+[services]
+ssh = ["tcp/22"]
+ping = ["icmp", "icmpv6"]
+dns = ["udp/53", "tcp/53"]
+dhcp = ["udp/67"]
+dhcpv6-client = ["udp/546"]
+
+[[policy]]
+from = "lan"
+to = "wan"
+
+[[policy.rule]]
+id = "r-inside-out"
+name = "Inside network to the internet"
+action = "accept"
+
+[[policy]]
+from = "lan"
+to = "self"
+
+[[policy.rule]]
+id = "r-manage"
+name = "Manage and ping the box from inside"
+action = "accept"
+service = ["ssh", "ping"]
+
+[[policy.rule]]
+id = "r-services"
+name = "Use the box for DNS and DHCP"
+action = "accept"
+service = ["dns", "dhcp"]
+
+[[policy]]
+from = "wan"
+to = "self"
+
+[[policy.rule]]
+id = "r-dhcpv6"
+name = "IPv6 address assignment from the provider"
+action = "accept"
+source = ["fe80::/10"]
+service = ["dhcpv6-client"]
+
+[[nat.outbound]]
+id = "n-inside-out"
+name = "Hide the inside network behind the box"
+from = "lan"
+to = "wan"
+source = ["192.168.10.0/24"]
+translate = "masquerade"
+
+[dns]
+zones = ["lan"]
+upstream = ["1.1.1.1", "9.9.9.9", "2606:4700:4700::1111"]
+domain = "home.arpa"
+
+[[dns.host]]
+name = "nas"
+address = "192.168.10.5"
+
+[[dns.host]]
+name = "nas"
+address = "2001:db8:2::5"
+
+[dhcp.eth1]
+first = "192.168.10.100"
+last = "192.168.10.199"
+
+[[dhcp.eth1.static]]
+mac = "aa:bb:cc:dd:ee:01"
+address = "192.168.10.5"
+name = "nas"

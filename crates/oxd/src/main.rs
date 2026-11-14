@@ -11,6 +11,7 @@
 //! forwarding with the last commit.
 
 mod api;
+mod services;
 
 use std::{
     os::unix::fs::PermissionsExt,
@@ -21,17 +22,47 @@ use std::{
 };
 
 use ox_nft::list_command;
-use ox_store::{Applier, Engine, NullApplier};
+use ox_store::{Applier, Baseline, Engine, NullApplier, Target};
 use serde_json::Value;
 
-/// Loads rulesets into the kernel through libnftables.
-struct KernelApplier;
+/// Puts a target into effect on this machine: the ruleset into the kernel
+/// through libnftables, and the service config into a supervised dnsmasq.
+struct SystemApplier {
+    dnsmasq: services::Dnsmasq,
+    /// The last target that was applied in full, for undoing a half-applied one.
+    current: Option<Target>,
+}
 
-impl Applier for KernelApplier {
-    fn apply(&mut self, ruleset: &Value) -> Result<(), String> {
-        ox_libnft::run_json(&ruleset.to_string())
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+fn load(ruleset: &Value) -> Result<(), String> {
+    ox_libnft::run_json(&ruleset.to_string())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+impl Applier for SystemApplier {
+    fn apply(&mut self, target: &Target) -> Result<(), String> {
+        let conf = target.services.get(ox_services::DNSMASQ);
+        // Check the service config before anything changes.
+        self.dnsmasq.check(conf)?;
+        load(&target.ruleset)?;
+        if let Err(e) = self.dnsmasq.apply(conf) {
+            // The firewall changed and the service did not follow. Go back,
+            // so the box is never half in one config and half in another.
+            let (ruleset, old) = match &self.current {
+                Some(t) => (
+                    t.ruleset.clone(),
+                    t.services.get(ox_services::DNSMASQ).cloned(),
+                ),
+                None => (ox_nft::render_empty(), None),
+            };
+            let undone = load(&ruleset).and_then(|()| self.dnsmasq.apply(old.as_ref()));
+            return Err(match undone {
+                Ok(()) => e,
+                Err(u) => format!("{e}. Going back also failed: {u}"),
+            });
+        }
+        self.current = Some(target.clone());
+        Ok(())
     }
     fn dump(&mut self) -> Result<Value, String> {
         let out = ox_libnft::run_json(&list_command().to_string()).map_err(|e| e.to_string())?;
@@ -39,6 +70,16 @@ impl Applier for KernelApplier {
     }
     fn name(&self) -> &'static str {
         "kernel"
+    }
+    fn tick(&mut self) {
+        self.dnsmasq.tick();
+    }
+    fn services(&mut self) -> Vec<(String, String)> {
+        self.dnsmasq
+            .state()
+            .map(|s| (ox_services::DNSMASQ.to_string(), s))
+            .into_iter()
+            .collect()
     }
 }
 
@@ -54,6 +95,9 @@ struct Args {
     state_dir: PathBuf,
     socket: PathBuf,
     dry_run: bool,
+    lockdown: bool,
+    keep_privileges: bool,
+    dnsmasq: String,
 }
 
 const USAGE: &str = "\
@@ -63,6 +107,13 @@ oxd: the Netoxide daemon
                       (default /var/lib/netoxide)
   --socket <path>     Unix socket for the API (default /run/netoxide/oxd.sock)
   --dry-run           keep state and serve the API, but load nothing into the kernel
+                      and start no services
+  --lockdown          until the first commit, drop forwarded and inbound traffic.
+                      A remote session to this machine will be cut
+  --dnsmasq <path>    the dnsmasq program to run for DNS and DHCP (default dnsmasq)
+  --keep-service-privileges
+                      do not switch services to an unprivileged user. Needed
+                      inside a user namespace
 ";
 
 fn parse_args() -> Result<Args, String> {
@@ -70,6 +121,9 @@ fn parse_args() -> Result<Args, String> {
         state_dir: "/var/lib/netoxide".into(),
         socket: "/run/netoxide/oxd.sock".into(),
         dry_run: false,
+        lockdown: false,
+        keep_privileges: false,
+        dnsmasq: "dnsmasq".into(),
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -77,6 +131,9 @@ fn parse_args() -> Result<Args, String> {
             "--state-dir" => args.state_dir = it.next().ok_or("--state-dir needs a value")?.into(),
             "--socket" => args.socket = it.next().ok_or("--socket needs a value")?.into(),
             "--dry-run" => args.dry_run = true,
+            "--lockdown" => args.lockdown = true,
+            "--keep-service-privileges" => args.keep_privileges = true,
+            "--dnsmasq" => args.dnsmasq = it.next().ok_or("--dnsmasq needs a value")?,
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument '{other}'")),
         }
@@ -88,11 +145,24 @@ async fn serve(args: Args) -> Result<(), String> {
     let applier: Box<dyn Applier> = if args.dry_run {
         Box::new(NullApplier::default())
     } else {
-        Box::new(KernelApplier)
+        Box::new(SystemApplier {
+            dnsmasq: services::Dnsmasq::new(
+                args.state_dir.join("services"),
+                args.dnsmasq.clone(),
+                args.keep_privileges,
+            ),
+            current: None,
+        })
     };
-    let engine = Engine::open(&args.state_dir, applier, now())
+    let baseline = if args.lockdown {
+        Baseline::Lockdown
+    } else {
+        Baseline::Open
+    };
+    let engine = Engine::open_with(&args.state_dir, applier, baseline, now())
         .map_err(|e| format!("{}: {e}", args.state_dir.display()))?;
     let shared: Shared = Arc::new(Mutex::new(engine));
+    let leases = args.state_dir.join("services").join("dnsmasq.leases");
 
     // A socket file left by a previous run would make bind fail.
     let _ = std::fs::remove_file(&args.socket);
@@ -131,7 +201,7 @@ async fn serve(args: Args) -> Result<(), String> {
         }
     );
     let socket = args.socket.clone();
-    axum::serve(listener, api::router(shared))
+    axum::serve(listener, api::router(shared, leases))
         .with_graceful_shutdown(async {
             let mut term =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

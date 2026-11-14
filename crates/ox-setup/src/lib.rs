@@ -7,14 +7,14 @@
 
 mod detect;
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 use ipnet::IpNet;
 use ox_explain::{Packet, Verdict, explain};
 use ox_nft::{L4, compile};
 use ox_schema::{
-    Action, AddrRef, Config, Forward, IfaceAddr, Interface, Nat, Net, Outbound, Policy, PortSpec,
-    Proto, Rule, SCHEMA_VERSION, SELF_ZONE, ServiceRef, Translate, Zone, is_name,
+    Action, AddrRef, Config, DhcpPool, Dns, Forward, IfaceAddr, Interface, Nat, Net, Outbound,
+    Policy, PortSpec, Proto, Rule, SCHEMA_VERSION, SELF_ZONE, ServiceRef, Translate, Zone, is_name,
 };
 
 pub use detect::{Detected, detect};
@@ -35,6 +35,54 @@ pub struct Answers {
     pub wan: Port,
     /// The ports that face the inside network.
     pub lans: Vec<Port>,
+    /// Hand out addresses and answer DNS for the inside network.
+    pub serve: Option<Serve>,
+}
+
+/// How the box serves DNS and DHCP to the inside network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Serve {
+    /// The resolvers to forward DNS queries to.
+    pub upstream: Vec<IpAddr>,
+    /// The domain for local names, such as `home.arpa`.
+    pub domain: Option<String>,
+}
+
+impl Default for Serve {
+    fn default() -> Serve {
+        Serve {
+            upstream: vec![
+                "1.1.1.1".parse().expect("valid"),
+                "9.9.9.9".parse().expect("valid"),
+            ],
+            domain: Some("home.arpa".into()),
+        }
+    }
+}
+
+/// A pool of addresses to hand out on a network, away from the box's own
+/// address. `None` when the network is too small to be worth a pool.
+fn pool(own: ipnet::Ipv4Net) -> Option<(Ipv4Addr, Ipv4Addr)> {
+    let size = 1u32.checked_shl(32 - u32::from(own.prefix_len()))?;
+    if size < 16 {
+        return None;
+    }
+    let net = u32::from(own.network());
+    let me = u32::from(own.addr());
+    // On a /24 or larger: .100 to .199. On a smaller one: its upper half.
+    let (mut first, mut last) = if size >= 256 {
+        (net + 100, net + 199)
+    } else {
+        (net + size / 2, net + size - 2)
+    };
+    if (first..=last).contains(&me) {
+        if me - first < last - me {
+            first = me + 1;
+        } else {
+            last = me - 1;
+        }
+    }
+    Some((Ipv4Addr::from(first), Ipv4Addr::from(last)))
 }
 
 fn rule(id: &str, name: &str, source: Vec<AddrRef>, service: &[&str], reason: &str) -> Rule {
@@ -118,6 +166,8 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
         .collect(),
         policies: vec![],
         nat: Nat::default(),
+        dns: None,
+        dhcp: Default::default(),
     };
     for lan in &a.lans {
         config
@@ -186,6 +236,50 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
             source: v4,
             translate: Translate::Masquerade,
         });
+    }
+    if let Some(serve) = &a.serve {
+        for (name, ports) in [("dns", vec!["udp/53", "tcp/53"]), ("dhcp", vec!["udp/67"])] {
+            config.services.insert(
+                name.to_string(),
+                ports
+                    .into_iter()
+                    .map(|p| p.parse().expect("built-in"))
+                    .collect(),
+            );
+        }
+        // The services need a visible rule like everything else.
+        config.policies[1].rules.push(rule(
+            "r-services",
+            "Use the box for DNS and for getting an address",
+            vec![AddrRef::Any],
+            &["dns", "dhcp"],
+            "starter config: the box answers DNS and hands out addresses inside",
+        ));
+        config.dns = Some(Dns {
+            zones: vec!["lan".into()],
+            upstream: serve.upstream.clone(),
+            dnssec: true,
+            domain: serve.domain.clone(),
+            hosts: vec![],
+        });
+        for lan in &a.lans {
+            let own = lan.addrs.iter().find_map(|n| match n {
+                IpNet::V4(n) => Some(*n),
+                IpNet::V6(_) => None,
+            });
+            if let Some((first, last)) = own.and_then(pool) {
+                config.dhcp.insert(
+                    lan.name.clone(),
+                    DhcpPool {
+                        first,
+                        last,
+                        lease: Default::default(),
+                        dns: vec![],
+                        statics: vec![],
+                    },
+                );
+            }
+        }
     }
     check(&config)?;
     Ok(config)
@@ -279,6 +373,31 @@ pub fn describe(config: &Config) -> Vec<String> {
                 Translate::Address(a) => a.to_string(),
             },
             o.id
+        ));
+    }
+    if let Some(dns) = &config.dns {
+        out.push(format!(
+            "the box answers DNS for {}, forwarding to {}{}",
+            dns.zones.join(", "),
+            dns.upstream
+                .iter()
+                .map(IpAddr::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+            if dns.dnssec {
+                ", with DNSSEC checking"
+            } else {
+                ""
+            }
+        ));
+        if let Some(d) = &dns.domain {
+            out.push(format!("local names end in .{d}"));
+        }
+    }
+    for (name, p) in &config.dhcp {
+        out.push(format!(
+            "devices on {name} get an address from {} to {}, kept for {}",
+            p.first, p.last, p.lease
         ));
     }
     let zones: Vec<&String> = config.zones.keys().collect();
@@ -589,6 +708,7 @@ mod tests {
             hostname: "home".into(),
             wan: port("eth0", &["203.0.113.10/24", "2001:db8:1::10/64"]),
             lans: vec![port("eth1", &["192.168.10.1/24", "2001:db8:2::1/64"])],
+            serve: None,
         })
         .unwrap()
     }
@@ -711,6 +831,7 @@ mod tests {
             hostname: "v6".into(),
             wan: port("eth0", &["2001:db8:1::10/64"]),
             lans: vec![port("eth1", &["2001:db8:2::1/64"])],
+            serve: None,
         })
         .unwrap();
         assert!(v6.nat.outbound.is_empty());
@@ -725,10 +846,119 @@ mod tests {
                 port("eth1", &["192.168.10.1/24"]),
                 port("eth2", &["192.168.20.1/24"]),
             ],
+            serve: None,
         })
         .unwrap();
         assert_eq!(c.zone_interfaces("lan"), ["eth1", "eth2"]);
         assert_eq!(c.addresses["inside"].len(), 2);
+    }
+
+    fn served() -> Config {
+        starter(&Answers {
+            hostname: "home".into(),
+            wan: port("eth0", &[]),
+            lans: vec![port("eth1", &["192.168.10.1/24", "2001:db8:2::1/64"])],
+            serve: Some(Serve::default()),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn the_starter_can_serve_dns_and_addresses_inside_only() {
+        let c = served();
+        let dns = c.dns.as_ref().unwrap();
+        assert_eq!(dns.zones, ["lan"]);
+        assert_eq!(dns.domain.as_deref(), Some("home.arpa"));
+        let p = &c.dhcp["eth1"];
+        assert_eq!(
+            (p.first.to_string(), p.last.to_string()),
+            ("192.168.10.100".into(), "192.168.10.199".into())
+        );
+        // The inside network may use the services, in both address families.
+        for (src, me) in [
+            ("192.168.10.50", "192.168.10.1"),
+            ("2001:db8:2::50", "2001:db8:2::1"),
+        ] {
+            assert_eq!(
+                verdict(&c, src, me, L4::Udp, Some(53), "eth1"),
+                (Verdict::Accept, Some("r-services".into()))
+            );
+            assert_eq!(
+                verdict(&c, src, me, L4::Tcp, Some(53), "eth1").0,
+                Verdict::Accept
+            );
+        }
+        assert_eq!(
+            verdict(
+                &c,
+                "192.168.10.50",
+                "192.168.10.1",
+                L4::Udp,
+                Some(67),
+                "eth1"
+            )
+            .0,
+            Verdict::Accept
+        );
+        let text = describe(&c).join("\n");
+        assert!(
+            text.contains(
+                "the box answers DNS for lan, forwarding to 1.1.1.1, 9.9.9.9, with DNSSEC checking"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "devices on eth1 get an address from 192.168.10.100 to 192.168.10.199, kept for 12h"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn pools_keep_clear_of_the_box_and_fit_the_network() {
+        let p = |s: &str| pool(s.parse().unwrap()).map(|(a, b)| format!("{a}-{b}"));
+        assert_eq!(
+            p("192.168.10.1/24").as_deref(),
+            Some("192.168.10.100-192.168.10.199")
+        );
+        assert_eq!(
+            p("10.20.0.1/16").as_deref(),
+            Some("10.20.0.100-10.20.0.199")
+        );
+        assert_eq!(
+            p("192.168.10.150/24").as_deref(),
+            Some("192.168.10.100-192.168.10.149")
+        );
+        assert_eq!(
+            p("192.168.10.120/24").as_deref(),
+            Some("192.168.10.121-192.168.10.199")
+        );
+        assert_eq!(
+            p("192.168.10.1/26").as_deref(),
+            Some("192.168.10.32-192.168.10.62")
+        );
+        assert_eq!(
+            p("192.168.10.1/29"),
+            None,
+            "eight addresses are too few for a pool"
+        );
+        // Every pool this makes passes validation: inside the network, not the box.
+        for net in [
+            "192.168.10.1/24",
+            "192.168.10.150/24",
+            "192.168.10.33/26",
+            "10.0.0.1/8",
+            "172.16.5.129/25",
+        ] {
+            let c = starter(&Answers {
+                hostname: "h".into(),
+                wan: port("eth0", &[]),
+                lans: vec![port("eth1", &[net])],
+                serve: Some(Serve::default()),
+            });
+            assert!(c.is_ok(), "{net}: {c:?}");
+        }
     }
 
     #[test]
@@ -737,6 +967,7 @@ mod tests {
             hostname: "x".into(),
             wan: port("eth0", &[]),
             lans: vec![],
+            serve: None,
         };
         assert!(starter(&a).unwrap_err().contains("at least one port"));
         a.lans = vec![port("eth0", &["192.168.1.1/24"])];

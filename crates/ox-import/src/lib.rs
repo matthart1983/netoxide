@@ -317,6 +317,8 @@ pub fn import_pfsense(xml: &str) -> Result<Imported, ImportError> {
         services: BTreeMap::new(),
         policies: vec![],
         nat: Nat::default(),
+        dns: None,
+        dhcp: Default::default(),
     };
 
     // Interfaces and zones.

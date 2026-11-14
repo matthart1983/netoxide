@@ -19,8 +19,15 @@ use serde_json::json;
 
 use crate::{Shared, now};
 
-pub fn router(shared: Shared) -> Router {
+pub fn router(shared: Shared, lease_file: std::path::PathBuf) -> Router {
     Router::new()
+        .route(
+            "/v1/leases",
+            get(move || {
+                let path = lease_file.clone();
+                async move { leases(path) }
+            }),
+        )
         .route("/v1/status", get(status))
         .route("/v1/running", get(running))
         .route("/v1/commits", get(commits))
@@ -316,6 +323,18 @@ async fn explain_packet(State(s): State<Shared>, Json(body): Json<ExplainBody>) 
         "candidate": candidate_text.as_deref().map(run).transpose()?,
     }))
     .into_response())
+}
+
+/// The addresses DHCP has handed out. Empty when DHCP is not served.
+fn leases(path: std::path::PathBuf) -> Response {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let rows: Vec<_> = ox_services::parse_leases(&text)
+        .into_iter()
+        .map(
+            |l| json!({ "expires": l.expires, "mac": l.mac, "address": l.address, "name": l.name }),
+        )
+        .collect();
+    Json(rows).into_response()
 }
 
 /// The whole audit log. A broken chain is an error, with the line named.

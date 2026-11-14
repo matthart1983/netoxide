@@ -186,3 +186,117 @@ fn the_published_schema_is_current() {
         "schema/netoxide-config-1.schema.json is stale"
     );
 }
+
+const HOME: &str = include_str!("../../../examples/home.toml");
+
+#[test]
+fn the_home_example_with_dns_and_dhcp_is_valid_and_round_trips() {
+    let config = Config::from_toml(HOME).unwrap();
+    assert_eq!(config.dns.as_ref().unwrap().hosts.len(), 2);
+    assert_eq!(config.dhcp["eth1"].statics.len(), 1);
+    assert_eq!(Config::from_toml(&config.to_toml()).unwrap(), config);
+}
+
+#[test]
+fn a_service_needs_a_rule_that_lets_its_clients_in() {
+    // Take DNS and DHCP out of the rule that allows them.
+    let closed = HOME.replace("service = [\"dns\", \"dhcp\"]", "service = [\"tcp/8080\"]");
+    let p = problems(&closed);
+    assert!(
+        p.iter()
+            .any(|m| m.contains("no rule in lan → self accepts DNS")),
+        "{p:?}"
+    );
+    assert!(
+        p.iter()
+            .any(|m| m.contains("no rule in lan → self accepts DHCP")),
+        "{p:?}"
+    );
+    // UDP alone is not enough for DNS: large answers come over TCP.
+    let udp_only = HOME.replace("dns = [\"udp/53\", \"tcp/53\"]", "dns = [\"udp/53\"]");
+    assert!(
+        problems(&udp_only)
+            .iter()
+            .any(|m| m.contains("accepts DNS"))
+    );
+}
+
+#[test]
+fn dhcp_pools_must_fit_their_network() {
+    let with = |first: &str, last: &str| {
+        HOME.replace(
+            "first = \"192.168.10.100\"\nlast = \"192.168.10.199\"",
+            &format!("first = \"{first}\"\nlast = \"{last}\""),
+        )
+    };
+    for (first, last, needle) in [
+        ("192.168.10.200", "192.168.10.100", "runs backwards"),
+        (
+            "192.168.11.100",
+            "192.168.11.199",
+            "not a usable address on 192.168.10.0/24",
+        ),
+        ("192.168.10.1", "192.168.10.50", "the box's own address"),
+        ("192.168.10.100", "192.168.10.255", "not a usable address"),
+    ] {
+        let p = problems(&with(first, last));
+        assert!(
+            p.iter().any(|m| m.contains(needle)),
+            "{first}-{last}: {p:?}"
+        );
+    }
+    let p = problems(&HOME.replace("dhcp.eth1", "dhcp.eth9"));
+    assert!(
+        p.iter()
+            .any(|m| m.contains("dhcp eth9: this interface is not defined")),
+        "{p:?}"
+    );
+    let p = problems(&HOME.replace("dhcp.eth1", "dhcp.eth0"));
+    assert!(p.iter().any(|m| m.contains("no IPv4 address")), "{p:?}");
+}
+
+#[test]
+fn static_leases_and_names_are_checked() {
+    let second = "\n[[dhcp.eth1.static]]\nmac = \"aa:bb:cc:dd:ee:01\"\naddress = \"192.168.10.5\"\nname = \"my nas\"\n";
+    let p = problems(&format!("{HOME}{second}"));
+    assert!(
+        p.iter().any(|m| m.contains("more than one static lease")),
+        "{p:?}"
+    );
+    assert!(
+        p.iter()
+            .any(|m| m.contains("given to more than one device")),
+        "{p:?}"
+    );
+    assert!(p.iter().any(|m| m.contains("name 'my nas'")), "{p:?}");
+    let p = problems(&HOME.replace("mac = \"aa:bb:cc:dd:ee:01\"", "mac = \"aa:bb:cc\""));
+    assert!(p[0].contains("aa:bb:cc:dd:ee:ff"), "{p:?}");
+    let p = problems(&HOME.replace(
+        "last = \"192.168.10.199\"",
+        "last = \"192.168.10.199\"\nlease = \"5s\"",
+    ));
+    assert!(p[0].contains("30m, 12h or 7d"), "{p:?}");
+}
+
+#[test]
+fn dns_settings_are_checked() {
+    let p = problems(&HOME.replace("zones = [\"lan\"]", "zones = [\"dmz\"]"));
+    assert!(
+        p.iter()
+            .any(|m| m.contains("dns, zone dmz: this zone is not defined")),
+        "{p:?}"
+    );
+    let p = problems(&HOME.replace(
+        "upstream = [\"1.1.1.1\", \"9.9.9.9\", \"2606:4700:4700::1111\"]",
+        "upstream = []",
+    ));
+    assert!(p.iter().any(|m| m.contains("upstream is empty")), "{p:?}");
+    // Without the resolver, the pool has to say which DNS servers to hand out.
+    let no_dns = HOME.split("[dns]").next().unwrap().to_string()
+        + "[dhcp.eth1]\nfirst = \"192.168.10.100\"\nlast = \"192.168.10.199\"\n";
+    let p = problems(&no_dns);
+    assert!(
+        p.iter().any(|m| m.contains("clients need a DNS server")),
+        "{p:?}"
+    );
+}

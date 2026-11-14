@@ -190,3 +190,179 @@ fn commit_confirm_revert_and_rollback_against_the_kernel() {
     drop(d);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+const HOME: &str = include_str!("../../../examples/home.toml");
+
+/// A daemon in a namespace that has the inside interface of the home
+/// example, so DNS and DHCP have somewhere to listen.
+fn start_home(dir: &Path, extra: &[&str]) -> Option<Daemon> {
+    let _ = std::fs::remove_file(dir.join("oxd.sock"));
+    // The setup needs a shell because it runs several `ip` commands inside
+    // the new namespace before the daemon starts. This is test scaffolding.
+    let setup = "ip link set lo up && ip link add eth1 type dummy \
+                 && ip addr add 192.168.10.1/24 dev eth1 \
+                 && ip -6 addr add 2001:db8:2::1/64 dev eth1 nodad \
+                 && ip link set eth1 up && exec \"$@\"";
+    let child = Command::new("unshare")
+        .args(["-Urn", "sh", "-c", setup, "sh", env!("CARGO_BIN_EXE_oxd")])
+        .arg("--state-dir")
+        .arg(dir.join("state"))
+        .arg("--socket")
+        .arg(dir.join("oxd.sock"))
+        .arg("--keep-service-privileges")
+        .args(extra)
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut d = Daemon {
+        child,
+        dir: dir.to_path_buf(),
+    };
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if UnixStream::connect(d.socket()).is_ok() {
+            return Some(d);
+        }
+        if d.child.try_wait().ok().flatten().is_some() {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    None
+}
+
+/// Asks the resolver inside the daemon's namespace. `None` when there is no answer.
+fn dig(d: &Daemon, server: &str, name: &str, kind: &str) -> Option<String> {
+    let out = Command::new("nsenter")
+        .args(["--user", "--net", "--preserve-credentials", "-t"])
+        .arg(d.child.id().to_string())
+        .args(["dig", "+short", "+time=2", "+tries=1"])
+        .arg(format!("@{server}"))
+        .args([name, kind])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !text.is_empty()).then_some(text)
+}
+
+fn have(program: &str, arg: &str) -> bool {
+    Command::new(program)
+        .arg(arg)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+#[test]
+fn dns_and_dhcp_follow_the_commits() {
+    if !(have("dnsmasq", "--version") && have("dig", "-v") && have("nsenter", "--version")) {
+        eprintln!("skipped: needs dnsmasq, dig and nsenter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("oxd-dns-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let Some(d) = start_home(&dir, &["--lockdown"]) else {
+        eprintln!("skipped: needs unshare(1), unprivileged user namespaces and libnftables");
+        return;
+    };
+
+    // No config yet: locked down, and nothing answers DNS.
+    let status = d.ok("GET", "/v1/status", "");
+    assert_eq!(status["lockdown"], true);
+    assert!(d.kernel_has("lockdown"));
+    assert_eq!(dig(&d, "192.168.10.1", "nas.home.arpa", "A"), None);
+
+    // The home config brings up the resolver and the address pool.
+    d.ok("PUT", "/v1/candidates/home", HOME);
+    d.ok(
+        "POST",
+        "/v1/candidates/home/commit",
+        r#"{"reason":"home router"}"#,
+    );
+    let status = d.ok("GET", "/v1/status", "");
+    assert_eq!(status["lockdown"], false);
+    assert_eq!(status["services"][0], json!(["dnsmasq", "running"]));
+    assert!(!d.kernel_has("lockdown") && d.kernel_has("r-services"));
+    for (server, kind, want) in [
+        ("192.168.10.1", "A", "192.168.10.5"),
+        ("192.168.10.1", "AAAA", "2001:db8:2::5"),
+        ("2001:db8:2::1", "A", "192.168.10.5"),
+    ] {
+        assert_eq!(
+            dig(&d, server, "nas.home.arpa", kind).as_deref(),
+            Some(want),
+            "{server} {kind}"
+        );
+    }
+    assert_eq!(
+        dig(&d, "192.168.10.1", "nas", "A").as_deref(),
+        Some("192.168.10.5"),
+        "short name"
+    );
+    assert_eq!(d.ok("GET", "/v1/leases", ""), json!([]));
+
+    // Change a record with a confirm window and let it lapse: the old answer returns.
+    let moved = HOME.replace(
+        "address = \"192.168.10.5\"\n\n[[dns.host]]",
+        "address = \"192.168.10.77\"\n\n[[dns.host]]",
+    );
+    assert_ne!(moved, HOME);
+    d.ok("PUT", "/v1/candidates/moved", &moved);
+    d.ok(
+        "POST",
+        "/v1/candidates/moved/commit",
+        r#"{"confirm_secs":10,"reason":"move nas"}"#,
+    );
+    assert_eq!(
+        dig(&d, "192.168.10.1", "nas.home.arpa", "A").as_deref(),
+        Some("192.168.10.77")
+    );
+    std::thread::sleep(Duration::from_secs(12));
+    assert_eq!(d.running(), 1);
+    assert_eq!(
+        dig(&d, "192.168.10.1", "nas.home.arpa", "A").as_deref(),
+        Some("192.168.10.5")
+    );
+
+    // A config without services stops the resolver.
+    d.ok("PUT", "/v1/candidates/plain", BRANCH);
+    d.ok(
+        "POST",
+        "/v1/candidates/plain/commit",
+        r#"{"reason":"no services"}"#,
+    );
+    assert_eq!(dig(&d, "192.168.10.1", "nas.home.arpa", "A"), None);
+    assert_eq!(d.ok("GET", "/v1/status", "")["services"], json!([]));
+
+    drop(d);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_service_that_cannot_run_refuses_the_commit_and_changes_nothing() {
+    let dir = std::env::temp_dir().join(format!("oxd-svc-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // `false` stands in for a dnsmasq that rejects every config.
+    let Some(d) = start_home(&dir, &["--dnsmasq", "false"]) else {
+        eprintln!("skipped: needs unshare(1), unprivileged user namespaces and libnftables");
+        return;
+    };
+    d.ok("PUT", "/v1/candidates/base", BRANCH);
+    d.ok(
+        "POST",
+        "/v1/candidates/base/commit",
+        r#"{"reason":"first"}"#,
+    );
+    assert!(d.kernel_has("r-0388"));
+
+    d.ok("PUT", "/v1/candidates/home", HOME);
+    let (status, text) = d.call("POST", "/v1/candidates/home/commit", r#"{"reason":"x"}"#);
+    assert_eq!(status, 500, "{text}");
+    assert!(text.contains("not applied, nothing changed"), "{text}");
+    assert_eq!(d.running(), 1);
+    assert!(d.kernel_has("r-0388") && !d.kernel_has("r-services"));
+
+    drop(d);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

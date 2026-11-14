@@ -755,6 +755,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ox-services"
+version = "0.0.1"
+dependencies = [
+ "ox-schema",
+]
+
+[[package]]
 name = "ox-setup"
 version = "0.0.1"
 dependencies = [
@@ -773,6 +780,7 @@ dependencies = [
  "ox-nft",
  "ox-plan",
  "ox-schema",
+ "ox-services",
  "serde",
  "serde_json",
  "sha2",
@@ -784,11 +792,13 @@ name = "oxd"
 version = "0.0.1"
 dependencies = [
  "axum",
+ "nix",
  "ox-explain",
  "ox-libnft",
  "ox-nft",
  "ox-plan",
  "ox-schema",
+ "ox-services",
  "ox-store",
  "serde",
  "serde_json",

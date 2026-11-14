@@ -16,7 +16,7 @@ decision. This file gives you what you need to start working.
 | Spec | `docs/spec.md` | Complete draft; open questions at the end |
 | Web UI design | `docs/design/` | 11 screens as Claude Design source, mock data |
 | TUI | `tui/` | ratatui 0.29. Live mode (`--socket`): 6 screens backed by `oxd`. Mock mode: the 11 designed screens with sample data |
-| Config schema | `crates/ox-schema` | Schema 1: zones, interfaces, groups, services, filter policy, NAT |
+| Config schema | `crates/ox-schema` | Schema 1: zones, interfaces, groups, services, filter policy, NAT, DNS resolver, DHCP pools |
 | Rule compiler | `crates/ox-nft` | Config → `Ruleset` → libnftables JSON |
 | Explain | `crates/ox-explain` | One packet against a ruleset: forward, route, zone pair, rule, source NAT |
 | Plan | `crates/ox-plan` | Config diff, and which observed flows change verdict |
@@ -25,6 +25,7 @@ decision. This file gives you what you need to start working.
 | Daemon | `crates/oxd` | HTTP+JSON API on a Unix socket, applies to the kernel, `--dry-run` |
 | CLI | `crates/ox-cli` | `ox`: daemon commands, `ox file ...` offline commands, `ox import` |
 | Socket client | `crates/ox-client` | The small HTTP client `ox` and the TUI share |
+| DNS and DHCP | `crates/ox-services` + `crates/oxd/src/services.rs` | `[dns]` and `[dhcp.<iface>]` in the schema, rendered as a dnsmasq config; `oxd` runs and restarts dnsmasq. Applied and reverted with the ruleset as one `Target` |
 | Easy path | `crates/ox-setup` | `detect` (ports of this machine), `starter` (guided-setup config), `add_forward`, `block`, `describe`. Behind `ox init`, `ox forward`, `ox block` |
 | Importer | `crates/ox-import` | pfSense config.xml → config + report + differential verify |
 | Services, VPN, HA, API auth/RBAC, web UI, controller, OS image | — | **Not started** |
@@ -37,8 +38,11 @@ nftables JSON and `ox-explain` evaluates packets against it, so an explanation
 cannot drift from the loaded rules. Keep it that way: never give explain its
 own copy of the matching logic.
 
-`ox-store::Engine` never talks to the kernel. It hands rendered JSON to an
-`Applier`. Tests use `NullApplier`; `oxd` uses libnftables. It applies first
+`ox-store::Engine` never talks to the kernel. It hands a `Target` (the
+rendered ruleset plus each service's config text) to an `Applier`, which must
+put all of it into effect or none. `oxd`'s `SystemApplier` checks the service
+config, loads the ruleset, then restarts the service, and reloads the previous
+ruleset if the service fails. Tests use `NullApplier`; `oxd` uses libnftables. It applies first
 and records second, so a crash in between leaves the old commit recorded and
 the next start applies it again. A daemon that starts with a commit still
 pending reverts it.
@@ -77,7 +81,7 @@ Matt's design goal (14 Nov 2026): Netoxide has to appeal to home-lab users and t
 ## Hard rules for code
 
 - `#![forbid(unsafe_code)]` in every first-party crate, except one small audited FFI crate. Each `unsafe` block there gets an audit note.
-- Never call `std::process::Command` with shell strings from `oxd` or its libraries. Supervised services run as systemd units.
+- Never call `std::process::Command` with shell strings from `oxd` or its libraries. `oxd` starts dnsmasq with a fixed argument list (`crates/oxd/src/services.rs`); that is the only process it starts. The spec wants services as systemd units; that is not done yet.
 - Every dependency change passes `cargo-deny` and `cargo-vet`. `deny.toml` is in place and `cargo deny check` passes. `cargo-vet` is not set up yet.
 - The firewall ruleset swaps in one nftables transaction. The rule compiler emits sets, maps and verdict maps, never a linear chain longer than 32 rules. A zone pair over 32 is merged (`Chain::layout` in `ox-nft`): neighbouring rules with the same action share one concatenated-set lookup. Only neighbours merge, so first-match order holds, and nftables refuses overlapping set entries, so an overlapping rule starts a new run. Merged rules share a counter. A pair still over 32 is refused.
 - Every rule, NAT and VPN test runs for both IPv4 and IPv6.
@@ -102,6 +106,7 @@ crates/
   ox-cli/         the `ox` binary
   ox-client/      HTTP client for the oxd socket, shared by ox and the TUI
   ox-setup/       guided setup and one-step actions; all return ordinary Config
+  ox-services/    renders [dns] and [dhcp] as a dnsmasq config; text only, no process handling
   ox-import/      pfSense backup → config, report, verify
 examples/         branch.toml, branch-candidate.toml, flows.jsonl, pfsense-config.xml
 tui/              netoxide-tui: live.rs + live_ui.rs (live mode), app.rs + ui.rs + data.rs (mock mode)
@@ -109,8 +114,8 @@ tui/              netoxide-tui: live.rs + live_ui.rs (live mode), app.rs + ui.rs
 
 Proposed next, not decided, roughly in this order. The two-audience goal moved single-box ease of use ahead of fleet security:
 
-1. A locked-down default before the first commit, and rules for traffic the box sends. (`ox init`, `ox forward` and `ox block` are built.)
-2. DHCP (Kea) and DNS (Unbound) rendered from the config. A box that cannot hand out addresses cannot replace a home router.
+1. Rules for traffic the box sends; IPv6 address handout (router advertisements); DHCP tested with a real client over a veth pair. (`ox init`, `ox forward`, `ox block`, lockdown, DNS and DHCPv4 are built.)
+2. Services as sandboxed systemd units instead of direct children of `oxd`; Unbound and Kea renderers beside dnsmasq. The schema must stay backend-neutral.
 3. More one-step actions (add a guest network, allow a service) and the same actions in the TUI, plus rule and candidate editing there. New actions go in `ox-setup` as functions over `Config` that return plain sentences, and they must prove their result with `ox-explain` the way `add_forward` does.
 4. A web UI on the daemon's API. Home users expect one.
 5. API security: TLS listener, OIDC or token auth, the five roles, four-eyes approval. Today the socket's file permission is the only control.
@@ -128,7 +133,10 @@ If the config types change, regenerate the published schema with
 `cargo run -p ox-cli -- schema > schema/netoxide-config-1.schema.json`.
 
 To run the daemon by hand without touching the host, start it under
-`unshare -Urn` as the README shows. Never start `oxd` without `--dry-run`
+`unshare -Urn` as the README shows. For DNS and DHCP in a namespace, add
+`--keep-service-privileges` and create the inside interface first (see
+`start_home` in `crates/oxd/tests/daemon.rs`). In zsh, do not put a command in
+a variable and run `$VAR args`: zsh does not split it. Never start `oxd` without `--dry-run`
 outside a namespace on Matt's machine: it would replace the host's `netoxide`
 nftables table.
 

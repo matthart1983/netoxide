@@ -13,6 +13,8 @@ ox-libnft.workspace = true
 ox-nft.workspace = true
 ox-plan.workspace = true
 ox-schema.workspace = true
+ox-services.workspace = true
+nix = { workspace = true, features = ["signal"] }
 ox-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true

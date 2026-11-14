@@ -5,9 +5,10 @@
 //! and nothing else.
 //!
 //! Schema version 1 covers zones, interfaces, address groups, services,
-//! zone-pair filter policies and NAT. VPN, DNS, DHCP, routing protocols and
-//! HA are not in it yet.
+//! zone-pair filter policies, NAT, a DNS resolver and IPv4 DHCP. VPN, routing
+//! protocols and HA are not in it yet.
 
+mod services;
 mod strings;
 mod validate;
 
@@ -16,6 +17,7 @@ use std::{collections::BTreeMap, net::IpAddr, path::Path};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub use services::{Dhcp, DhcpPool, Dns, DnsHost, Lease, Mac, StaticLease, is_hostname};
 pub use strings::{AddrRef, Net, PortSpec, Proto, ServiceRef, Translate, is_name};
 pub use validate::Problem;
 
@@ -64,6 +66,12 @@ pub struct Config {
     pub policies: Vec<Policy>,
     #[serde(default, skip_serializing_if = "Nat::is_empty")]
     pub nat: Nat,
+    /// A DNS resolver for the box's networks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns: Option<Dns>,
+    /// IPv4 address pools, by interface name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dhcp: Dhcp,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

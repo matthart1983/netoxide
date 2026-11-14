@@ -173,6 +173,8 @@ The four clients hold no private path to the box. `oxd` writes service configs a
 | IDS/IPS | Suricata 8 | None | Suricata is the only option |
 | Reverse proxy | Pingora | In use at 1.0 |  |
 
+The first build serves DNS and DHCP with dnsmasq instead. One program covers both, and it could be run and tested in a network namespace on the development machine, where Unbound and Kea were not installed. The config says what to serve and does not name the program, so Unbound and Kea can be added for 1.0 without changing any config.
+
 ### OS base
 
 - A minimal image built from Debian stable packages with mkosi. The root filesystem is read-only and verified with dm-verity.

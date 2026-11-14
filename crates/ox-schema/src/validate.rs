@@ -7,7 +7,8 @@ use std::{
 };
 
 use crate::{
-    Action, AddrRef, Config, PortSpec, SCHEMA_VERSION, SELF_ZONE, ServiceRef, Translate, is_name,
+    Action, AddrRef, Config, PortSpec, Proto, SCHEMA_VERSION, SELF_ZONE, ServiceRef, Translate,
+    is_hostname, is_name,
 };
 
 /// One thing wrong with a config, with where it is.
@@ -75,6 +76,7 @@ impl Checker<'_> {
         self.objects();
         self.policies();
         self.nat();
+        self.services();
     }
 
     fn zones_and_interfaces(&mut self) {
@@ -338,6 +340,182 @@ impl Checker<'_> {
                     self.add(
                         &at,
                         "translate address and source are different address families",
+                    );
+                }
+            }
+        }
+    }
+
+    /// True when an enabled accept rule lets this port in from a zone to the box.
+    fn box_accepts(&self, zone: &str, proto: Proto, port: u16) -> bool {
+        self.config
+            .policies
+            .iter()
+            .filter(|p| p.from == zone && p.to == SELF_ZONE)
+            .flat_map(|p| &p.rules)
+            .filter(|r| r.enabled && r.action == Action::Accept)
+            .any(|r| match self.config.resolve_services(&r.service) {
+                None => true,
+                Some(specs) => specs.iter().any(|s| {
+                    matches!(s, PortSpec::Ports { proto: p, first, last }
+                        if *p == proto && (*first..=*last).contains(&port))
+                }),
+            })
+    }
+
+    fn services(&mut self) {
+        let c = self.config;
+        if let Some(dns) = &c.dns {
+            if dns.zones.is_empty() {
+                self.add("dns", "zones is empty, so nobody could use the resolver");
+            }
+            if dns.upstream.is_empty() {
+                self.add(
+                    "dns",
+                    "upstream is empty; name at least one resolver to forward to, such as 1.1.1.1",
+                );
+            }
+            if let Some(d) = &dns.domain
+                && !is_hostname(d)
+            {
+                self.add("dns", format!("domain '{d}' is not a valid domain name"));
+            }
+            for zone in &dns.zones {
+                let at = format!("dns, zone {zone}");
+                if !c.zones.contains_key(zone) {
+                    self.add(&at, "this zone is not defined");
+                    continue;
+                }
+                let has_address = c
+                    .interfaces
+                    .values()
+                    .any(|i| i.zone == *zone && !i.addresses.is_empty());
+                if !has_address {
+                    self.add(
+                        &at,
+                        "no interface in this zone has an address for clients to send queries to",
+                    );
+                }
+                if !(self.box_accepts(zone, Proto::Udp, 53)
+                    && self.box_accepts(zone, Proto::Tcp, 53))
+                {
+                    self.add(
+                        &at,
+                        format!(
+                            "the resolver serves this zone, but no rule in {zone} → self accepts DNS; \
+                             add an accept rule there for udp/53 and tcp/53"
+                        ),
+                    );
+                }
+            }
+            let mut names = BTreeSet::new();
+            for h in &dns.hosts {
+                let at = format!("dns host {}", h.name);
+                if !is_hostname(&h.name) {
+                    self.add(
+                        &at,
+                        "names are letters, digits and hyphens, with dots between labels",
+                    );
+                }
+                if !names.insert((h.name.to_ascii_lowercase(), h.address.is_ipv4())) {
+                    self.add(&at, "this name is listed twice for the same address family");
+                }
+            }
+        }
+
+        let mut macs = BTreeSet::new();
+        for (name, pool) in &c.dhcp {
+            let at = format!("dhcp {name}");
+            let Some(iface) = c.interfaces.get(name) else {
+                self.add(&at, "this interface is not defined");
+                continue;
+            };
+            let Some(own) = iface
+                .addresses
+                .iter()
+                .map(|a| a.0)
+                .find(|a| a.addr().is_ipv4())
+            else {
+                self.add(&at, "the interface has no IPv4 address, so there is no network to hand addresses out on");
+                continue;
+            };
+            let subnet = own.trunc();
+            let usable = |ip: std::net::Ipv4Addr| {
+                let ip = std::net::IpAddr::V4(ip);
+                subnet.contains(&ip) && ip != subnet.network() && ip != subnet.broadcast()
+            };
+            if pool.first > pool.last {
+                self.add(
+                    &at,
+                    format!(
+                        "the pool runs backwards: {} is after {}",
+                        pool.first, pool.last
+                    ),
+                );
+            }
+            for ip in [pool.first, pool.last] {
+                if !usable(ip) {
+                    self.add(&at, format!("{ip} is not a usable address on {subnet}"));
+                }
+            }
+            if let std::net::IpAddr::V4(me) = own.addr()
+                && (pool.first..=pool.last).contains(&me)
+            {
+                self.add(
+                    &at,
+                    format!("the pool includes {me}, the box's own address"),
+                );
+            }
+            let served = c
+                .dns
+                .as_ref()
+                .is_some_and(|d| d.zones.contains(&iface.zone));
+            if pool.dns.is_empty() && !served {
+                self.add(
+                    &at,
+                    format!(
+                        "clients need a DNS server: add zone '{}' to [dns] zones, or list servers in dns",
+                        iface.zone
+                    ),
+                );
+            }
+            if !self.box_accepts(&iface.zone, Proto::Udp, 67) {
+                self.add(
+                    &at,
+                    format!(
+                        "addresses are handed out here, but no rule in {} → self accepts DHCP; \
+                         add an accept rule there for udp/67",
+                        iface.zone
+                    ),
+                );
+            }
+            let mut addrs = BTreeSet::new();
+            for st in &pool.statics {
+                let at = format!("{at}, static {}", st.mac);
+                if !usable(st.address) {
+                    self.add(
+                        &at,
+                        format!("{} is not a usable address on {subnet}", st.address),
+                    );
+                }
+                if std::net::IpAddr::V4(st.address) == own.addr() {
+                    self.add(&at, "this is the box's own address");
+                }
+                if !macs.insert(st.mac) {
+                    self.add(&at, "this hardware address has more than one static lease");
+                }
+                if !addrs.insert(st.address) {
+                    self.add(
+                        &at,
+                        format!("{} is given to more than one device", st.address),
+                    );
+                }
+                if let Some(n) = &st.name
+                    && (!is_hostname(n) || n.contains('.'))
+                {
+                    self.add(
+                        &at,
+                        format!("name '{n}' must be one label of letters, digits and hyphens"),
                     );
                 }
             }

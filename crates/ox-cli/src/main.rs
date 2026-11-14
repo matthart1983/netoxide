@@ -102,6 +102,8 @@ enum Command {
     },
     /// Print the audit log and check its hash chain
     Audit,
+    /// List the addresses DHCP has handed out
+    Leases,
     /// Print the Netoxide table as the kernel holds it
     Kernel,
     /// Guided setup: pick the internet and inside ports, get a complete starter config
@@ -121,6 +123,12 @@ enum Command {
         /// Store the config in the daemon as a candidate with this name
         #[arg(long)]
         save: Option<String>,
+        /// Do not hand out addresses or answer DNS for the inside network
+        #[arg(long)]
+        no_services: bool,
+        /// Resolvers to forward DNS to (default 1.1.1.1 and 9.9.9.9). Repeat for more
+        #[arg(long)]
+        dns_upstream: Vec<IpAddr>,
     },
     /// Forward a port from the internet to a host inside. Saved as a candidate
     Forward {
@@ -361,6 +369,9 @@ fn daemon(cli: &Cli) -> Result<()> {
         Command::Status => {
             let s = oxd.json("GET", "/v1/status", None)?;
             match &s["running"] {
+                Value::Null if s["lockdown"] == true => out!(
+                    "running     no commit yet; inbound and forwarded traffic is dropped until the first one"
+                ),
                 Value::Null => out!("running     no commit yet; nothing is loaded"),
                 c => out!("running     {}", commit_line(c)),
             }
@@ -377,6 +388,9 @@ fn daemon(cli: &Cli) -> Result<()> {
                 }
             );
             out!("applier     {}", text(&s["applier"]));
+            for svc in s["services"].as_array().into_iter().flatten() {
+                out!("service     {} {}", text(&svc[0]), text(&svc[1]));
+            }
         }
         Command::Running => outp!("{}", oxd.get("/v1/running")?),
         Command::Candidate(cmd) => match cmd {
@@ -525,6 +539,22 @@ fn daemon(cli: &Cli) -> Result<()> {
                 );
             }
             out!("\nchain verified: {} entries", entries.len());
+        }
+        Command::Leases => {
+            let rows = oxd.json("GET", "/v1/leases", None)?;
+            let rows = rows.as_array().cloned().unwrap_or_default();
+            if rows.is_empty() {
+                out!("no addresses are handed out right now");
+            }
+            for r in &rows {
+                out!(
+                    "{:<16} {}  {:<20} until {}",
+                    text(&r["address"]),
+                    text(&r["mac"]),
+                    r["name"].as_str().unwrap_or("(no name)"),
+                    when(r["expires"].as_u64().unwrap_or(0))
+                );
+            }
         }
         Command::Kernel => {
             let dump = oxd.json("GET", "/v1/kernel", None)?;
@@ -677,6 +707,8 @@ fn main() -> ExitCode {
             hostname,
             out,
             save,
+            no_services,
+            dns_upstream,
         } => easy::init(
             &easy::InitArgs {
                 wan: wan.as_deref(),
@@ -684,6 +716,8 @@ fn main() -> ExitCode {
                 hostname: hostname.as_deref(),
                 out: out.as_deref(),
                 save: save.as_deref(),
+                no_services: *no_services,
+                dns_upstream,
             },
             &Client::new(&cli.socket),
         ),

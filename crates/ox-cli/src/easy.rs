@@ -10,7 +10,7 @@ use std::{
 
 use ox_client::Client;
 use ox_schema::{Config, Net, PortSpec};
-use ox_setup::{Answers, Detected, ForwardRequest, Port};
+use ox_setup::{Answers, Detected, ForwardRequest, Port, Serve};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -67,6 +67,10 @@ pub struct InitArgs<'a> {
     pub hostname: Option<&'a str>,
     pub out: Option<&'a Path>,
     pub save: Option<&'a str>,
+    /// Do not hand out addresses or answer DNS.
+    pub no_services: bool,
+    /// Resolvers to forward DNS to, instead of the defaults.
+    pub dns_upstream: &'a [IpAddr],
 }
 
 pub fn init(args: &InitArgs, oxd: &Client) -> Result<()> {
@@ -158,6 +162,13 @@ pub fn init(args: &InitArgs, oxd: &Client) -> Result<()> {
         hostname: args.hostname.map(String::from).unwrap_or_else(hostname),
         wan,
         lans,
+        serve: (!args.no_services).then(|| {
+            let mut serve = Serve::default();
+            if !args.dns_upstream.is_empty() {
+                serve.upstream = args.dns_upstream.to_vec();
+            }
+            serve
+        }),
     };
     let config = ox_setup::starter(&answers)?;
     for port in std::iter::once(&answers.wan).chain(&answers.lans) {
@@ -173,9 +184,30 @@ pub fn init(args: &InitArgs, oxd: &Client) -> Result<()> {
     for line in ox_setup::describe(&config) {
         out!("  {line}");
     }
-    out!(
-        "\nNot covered yet: Netoxide does not serve DHCP or DNS, so keep those running elsewhere."
-    );
+    if args.no_services {
+        out!(
+            "\nThe box will not hand out addresses or answer DNS, so keep those running elsewhere."
+        );
+    } else {
+        let installed = std::process::Command::new("dnsmasq")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !installed {
+            out!(
+                "\nNote: DNS and address handout need dnsmasq, which is not installed on this machine. \
+                 Install it before you commit, or run `ox init --no-services`."
+            );
+        }
+        for lan in &answers.lans {
+            if !config.dhcp.contains_key(&lan.name) {
+                out!(
+                    "Note: {} gets no address pool, because it has no IPv4 network large enough for one.",
+                    lan.name
+                );
+            }
+        }
+    }
     if answers.wan.addrs.is_empty() {
         out!(
             "{} has no fixed address in the config, which is fine for a provider that assigns one.",

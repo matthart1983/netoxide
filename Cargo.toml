@@ -17,6 +17,7 @@ ox-libnft = { path = "crates/ox-libnft" }
 ox-store = { path = "crates/ox-store" }
 ox-client = { path = "crates/ox-client" }
 ox-setup = { path = "crates/ox-setup" }
+ox-services = { path = "crates/ox-services" }
 nix = { version = "0.31", default-features = false, features = ["net"] }
 ox-import = { path = "crates/ox-import" }
 roxmltree = "0.21"

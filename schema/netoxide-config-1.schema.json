@@ -24,6 +24,102 @@
       "description": "\"any\", \"@group-name\", a network in CIDR form, or a single address",
       "type": "string"
     },
+    "DhcpPool": {
+      "additionalProperties": false,
+      "description": "An IPv4 address pool handed out on one interface.",
+      "properties": {
+        "dns": {
+          "description": "The DNS servers clients are told to use. Defaults to the box itself\nwhen its resolver serves this interface's zone.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "first": {
+          "description": "First address of the pool.",
+          "type": "string"
+        },
+        "last": {
+          "description": "Last address of the pool.",
+          "type": "string"
+        },
+        "lease": {
+          "$ref": "#/$defs/Lease",
+          "description": "How long a client keeps its address, such as `12h`. Defaults to 12h."
+        },
+        "static": {
+          "description": "Devices that always get the same address.",
+          "items": {
+            "$ref": "#/$defs/StaticLease"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "first",
+        "last"
+      ],
+      "type": "object"
+    },
+    "Dns": {
+      "additionalProperties": false,
+      "description": "A DNS resolver for the box's networks. It forwards to `upstream` and\nanswers for the local names in `hosts` and for DHCP clients.",
+      "properties": {
+        "dnssec": {
+          "description": "Validate answers with DNSSEC. On by default.",
+          "type": "boolean"
+        },
+        "domain": {
+          "description": "The domain for local names, such as `home.arpa`. A host called `nas`\nis then also `nas.home.arpa`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "description": "Local names with fixed addresses.",
+          "items": {
+            "$ref": "#/$defs/DnsHost"
+          },
+          "type": "array"
+        },
+        "upstream": {
+          "description": "The resolvers to forward to, such as `1.1.1.1`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "zones": {
+          "description": "The zones whose clients may use the resolver.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "zones",
+        "upstream"
+      ],
+      "type": "object"
+    },
+    "DnsHost": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "address"
+      ],
+      "type": "object"
+    },
     "Forward": {
       "additionalProperties": false,
       "description": "A port forward. It only rewrites the destination. The packet still has to\npass the filter rule named in `rule`, so there is no hidden pass rule.",
@@ -103,6 +199,14 @@
         "zone"
       ],
       "type": "object"
+    },
+    "Lease": {
+      "description": "A lease time such as 30m, 12h or 7d",
+      "type": "string"
+    },
+    "Mac": {
+      "description": "A hardware address such as aa:bb:cc:dd:ee:ff",
+      "type": "string"
     },
     "Nat": {
       "additionalProperties": false,
@@ -251,6 +355,29 @@
       "description": "\"any\", a name from the services table, or a port such as \"tcp/443\"",
       "type": "string"
     },
+    "StaticLease": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "mac": {
+          "$ref": "#/$defs/Mac"
+        },
+        "name": {
+          "description": "The device's name. It becomes a local DNS name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mac",
+        "address"
+      ],
+      "type": "object"
+    },
     "Translate": {
       "description": "\"masquerade\" or a source address",
       "type": "string"
@@ -281,6 +408,24 @@
       },
       "description": "Named address groups, used in rules as `@name`.",
       "type": "object"
+    },
+    "dhcp": {
+      "additionalProperties": {
+        "$ref": "#/$defs/DhcpPool"
+      },
+      "description": "IPv4 address pools, by interface name.",
+      "type": "object"
+    },
+    "dns": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Dns"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A DNS resolver for the box's networks."
     },
     "hostname": {
       "type": "string"
