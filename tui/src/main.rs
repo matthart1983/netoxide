@@ -9,6 +9,7 @@
 //! Live against oxd: cargo run -- --socket /run/netoxide/oxd.sock
 //!                    (or --live, which uses $OX_SOCKET or the default path)
 //!
+//! A live screen as HTML: cargo run -- --socket <path> --snapshot policy --html-out policy.html
 //! A box on the network: cargo run -- --remote <name>
 //!                    (a name saved with `ox remote add`, or $OX_REMOTE with --live)
 //!
@@ -36,6 +37,10 @@ use app::{App, Screen};
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("netoxide-tui {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let value = |flag: &str| {
         args.iter()
             .position(|a| a == flag)
@@ -66,6 +71,28 @@ fn main() -> io::Result<()> {
                     Some((w.parse().ok()?, h.parse().ok()?))
                 })
                 .unwrap_or((160, 46));
+            // With --html-out, one live screen is written as a coloured page.
+            if let Some(path) = value("--html-out") {
+                let Some(screen) = live::Screen::from_name(&which) else {
+                    eprintln!("unknown live screen '{which}'");
+                    std::process::exit(2);
+                };
+                let mut app = live::LiveApp::new(&backend);
+                app.screen = screen;
+                for c in value("--keys").unwrap_or_default().chars() {
+                    let code = if c == '\n' {
+                        KeyCode::Enter
+                    } else {
+                        KeyCode::Char(c)
+                    };
+                    app.on_key(KeyEvent::new(code, KeyModifiers::NONE), &backend);
+                }
+                let mut term = Terminal::new(TestBackend::new(w, h))?;
+                term.draw(|f| live_ui::draw(f, &mut app))?;
+                std::fs::write(&path, html::single(term.backend().buffer()))?;
+                eprintln!("wrote {path}");
+                return Ok(());
+            }
             return live_snapshot(&backend, &which, w, h, value("--keys").as_deref());
         }
         let mut terminal = ratatui::init();

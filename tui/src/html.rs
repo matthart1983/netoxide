@@ -106,6 +106,18 @@ fn render(screen: Screen, keys: &str, w: u16, h: u16) -> String {
     buffer_to_html(term.backend().buffer())
 }
 
+/// One drawn screen as a small standalone page, for pictures in the docs.
+pub fn single(buf: &Buffer) -> String {
+    format!(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>netoxide-tui</title>\n\
+         <style>body {{ margin: 0; background: {BG}; }}\n\
+         pre {{ margin: 0; padding: 14px 16px; display: inline-block; background: {BG}; color: {FG};\n\
+         font-family: 'JetBrainsMono Nerd Font Mono', 'JetBrains Mono', 'DejaVu Sans Mono', ui-monospace, Menlo, monospace; font-size: 13px; line-height: 1.18; }}</style>\n\
+         </head><body><pre>{}</pre></body></html>\n",
+        buffer_to_html(buf)
+    )
+}
+
 pub fn page(w: u16, h: u16) -> String {
     // (group, label, screen, keys replayed, caption)
     let states: &[(&str, &str, Screen, &str, &str)] = &[
