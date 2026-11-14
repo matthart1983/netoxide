@@ -1,0 +1,350 @@
+── Policy ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+╭ zone pairs ──────────╮╭ lan → dmz · 6 of 7 rules · first match wins ─────────────────────────────────────────────────╮
+│▸ lan → dmz        7  ││ #  id     rule               source   destinati service   action hits 30d hygiene            │
+│  lan → wan       46  ││▸1  r-0412 ◆ Drop SMB and Net any      any       smb, netb drop          —                    │
+│  wan → dmz       12  ││ 2  r-0388 Finance to file se @finance @finance- https     accept    1,204                    │
+│  vpn → lan       19  ││ 3  r-0301 Staff to intranet  @staff   10.30.0.2 http, htt accept   88,410                    │
+│  guest → wan      4  ││ 4  r-0302 Staff to intranet  10.20.0. 10.30.0.2 https     accept        0 shadowed by r-0301 │
+│  any → self       9  ││ 5  r-0277 Backups to NAS     @backup- @nas      tcp/873   accept       31                    │
+│                      ││ 6  r-0150 Printer admin      @it-admi @printers https, tc accept        0 no hits in 90 d    │
+│                      ││ —         default for this p any      any       any       drop      2,114 logged             │
+│                      │╰ ◆ in candidate, not applied ─────────────────────────────────────────────────────────────────╯
+│                      │╭ rule ────────────────────────────────────────────────────────────────────────────────────────╮
+│                      ││r-0412  Drop SMB and NetBIOS                                                                  │
+│                      ││match           any → any  smb, netbios                                                       │
+│                      ││schedule        always                                                                        │
+│                      ││logging         yes, rule ID in flow log and syslog                                           │
+│                      ││state           in candidate block-legacy-smb, not applied (7 to review)                      │
+│                      ││                                                                                              │
+│                      │╰ edits go to a candidate and apply only through a commit ─────────────────────────────────────╯
+│                      │
+│                      │
+│                      │
+│                      │
+│                      │
+│                      │
+│                      │
+│                      │
+│                      │
+│                      │
+│                      │
+│                      │
+╰ 412 rules · 14 pairs ╯
+  ←→  zone pair   ↑↓  rule   x  explain   1-0  screens   tab  next   ?  help   q  quit
+── NAT ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+ Port forwards (4) · Outbound (4) · 1:1 (1) · NAT64 (1)
+Destination NAT to an internal host. Every forward names its filter rule; there is no hidden pass rule.
+
+╭ NAT · Port forwards ─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ id     name                       match                      translate to               filter rule hairpin hits 30d │
+│▸n-0010 Public web                 wan0 203.0.113.10 tcp/443  10.30.0.10:443             r-0200      on        512,880│
+│ n-0011 Mail relay                 wan0 203.0.113.10 tcp/25   10.30.0.11:25              r-0204      off         9,402│
+│ n-0012 Web, HTTP redirect         wan0 203.0.113.10 tcp/80   10.30.0.10:80              r-0201      on         41,230│
+│ n-0014 Lab SSH (expires 30 Nov)   wan0 203.0.113.10 tcp/2222 10.40.1.5:22               r-0215      off            41│
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ←→  NAT type   ↑↓  rule   1-0  screens   tab  next   ?  help   q  quit
+── VPN ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+╭ vpn ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│site-to-site 5/6 up   remote users 42   sign-in OIDC (Entra ID)   FIPS mode off — when on, IPsec only                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ site-to-site ────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ tunnel     type        peer                      local ↔ remote            status  handshake/rekey    in / out 24h   │
+│▸wg-mel     WireGuard   198.51.100.4:51820        10.20.0.0/16 ↔ 10.60.0.0/ ● up    41 s ago             18.2 / 9.1 GB│
+│ wg-bne     WireGuard   198.51.100.22:51820       10.20.0.0/16 ↔ 10.70.0.0/ ● up    1 min ago             4.4 / 3.0 GB│
+│ wg-per     WireGuard   198.51.100.31:51820       10.20.0.0/16 ↔ 10.80.0.0/ ● up    22 s ago              2.1 / 1.7 GB│
+│ ipsec-aws  IPsec IKEv2 AWS VPN gateway (2)       10.20.0.0/16 ↔ 172.31.0.0 ● up    rekeyed 38 min ago  61.0 / 12.4 GB│
+│ ipsec-bank IPsec IKEv2 192.0.2.200               10.30.0.11/32 ↔ 192.0.2.6 ● up    rekeyed 2 h ago       0.3 / 0.2 GB│
+│ wg-akl     WireGuard   198.51.100.40:51820       10.20.0.0/16 ↔ 10.90.0.0/ ✕ down  3 h ago                      0 / 0│
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰ wg-mel healthy ──────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ remote access · WireGuard portal ──────────────────────────────╮╭ IdP group → policy ────────────────────────────────╮
+│user                             group        address     since ││engineering  r-0501 lab networks                    │
+│Priya Raman                      engineering  10.99.0.14  08:12 ││finance      r-0502 ERP                             │
+│Tom Achebe                       finance      10.99.0.31  08:40 ││contractors  r-0510 ticketing, business hours       │
+│Lena Kovac                       engineering  10.99.0.17  09:05 ││it-admins    r-0001 management                      │
+│Sam Whitfield                    contractors  10.99.1.4   10:22 ││                                                    │
+│Ana Ruiz                         it-admins    10.99.0.2   10:58 ││keys expire after 12 h; removing a user from the IdP│
+│                                                                ││group disconnects them within 5 min                 │
+╰────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────────╯
+  ↑↓  select   1-0  screens   tab  next   ?  help   q  quit
+── IPS ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+╭ intrusion prevention ────────────────────────────────────────────────╮╭ inspection load ─────────────────────────────╮
+│Suricata 8 inline · ruleset ET Open updated 03:10, signature ok       ││█████████████████████████████                 │
+│blocked 24h 1,286   alerted only 214                                  ││████████310 of 500 Mb/s branch target         │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+╭ per-zone mode ───────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│zone pair     mode    profile                                   suppressed   on engine failure                        │
+│wan → dmz     block   balanced                                  3 rules      fail open, alarm                         │
+│wan → self    block   balanced                                  none         fail open, alarm                         │
+│lan → wan     alert   policy (C2, tracking)                     11 rules     —                                        │
+│guest → wan   block   strict                                    none         fail closed                              │
+│lan → dmz     off     —                                         —            —                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ recent events ───────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ time     sev    signature                                             flow                        zone pair   action │
+│▸11:48:02 high   Exploit attempt against VPN appliance web portal      45.0.2.18 → 203.0.113.10:44 wan → dmz   blocked│
+│ 11:41:37 high   Known malware command-and-control beacon              10.20.6.51 → 185.0.4.9:8443 lan → wan   alerted│
+│ 11:30:15 medium Inbound scan for MSSQL                                91.0.3.77 → 203.0.113.10:14 wan → self  blocked│
+│ 11:22:09 medium TLS certificate from known-bad issuer                 10.20.4.90 → 104.0.0.7:443  lan → wan   alerted│
+│ 11:05:44 low    BitTorrent DHT traffic                                10.50.2.14 → many:6881      guest → wan blocked│
+│ 10:58:30 low    Outdated SSH client version                           10.40.1.5 → 10.30.0.12:22   lab → dmz   alerted│
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰ ET Open only; no paid feed. Bring your own commercial ruleset key if you have one ───────────────────────────────────╯
+  ↑↓  select   1-0  screens   tab  next   ?  help   q  quit
+── Interfaces ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+╭ interfaces · Intel N100, 4 × 2.5GbE igc ─────────────────────────────────────────────────────────────────────────────╮
+│ iface    type                zone    ipv4                        ipv6                        link      in / out now  │
+│▸wan0     PPPoE over igc0     wan     203.0.113.10/32             2001:db8:4a00::1 (PD /56)   2.5G full  412 / 96 Mb/s│
+│ wan1     ethernet igc1 (5G)  wan     100.64.12.9/30 dhcp         —                           1G full       3 / 1 Mb/s│
+│ lag0     LACP igc2 + igc3    —       —                           —                           2 × 2.5G               —│
+│ lan0.20  VLAN 20 on lag0     lan     10.20.0.1/16                2001:db8:4a00:1::1/64       up         88 / 390 Mb/s│
+│ lan0.30  VLAN 30 on lag0     dmz     10.30.0.1/24                2001:db8:4a00:2::1/64       up         210 / 31 Mb/s│
+│ lan0.40  VLAN 40 on lag0     lab-v6  —                           2001:db8:4a00:3::1/64       up            4 / 9 Mb/s│
+│ lan0.50  VLAN 50 on lag0     guest   10.50.0.1/22                —                           up         21 / 140 Mb/s│
+│ wg0      WireGuard           vpn     10.99.0.1/23                —                           42 peers    30 / 44 Mb/s│
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ gateway group: internet · failover, probe 1 s ─────────────────╮╭ policy routing ────────────────────────────────────╮
+│gateway   state            tier latency loss   probe            ││zone guest, any destination   wan1 first, then wan0 │
+│wan0 NBN  active           1    4 ms    0.0%   1.1.1.1, 9.9.9.9 ││@voip-handsets to SIP trunk   wan0 only, CAKE       │
+│wan1 5G b standby, healthy 2    31 ms   0.4%   1.1.1.1, 9.9.9.9 ││priority tier                                       │
+│                                                                ││backups to offsite (r-0277)   wan0, no failover     │
+│                                                                ││                                                    │
+│                                                                ││IPv6: wan0 gets 2001:db8:4a00::/56 by DHCPv6-PD;    │
+│                                                                ││VLANs 20/30/40 track /64s 1/2/3 and follow prefix   │
+│                                                                ││changes                                             │
+╰ fail over at >10% loss or >250 ms for 5 s · fail back after 60 ╯╰────────────────────────────────────────────────────╯
+  ↑↓  select   1-0  screens   tab  next   ?  help   q  quit
+── HA ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+╭──────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────╮
+│syd-br-014-a   ACTIVE                                     ││syd-br-014-b   STANDBY                                    │
+│VRRP priority   200                                       ││VRRP priority   100                                       │
+│running config  #2479                                     ││running config  #2479                                     │
+│version         1.0.4, slot B                             ││version         1.0.4, slot B                             │
+│conntrack       412,903                                   ││conntrack       412,880                                   │
+│uptime          41 days                                   ││uptime          41 days                                   │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
+╭ sync ────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│state sync   conntrackd over igc3, mutual TLS · lag 120 ms, 23 entries behind  authenticated                          │
+│config sync  one transaction to both nodes; backup failure rolls back primary  both on #2479                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ failover tests · target < 1 s loss, ≥ 99% of TCP flows kept ─────────────────────────────────────────────────────────╮
+│date        trigger                              load          loss    flows kept result                              │
+│1 Nov 2026  scheduled: power cut on primary      96,000 conns   0.71 s      99.3% pass                                │
+│4 Oct 2026  scheduled: WAN cable pulled          71,500 conns   0.58 s      99.6% pass                                │
+│6 Sep 2026  upgrade to 1.0.3                     64,200 conns   0.62 s      99.5% pass                                │
+│2 Aug 2026  scheduled: power cut on primary      88,000 conns   1.40 s      97.8% miss: sync lag during IPS reload    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰ active/backup only; active/active is not supported ──────────────────────────────────────────────────────────────────╯
+  f  fail over   1-0  screens   tab  next   ?  help   q  quit
+── Changes ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+╭ candidate block-legacy-smb · gateway.toml · +9 −1 ─────────╮╭ plan ──────────────────────────────────────────────────╮
+│  [[zone_pair]]                                             ││✓ schema 1.0 validation passed                          │
+│  from = "lan"                                              ││✓ compiled 412 rules → 9 sets, 3 verdict maps, longest  │
+│  to   = "dmz"                                              ││chain 18                                                │
+│                                                            ││✓ one nftables transaction, atomic swap                 │
+│+ [[zone_pair.rule]]                                        │╰────────────────────────────────────────────────────────╯
+│+ id      = "r-0412"                                        │╭ change impact ─────────────────────────────────────────╮
+│+ action  = "drop"                                          ││would have blocked 3 active services (flow logs, last 24│
+│+ service = ["smb", "netbios"]                              ││10.20.4.17 → 10.30.0.8 tcp/445  1,204 flows · finance-pc│
+│+ log     = true                                            ││10.20.6.3 → 10.30.0.9 tcp/445   88 flows · scanner-02   │
+│+ reason  = "Retire SMBv1 shares, CHG-2207"                 ││10.20.8.40 → 10.30.0.8 udp/137  412 flows · legacy-erp  │
+│+                                                           ││                                                        │
+│  [[zone_pair.rule]]                                        │╰────────────────────────────────────────────────────────╯
+│  id      = "r-0388"                                        │╭ approval and commit ───────────────────────────────────╮
+│  action  = "accept"                                        ││✓ approved by a.okafor (security admin)                 │
+│- service = ["smb", "netbios", "https"]                     ││  four-eyes policy met                                  │
+│+ service = ["https"]                                       ││                                                        │
+│  dest    = "@finance-file-servers"                         ││confirm window  5 min                                   │
+│                                                            ││$ ox commit block-legacy-smb --confirm 5m               │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+╰ by j.nguyen · reason: Retire SMBv1 shares, CHG-2207 ───────╯╰────────────────────────────────────────────────────────╯
+  c  commit with confirm   w  confirm window   1-0  screens   tab  next   ?  help   q  quit
+── Explain ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+╭ why did this packet do that? ────────────────────────────────────────────────────────────────────────────────────────╮
+│src 10.20.4.17   dst 10.30.0.8   proto tcp   dport 445   in lan0.20                                                   │
+│                                                                                                                      │
+│evaluate against   running #2479   candidate block-legacy-smb    (m to switch)                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ result ────────────────────────────────────────────────────────────╮╭ where the rule came from ──────────────────────╮
+│verdict   ACCEPT                                                    ││commit          #2213                           │
+│                                                                    ││author          s.patel                         │
+│ 1 ingress   lan0.20 → zone lan                                     ││when            3 Aug 2026 14:08                │
+│ │           interface group lan, VLAN 20                           ││reason          Open file share for finance,    │
+│ 2 zone pair lan → dmz                                              ││CHG-1984                                        │
+│ │           route lookup selects egress dmz0                       ││                                                │
+│ 3 rule      r-0388 accept to finance file servers                  │╰────────────────────────────────────────────────╯
+│ │           set @finance-file-servers · position 1 of 6            │╭ same query from the CLI ───────────────────────╮
+│ 4 nat       none                                                   ││$ ox explain --src 10.20.4.17 --dst 10.30.0.8 \ │
+│ │           no source or destination NAT for lan → dmz             ││    --proto tcp --dport 445 --in lan0.20        │
+│ 5 route     10.30.0.0/24 via dmz0                                  ││                                                │
+│ │           connected · table main                                 ││ox trace follows a real packet with nftables    │
+│ 6 conntrack new flow, offloaded after handshake                    ││tracing                                         │
+│             flowtable ft-lan-dmz                                   ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+╰────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯
+  m  running ↔ candidate   1-0  screens   tab  next   ?  help   q  quit
+── Admin/Audit ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+╭ administrators · SSO via Entra ID ─────────────────────────────╮╭ API tokens ────────────────────────────────────────╮
+│administrator handle      role           sign-in       last     ││token         scopes           owner     expires    │
+│Ana Ruiz      a.ruiz      network admin  OIDC + passke now      ││terraform-ci  policy:write nat s.patel   14 Feb 2027│
+│Adaeze Okafor a.okafor    security admin OIDC + passke 10:58    ││siem-export   logs:read audit: a.okafor  1 Jun 2027 │
+│Jun Nguyen    j.nguyen    operator       OIDC          10:52    ││monitoring    metrics:read sta a.ruiz    1 Jun 2027 │
+│Sanjay Patel  s.patel     network admin  OIDC          yesterday││                                                    │
+│External audi ext-auditor auditor        OIDC, expires 3 Nov    ││                                                    │
+│Break-glass   local-admin network admin  local + TOTP, never    ││                                                    │
+│                                                                ││                                                    │
+╰────────────────────────────────────────────────────────────────╯╰ four-eyes: policy, NAT and VPN need a second approv╯
+╭ audit log · write-once, hash-chained ────────────────────────────────────────────────────────────────────────────────╮
+│ time       who           event                                                           from             entry hash │
+│▸11:50:12   a.ruiz        signed in                                                       10.99.0.2 (vpn)  9f3c…a1e0  │
+│ 10:58:40   a.okafor      approved candidate block-legacy-smb                             10.20.1.44       41d2…7b9c  │
+│ 10:52:03   j.nguyen      created candidate block-legacy-smb (+9 −1)                      10.20.3.18       c07a…3f12  │
+│ 09:14:55   terraform-ci  ran plan on policy (no changes)                                 10.20.8.5        2be8…90d4  │
+│ 03:10:21   system        IPS rules updated, signature verified                           —                77e1…c5aa  │
+│ yest 16:22 s.patel       committed #2479, confirm 5m, confirmed after 2m 10s             10.20.1.12       e4f9…12bd  │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰ chain verified 11:50 ────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑↓  select   1-0  screens   tab  next   ?  help   q  quit
+── Fleet ──
+ Netoxide  syd-br-014-a ● active  │  running #2479  │  candidate block-legacy-smb (approved)  │  support to 30 Nov 2026
+ 1 Policy │ 2 NAT │ 3 VPN │ 4 IPS │ 5 Interfaces │ 6 HA │ 7 Changes │ 8 Explain │ 9 Admin/Audit │ 0 Fleet
+╭ fleet controller · self-hosted · 12 tenants ─────────────────────────────────────────────────────────────────────────╮
+│firewalls 184 (92 pairs)   policy matches template 181 · 3 drift   awaiting approval 2   site VPN down 1/214   support│
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ needs action ──────────────────────────────────────────────────────╮╭ rollout 1.0.3 → 1.0.4 ─────────────────────────╮
+│• Local policy drift on per-br-007                                  ││ring 0 canary · 4/4 done                        │
+│  2 rules added on the box outside template branch-std v14          ││████████████████████████████████████████████████│
+│• Site tunnel wg-akl down for 3 h                                   ││ring 1 internal · 20/20 done                    │
+│  syd-br-014 ↔ akl-core-01, peer not answering                      ││████████████████████████████████████████████████│
+│• 2 candidates waiting for a second approver                        ││ring 2 tenants · 63/160                         │
+│  block-legacy-smb (Harbour Dental), new-voip-vlan (Kestrel)        ││███████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│
+│• syd-br-014 missed its failover target once                        ││standby node first, fail over, then the other;  │
+│  1.40 s loss on 2 Aug during an IPS reload; 3 passes since         ││halts on a failed boot                          │
+│• 14 firewalls reach end of support on 30 Nov                       ││                                                │
+│  they keep forwarding and keep receiving security fixes            ││                                                │
+╰────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯
+╭ firewalls ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ pair         tenant               template        policy                 HA        version    site VPN  support until│
+│▸syd-br-014   Harbour Dental       branch-std v14  #2479 matches          a active  1.0.4      5/6 up    30 Nov 2026  │
+│ mel-site-03  Kestrel Logistics    site-std v9     #2466 matches          a active  1.0.3      8/8 up    30 Jun 2027  │
+│ akl-core-01  Tasman Freight       core-std v4     #2481 matches          a active  1.0.4      12/12 up  31 Mar 2027  │
+│ bne-br-022   Northside Clinics    branch-std v14  #2402 matches          a active  1.0.3      2/2 up    30 Nov 2026  │
+│ per-br-007   Northside Clinics    branch-std v14  #2398 2 rules drift    single    1.0.3 LTS  2/2 up    30 Nov 2026  │
+│ cbr-br-011   Harbour Dental       branch-std v14  #2479 matches          b active  1.0.4      3/3 up    30 Nov 2026  │
+│ hba-br-002   Kestrel Logistics    branch-std v13  #2455 template behind  a active  1.0.3      2/2 up    30 Jun 2027  │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑↓  select   1-0  screens   tab  next   ?  help   q  quit

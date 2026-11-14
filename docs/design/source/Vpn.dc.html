@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Netoxide — VPN</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0A5FA8}a:hover{color:#074579}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; background: #F5F6F8; font-family: Inter, system-ui, sans-serif; color: #16181D; font-size: 14px; line-height: 1.45">
+
+  <nav aria-label="Main" style="flex: 1 1 240px; max-width: 100%; box-sizing: border-box; background: #FFFFFF; border-right: 1px solid #E2E5EA; padding: 24px 16px; display: flex; flex-direction: column; gap: 20px">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 0 8px">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="7" fill="#16181D"></rect><path d="M8 19V10m4 9V8m4 11V8m4 11v-9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path></svg>
+      <div style="display: flex; flex-direction: column">
+        <span style="font-weight: 700; font-size: 15px">Netoxide</span>
+        <span style="font-size: 12px; color: #5B6170">1.0.4 stable · acme-msp</span>
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px; padding: 0 4px">
+      <label for="boxsel" style="font-size: 12px; color: #5B6170">Box</label>
+      <select id="boxsel" style="min-height: 40px; padding: 0 10px; border: 1px solid #CDD2DA; border-radius: 8px; background: #FFFFFF; font-family: 'JetBrains Mono', monospace; font-size: 12.5px"><option>syd-br-014-a · active</option><option>syd-br-014-b · standby</option><option>mel-site-03-a · active</option></select>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 2px">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6170; padding: 4px 12px">Firewall</span>
+      <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>Security policy</a>
+      <a href="Nat.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 8h14l-3-3M20 16H6l3 3"></path></svg>NAT</a>
+      <a href="Vpn.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; background: #E7EFF8; color: #0A5FA8; font-weight: 600; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>VPN</a>
+      <a href="Ips.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 4l9 16H3z"></path><path d="M12 10v4M12 17v.5"></path></svg>Intrusion prevention</a>
+      <a href="Interfaces.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"></rect><path d="M7 10v4M11 10v4M15 10v4"></path></svg>Interfaces and WAN</a>
+      <a href="Ha.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="7" height="16" rx="1.5"></rect><rect x="14" y="4" width="7" height="16" rx="1.5"></rect></svg>High availability</a>
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6170; padding: 16px 12px 4px">Operate</span>
+      <a href="Commit.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3.5"></circle><path d="M12 3v5.5M12 15.5V21"></path></svg>Changes</a>
+      <a href="Explain.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>Explain a packet</a>
+      <a href="Admin.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3.5"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.5a3.5 3.5 0 0 1 0 7M21 20c0-2.6-1.6-4.8-4-5.6"></path></svg>Admin and audit</a>
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6170; padding: 16px 12px 4px">Fleet</span>
+      <a href="Fleet.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>Fleet controller</a>
+      <a href="Import.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; box-sizing: border-box; border-radius: 8px; color: #3A3F4B; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v3h16v-3"></path></svg>Migrate</a>
+    </div>
+    <div style="margin-top: auto; padding: 12px; border-radius: 8px; background: #F5F6F8; font-size: 12px; color: #5B6170; display: flex; flex-direction: column; gap: 4px">
+      <span style="font-weight: 600; color: #16181D">Support: 24×7 SLA to 30 Nov 2026</span>
+      <span>A lapse never stops forwarding or security fixes.</span>
+    </div>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 32px 40px 48px; display: flex; flex-direction: column; gap: 20px">
+    <header style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <span style="font-size: 13px; color: #5B6170">syd-br-014-a · running #2479</span>
+        <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.01em">VPN</h1>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px">
+        <button type="button" style="min-height: 44px; padding: 0 16px; border: 1px solid #CDD2DA; border-radius: 8px; background: #FFFFFF; color: #16181D; font: inherit; font-weight: 500; cursor: pointer">Import OpenVPN config</button>
+        <button type="button" style="min-height: 44px; padding: 0 18px; border: none; border-radius: 8px; background: {{accent}}; color: #FFFFFF; font: inherit; font-weight: 600; cursor: pointer">Add tunnel</button>
+      </div>
+    </header>
+
+    <section aria-label="VPN summary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px">
+      <div style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; color: #5B6170">Site-to-site tunnels</span><span style="font-size: 24px; font-weight: 700">6 <span style="font-size: 14px; font-weight: 500; color: #5B6170">5 up</span></span></div>
+      <div style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; color: #5B6170">Remote users connected</span><span style="font-size: 24px; font-weight: 700">42</span></div>
+      <div style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; color: #5B6170">Sign-in</span><span style="font-size: 24px; font-weight: 700">OIDC</span><span style="font-size: 12px; color: #5B6170">Entra ID · 4 groups mapped</span></div>
+      <div style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; color: #5B6170">FIPS mode</span><span style="font-size: 24px; font-weight: 700">Off</span><span style="font-size: 12px; color: #5B6170">When on, only IPsec is offered</span></div>
+    </section>
+
+    <section aria-labelledby="s2s-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 12px; display: flex; flex-direction: column">
+      <h2 id="s2s-h" style="margin: 0; padding: 16px 20px; font-size: 17px; font-weight: 600">Site-to-site</h2>
+      <div style="overflow-x: auto">
+        <table style="width: 100%; min-width: 900px; border-collapse: collapse; font-size: 13px">
+          <thead>
+            <tr style="text-align: left; color: #5B6170; background: #F8F9FA">
+              <th scope="col" style="padding: 10px 8px 10px 20px; font-weight: 500">Tunnel</th>
+              <th scope="col" style="padding: 10px 8px; font-weight: 500">Type</th>
+              <th scope="col" style="padding: 10px 8px; font-weight: 500">Peer</th>
+              <th scope="col" style="padding: 10px 8px; font-weight: 500">Local ↔ remote networks</th>
+              <th scope="col" style="padding: 10px 8px; font-weight: 500">Status</th>
+              <th scope="col" style="padding: 10px 8px; font-weight: 500">Last handshake / rekey</th>
+              <th scope="col" style="padding: 10px 20px 10px 8px; font-weight: 500; text-align: right">In / out, 24 h</th>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{tunnels}}" as="t" hint-placeholder-count="6">
+              <tr style="border-top: 1px solid #EEF0F3; vertical-align: top">
+                <td style="padding: 12px 8px 12px 20px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px">{{t.name}}</td>
+                <td style="padding: 12px 8px">{{t.type}}</td>
+                <td style="padding: 12px 8px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px">{{t.peer}}</td>
+                <td style="padding: 12px 8px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px">{{t.nets}}</td>
+                <td style="padding: 12px 8px">
+                  <sc-if value="{{t.up}}" hint-placeholder-val="{{true}}"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #E6F4EC; color: #11502F; font-weight: 600; font-size: 12px">Up</span></sc-if>
+                  <sc-if value="{{t.down}}" hint-placeholder-val="{{false}}"><span style="display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FCEBEA; color: #7A1A14; font-weight: 600; font-size: 12px">Down</span><span style="display: block; margin-top: 4px; font-size: 12px; color: #7A1A14">{{t.why}}</span></sc-if>
+                </td>
+                <td style="padding: 12px 8px; color: #3A3F4B">{{t.hs}}</td>
+                <td style="padding: 12px 20px 12px 8px; text-align: right; font-variant-numeric: tabular-nums">{{t.bytes}}</td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px; align-items: start">
+      <section aria-labelledby="ra-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 12px; display: flex; flex-direction: column">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 16px 20px">
+          <h2 id="ra-h" style="margin: 0; font-size: 17px; font-weight: 600">Remote access (WireGuard portal)</h2>
+          <span style="font-size: 13px; color: #5B6170">vpn.harbourdental.example</span>
+        </div>
+        <div style="overflow-x: auto">
+          <table style="width: 100%; min-width: 520px; border-collapse: collapse; font-size: 13px">
+            <thead>
+              <tr style="text-align: left; color: #5B6170; background: #F8F9FA">
+                <th scope="col" style="padding: 10px 8px 10px 20px; font-weight: 500">User</th>
+                <th scope="col" style="padding: 10px 8px; font-weight: 500">Group</th>
+                <th scope="col" style="padding: 10px 8px; font-weight: 500">Tunnel address</th>
+                <th scope="col" style="padding: 10px 20px 10px 8px; font-weight: 500">Since</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{users}}" as="u" hint-placeholder-count="5">
+                <tr style="border-top: 1px solid #EEF0F3">
+                  <td style="padding: 10px 8px 10px 20px">{{u.user}}</td>
+                  <td style="padding: 10px 8px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px">{{u.group}}</td>
+                  <td style="padding: 10px 8px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px">{{u.addr}}</td>
+                  <td style="padding: 10px 20px 10px 8px; color: #3A3F4B">{{u.since}}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section aria-labelledby="gm-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+        <h2 id="gm-h" style="margin: 0; font-size: 17px; font-weight: 600">Group to policy mapping</h2>
+        <p style="margin: 0; font-size: 13px; color: #3A3F4B">A user signs in through the portal, gets a short-lived WireGuard key, and lands in zone vpn. Security policy rules match their IdP group.</p>
+        <sc-for list="{{groups}}" as="g" hint-placeholder-count="4">
+          <div style="display: flex; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid #EEF0F3; font-size: 13px">
+            <span style="font-family: 'JetBrains Mono', monospace">{{g.group}}</span>
+            <a href="Main.dc.html">{{g.rules}}</a>
+          </div>
+        </sc-for>
+        <p style="margin: 0; font-size: 12px; color: #5B6170">Keys expire after 12 hours. Removing a user from the IdP group disconnects them at the next check, within 5 minutes.</p>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#0A5FA8","options":["#0A5FA8","#16181D","#0F766E"]},"$preview":{"width":1440,"height":1240}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const t = (name, type, peer, nets, up, why, hs, bytes) => ({ name, type, peer, nets, up, down: !up, why, hs, bytes });
+    return {
+      accent: this.props.accent ?? '#0A5FA8',
+      tunnels: [
+        t('wg-mel', 'WireGuard', '198.51.100.4:51820', '10.20.0.0/16 ↔ 10.60.0.0/16', true, '', '41 s ago', '18.2 / 9.1 GB'),
+        t('wg-bne', 'WireGuard', '198.51.100.22:51820', '10.20.0.0/16 ↔ 10.70.0.0/16', true, '', '1 min ago', '4.4 / 3.0 GB'),
+        t('wg-per', 'WireGuard', '198.51.100.31:51820', '10.20.0.0/16 ↔ 10.80.0.0/16', true, '', '22 s ago', '2.1 / 1.7 GB'),
+        t('ipsec-aws', 'IPsec IKEv2', 'AWS VPN gateway, 2 endpoints', '10.20.0.0/16 ↔ 172.31.0.0/16', true, '', 'Rekeyed 38 min ago', '61.0 / 12.4 GB'),
+        t('ipsec-bank', 'IPsec IKEv2', '192.0.2.200', '10.30.0.11/32 ↔ 192.0.2.64/27', true, '', 'Rekeyed 2 h ago', '0.3 / 0.2 GB'),
+        t('wg-akl', 'WireGuard', '198.51.100.40:51820', '10.20.0.0/16 ↔ 10.90.0.0/16', false, 'No handshake for 3 h 12 min; peer not answering', '3 h ago', '0 / 0')
+      ],
+      users: [
+        { user: 'Priya Raman', group: 'engineering', addr: '10.99.0.14', since: '08:12' },
+        { user: 'Tom Achebe', group: 'finance', addr: '10.99.0.31', since: '08:40' },
+        { user: 'Lena Kovac', group: 'engineering', addr: '10.99.0.17', since: '09:05' },
+        { user: 'Sam Whitfield', group: 'contractors', addr: '10.99.1.4', since: '10:22' },
+        { user: 'Ana Ruiz', group: 'it-admins', addr: '10.99.0.2', since: '10:58' }
+      ],
+      groups: [
+        { group: 'engineering', rules: 'r-0501 · lab networks' },
+        { group: 'finance', rules: 'r-0502 · ERP' },
+        { group: 'contractors', rules: 'r-0510 · ticketing, business hours' },
+        { group: 'it-admins', rules: 'r-0001 · management' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
