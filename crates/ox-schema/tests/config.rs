@@ -474,6 +474,8 @@ fn a_tunnel_needs_a_way_in_and_sound_peers() {
             .any(|p| p.contains("also allowed for another peer")),
         "{twice:?}"
     );
+    let everything = with(&PEER.replace("10.90.0.2/32", "0.0.0.0/0"));
+    assert!(everything[0].contains("cannot route"), "{everything:?}");
     // The name of a plain interface cannot be reused.
     let clash = problems(&format!(
         "{MINI}\n[wireguard.lan0]\nzone = \"lan\"\naddresses = [\"10.90.0.1/24\"]\n{}",

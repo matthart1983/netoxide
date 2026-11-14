@@ -222,6 +222,15 @@ impl Checker<'_> {
                     );
                 }
                 for net in &peer.allowed {
+                    if net.0.prefix_len() == 0 {
+                        self.add(
+                            &at,
+                            format!(
+                                "{} would send everything through the tunnel, which this version cannot route; list the networks behind the peer",
+                                net.0
+                            ),
+                        );
+                    }
                     if !nets.insert(net.0.trunc()) {
                         self.add(
                             &at,
