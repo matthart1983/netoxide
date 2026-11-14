@@ -1102,10 +1102,16 @@ fn packets_cross_the_box_as_the_config_and_explain_say() {
 
     // Allowed: web and ping from inside to outside. The server has no route
     // back to 192.168.10.0/24, so an answer proves the source was rewritten.
-    assert_eq!(
-        lab.fetch(client, "http://203.0.113.9/").as_deref(),
-        Some("outside web")
-    );
+    // The links have only just come up and the test's web servers may still
+    // be starting on a busy machine, so the first fetch gets a few tries.
+    let mut first = None;
+    for _ in 0..5 {
+        first = lab.fetch(client, "http://203.0.113.9/");
+        if first.is_some() {
+            break;
+        }
+    }
+    assert_eq!(first.as_deref(), Some("outside web"));
     assert!(lab.ping(client, "203.0.113.9"));
     assert_eq!(lab.explain("203.0.113.9", "tcp", Some(80)), "ACCEPT");
     assert_eq!(lab.explain("203.0.113.9", "icmp", None), "ACCEPT");
