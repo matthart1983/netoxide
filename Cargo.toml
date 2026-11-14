@@ -16,6 +16,8 @@ ox-plan = { path = "crates/ox-plan" }
 ox-libnft = { path = "crates/ox-libnft" }
 ox-store = { path = "crates/ox-store" }
 ox-client = { path = "crates/ox-client" }
+ox-setup = { path = "crates/ox-setup" }
+nix = { version = "0.31", default-features = false, features = ["net"] }
 ox-import = { path = "crates/ox-import" }
 roxmltree = "0.21"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }

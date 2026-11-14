@@ -3,6 +3,24 @@
 //! Most commands talk to `oxd` over its Unix socket. The commands under
 //! `ox file` work on config files alone and need no daemon.
 
+/// `println!` that ignores a closed pipe, so `ox history | head` ends quietly.
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+
+/// `print!` with the same behaviour.
+macro_rules! outp {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = write!(std::io::stdout(), $($arg)*);
+    }};
+}
+
+mod easy;
+
 use std::{
     net::IpAddr,
     path::{Path, PathBuf},
@@ -86,6 +104,47 @@ enum Command {
     Audit,
     /// Print the Netoxide table as the kernel holds it
     Kernel,
+    /// Guided setup: pick the internet and inside ports, get a complete starter config
+    Init {
+        /// The port that faces the internet
+        #[arg(long)]
+        wan: Option<String>,
+        /// A port that faces the inside network, optionally with the box's
+        /// address on it: eth1 or eth1=192.168.10.1/24. Repeat for more ports
+        #[arg(long)]
+        lan: Vec<String>,
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Write the config to this file
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        /// Store the config in the daemon as a candidate with this name
+        #[arg(long)]
+        save: Option<String>,
+    },
+    /// Forward a port from the internet to a host inside. Saved as a candidate
+    Forward {
+        /// What this is for, such as "Home Assistant"
+        #[arg(long)]
+        name: String,
+        /// The outside port, such as tcp/443
+        #[arg(long)]
+        port: String,
+        /// The inside host, with its port if different: 192.168.10.20:8123
+        #[arg(long)]
+        to: String,
+        /// The outside address, when the box has more than one
+        #[arg(long)]
+        address: Option<IpAddr>,
+    },
+    /// Block everything an inside device sends. Saved as a candidate
+    Block {
+        /// The device's address, or a network
+        address: String,
+        /// What the device is, such as "Smart TV"
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Translate a pfSense config.xml backup into a Netoxide config and a report
     Import {
         backup: PathBuf,
@@ -207,22 +266,6 @@ fn parse_window(s: &str) -> std::result::Result<u64, String> {
         .parse::<u64>()
         .map(|n| n * scale)
         .map_err(|_| format!("'{s}' is not a time; write 5m or 90s"))
-}
-
-/// `println!` that ignores a closed pipe, so `ox history | head` ends quietly.
-macro_rules! out {
-    ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        let _ = writeln!(std::io::stdout(), $($arg)*);
-    }};
-}
-
-/// `print!` with the same behaviour.
-macro_rules! outp {
-    ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        let _ = write!(std::io::stdout(), $($arg)*);
-    }};
 }
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -487,6 +530,9 @@ fn daemon(cli: &Cli) -> Result<()> {
             let dump = oxd.json("GET", "/v1/kernel", None)?;
             out!("{}", serde_json::to_string_pretty(&dump)?);
         }
+        Command::Init { .. } | Command::Forward { .. } | Command::Block { .. } => {
+            unreachable!("handled in main")
+        }
         Command::Schema | Command::File(_) | Command::Import { .. } => {
             unreachable!("handled before the daemon is contacted")
         }
@@ -625,6 +671,31 @@ fn main() -> ExitCode {
             .map(|s| out!("{s}"))
             .map_err(Into::into),
         Command::File(cmd) => file(cmd),
+        Command::Init {
+            wan,
+            lan,
+            hostname,
+            out,
+            save,
+        } => easy::init(
+            &easy::InitArgs {
+                wan: wan.as_deref(),
+                lan,
+                hostname: hostname.as_deref(),
+                out: out.as_deref(),
+                save: save.as_deref(),
+            },
+            &Client::new(&cli.socket),
+        ),
+        Command::Forward {
+            name,
+            port,
+            to,
+            address,
+        } => easy::forward(&Client::new(&cli.socket), name, port, to, *address),
+        Command::Block { address, name } => {
+            easy::block(&Client::new(&cli.socket), address, name.as_deref())
+        }
         Command::Import {
             backup,
             out,

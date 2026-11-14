@@ -25,6 +25,7 @@ decision. This file gives you what you need to start working.
 | Daemon | `crates/oxd` | HTTP+JSON API on a Unix socket, applies to the kernel, `--dry-run` |
 | CLI | `crates/ox-cli` | `ox`: daemon commands, `ox file ...` offline commands, `ox import` |
 | Socket client | `crates/ox-client` | The small HTTP client `ox` and the TUI share |
+| Easy path | `crates/ox-setup` | `detect` (ports of this machine), `starter` (guided-setup config), `add_forward`, `block`, `describe`. Behind `ox init`, `ox forward`, `ox block` |
 | Importer | `crates/ox-import` | pfSense config.xml → config + report + differential verify |
 | Services, VPN, HA, API auth/RBAC, web UI, controller, OS image | — | **Not started** |
 
@@ -100,6 +101,7 @@ crates/
   oxd/            the daemon: API on a Unix socket, commit-confirm clock
   ox-cli/         the `ox` binary
   ox-client/      HTTP client for the oxd socket, shared by ox and the TUI
+  ox-setup/       guided setup and one-step actions; all return ordinary Config
   ox-import/      pfSense backup → config, report, verify
 examples/         branch.toml, branch-candidate.toml, flows.jsonl, pfsense-config.xml
 tui/              netoxide-tui: live.rs + live_ui.rs (live mode), app.rs + ui.rs + data.rs (mock mode)
@@ -107,9 +109,9 @@ tui/              netoxide-tui: live.rs + live_ui.rs (live mode), app.rs + ui.rs
 
 Proposed next, not decided, roughly in this order. The two-audience goal moved single-box ease of use ahead of fleet security:
 
-1. `ox init`: guided first-run setup that detects interfaces and writes a complete, safe config. Plus a locked-down default before the first commit, and rules for traffic the box sends.
+1. A locked-down default before the first commit, and rules for traffic the box sends. (`ox init`, `ox forward` and `ox block` are built.)
 2. DHCP (Kea) and DNS (Unbound) rendered from the config. A box that cannot hand out addresses cannot replace a home router.
-3. Plain-language actions in `ox` and the TUI: forward a port, block a device, add a network. Each produces ordinary rules and shows them before applying. Includes rule and candidate editing in the live TUI.
+3. More one-step actions (add a guest network, allow a service) and the same actions in the TUI, plus rule and candidate editing there. New actions go in `ox-setup` as functions over `Config` that return plain sentences, and they must prove their result with `ox-explain` the way `add_forward` does.
 4. A web UI on the daemon's API. Home users expect one.
 5. API security: TLS listener, OIDC or token auth, the five roles, four-eyes approval. Today the socket's file permission is the only control.
 6. WireGuard, then IPsec.

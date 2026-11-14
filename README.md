@@ -7,6 +7,7 @@ Netoxide is an open-source firewall and router OS for Linux with a Rust control 
 - [Who it is for](#who-it-is-for)
 - [What works today](#what-works-today)
 - [Try it without touching your machine](#try-it-without-touching-your-machine)
+- [Start from nothing](#start-from-nothing)
 - [The config](#the-config)
 - [How a change reaches the kernel](#how-a-change-reaches-the-kernel)
 - [The terminal UI](#the-terminal-ui)
@@ -33,14 +34,14 @@ The design rule is "easy first, advanced within reach". Each area has an easy pa
 
 | Area | Easy path | Advanced path |
 | --- | --- | --- |
-| Setup | A guided setup that writes the config. **Planned** | Write the config file. **Works today** |
-| Rules | "Forward a port", "block a device", "add a guest network". **Planned** | Zone-pair rules, address groups, services, NAT. **Works today** |
+| Setup | `ox init` asks which port faces the internet and writes a complete starter config. **Works today** | Write the config file. **Works today** |
+| Rules | `ox forward` and `ox block` do it in one step and show the result first. **Work today.** "Add a guest network" is planned | Zone-pair rules, address groups, services, NAT. **Works today** |
 | Changes | Apply, with automatic undo if you lock yourself out. **Works today** | Named candidates, plan with flow impact, rollback. **Works today.** Four-eyes approval is planned |
 | Understanding | Press `x` on a rule in the terminal UI to see what it does to a packet. **Works today** | `ox explain` for any packet, against running and candidate. **Works today.** Live trace is planned |
 | Interface | Terminal UI: view, commit, confirm, undo. **Works today.** Web UI is planned | CLI and HTTP API. **Work today.** Terraform provider is planned |
 | Scale | One box with no extra parts. **Works today** | Fleet controller, templates, staged rollouts. **Planned** |
 
-**If you run a home lab, be aware of where this is today.** You still write a TOML file by hand, there is no DHCP or DNS server, and there is no web UI, so Netoxide cannot yet replace a home router. The easy path is what gets built next. See [Not built yet](#not-built-yet).
+**If you run a home lab, be aware of where this is today.** There is no DHCP or DNS server and no web UI, so Netoxide cannot yet replace a home router. The rest of the easy path is what gets built next. See [Not built yet](#not-built-yet).
 
 ## Why
 
@@ -84,6 +85,8 @@ ox candidate save base examples/branch.toml
 ox commit base --reason "first config"
 ```
 
+That uses a ready-made example. On a real box you would start with the guided setup instead; see [Start from nothing](#start-from-nothing).
+
 Propose a change, look at it, then apply it with a 30-second window:
 
 ```sh
@@ -103,6 +106,53 @@ ox kernel      # the table exactly as the kernel holds it
 ```
 
 **Warning.** Outside a namespace, `oxd` replaces the host's `netoxide` nftables table, and the config's default is to drop. Use `oxd --dry-run` if you want the API and state without loading anything.
+
+## Start from nothing
+
+`ox init` looks at the machine's network ports, asks which one faces the internet and which face your inside network, and writes a complete config:
+
+```
+$ ox init --save starter
+Ports on this machine:
+
+  eth0           up    203.0.113.10/24  ← reaches the internet now
+  eth1           up    no address
+
+Which port faces the internet? [eth0]:
+Which ports face your inside network? (separate with spaces) [eth1]:
+What address should the box have on eth1? [192.168.10.1/24]:
+
+This config will do the following:
+
+  eth0 is in zone wan (203.0.113.10/24)
+  eth1 is in zone lan (192.168.10.1/24)
+  lan → wan: everything from anyone to anywhere is allowed (r-inside-out)
+  lan → wan: everything else is dropped
+  lan → the box itself: ssh, ping from anyone to anywhere is allowed (r-manage)
+  lan → the box itself: everything else is dropped
+  wan → the box itself: dhcpv6-client from fe80::/10 to anywhere is allowed (r-dhcpv6)
+  wan → the box itself: everything else is dropped
+  traffic from 192.168.10.0/24 leaving by wan appears to come from the box's own address (n-inside-out)
+  wan → lan: no rules, so everything is dropped
+
+Not covered yet: Netoxide does not serve DHCP or DNS, so keep those running elsewhere.
+
+Saved as candidate starter. Nothing has been applied.
+Next: ox plan starter  then  ox commit starter --confirm 5m
+```
+
+In short: the inside network can reach the internet and is hidden behind the box's address, the box can be managed over SSH from inside only, and everything arriving from the internet is dropped. Pass `--wan` and `--lan` to skip the questions, and `--out <file>` to write a file instead of saving a candidate. `ox init` only reads the machine. It changes nothing until you commit.
+
+Two everyday changes are single commands. Each reads the running config, makes the change, and saves the result as a candidate for you to commit:
+
+```sh
+ox forward --name "Home Assistant" --port tcp/443 --to 192.168.10.20:8123
+ox block 192.168.10.66 --name "Smart TV"
+```
+
+`ox forward` adds the port forward and the filter rule it needs, then checks with the explain engine that a packet from outside is accepted by that rule. If an earlier rule would have decided the packet first, it places the new rule ahead of it and says so. `ox block` drops and logs everything the device sends, to other networks and to the box.
+
+The result of all three is ordinary config. You can open it, edit it by hand, and use every advanced command on it.
 
 ## The config
 
@@ -310,6 +360,8 @@ Daemon commands. All take `--socket <path>` or the `OX_SOCKET` variable. The def
 | `ox explain --src --dst --proto --dport --in [--candidate <name>]` | What happens to one packet |
 | `ox audit` | The audit log, with the chain verified |
 | `ox kernel` | The Netoxide table as the kernel holds it |
+| `ox forward --name <text> --port tcp/443 --to <host>[:port] [--address <outside address>]` | Forward a port to an inside host; saved as a candidate |
+| `ox block <address> [--name <text>]` | Drop everything a device sends; saved as a candidate |
 
 Commands that need no daemon:
 
@@ -321,6 +373,7 @@ Commands that need no daemon:
 | `ox file plan <running> <candidate> [--flows <file>]` | Plan from two files |
 | `ox file explain <file> --src ... [--candidate <file>]` | Explain from files |
 | `ox import <config.xml> [--out <file>] [--verify <flows>]` | Translate a pfSense backup |
+| `ox init [--wan <port>] [--lan <port>[=<addr/prefix>]] [--out <file> \| --save <name>]` | Guided setup. Reads the machine's ports; with `--out` it needs no daemon |
 | `ox schema` | Print the JSON Schema of the config |
 
 The confirm window is between 10 seconds and 1 hour. Only one commit can be pending at a time.
@@ -383,6 +436,8 @@ The caller's name is read from the `x-ox-user` header and recorded as given. See
 | `oxd` | The daemon |
 | `ox-cli` | The `ox` binary |
 | `ox-import` | The pfSense importer and its model of the pfSense ruleset |
+| `ox-setup` | Interface detection, the starter config, and the one-step actions |
+| `ox-client` | The HTTP client for the daemon's socket, shared by `ox` and the TUI |
 | `tui/` | The terminal UI prototype |
 
 What the kernel gets, for the example config:
@@ -423,7 +478,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 76 tests. Two of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. The other starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
+There are 91 tests. Two of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. The other starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
@@ -444,9 +499,9 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 
 Roughly in the order planned. Ease of use on one box comes first:
 
-1. A guided first-run setup (`ox init`) that writes a complete, safe config, and a locked-down default before the first commit.
+1. A locked-down default before the first commit, and rules for traffic the box itself sends.
 2. DHCP with Kea and DNS with Unbound, rendered from the config.
-3. Plain-language actions such as "forward a port" and "block a device", and rule editing in the TUI.
+3. More one-step actions such as "add a guest network", and rule editing in the TUI.
 4. A web UI.
 5. API security: TLS, OIDC or token login, roles, four-eyes approval.
 6. WireGuard, then IPsec.
