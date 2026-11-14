@@ -320,6 +320,7 @@ pub fn import_pfsense(xml: &str) -> Result<Imported, ImportError> {
         nat: Nat::default(),
         dns: None,
         dhcp: Default::default(),
+        wireguard: Default::default(),
     };
 
     // Interfaces and zones.

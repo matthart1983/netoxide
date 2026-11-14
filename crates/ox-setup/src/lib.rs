@@ -7,14 +7,18 @@
 
 mod detect;
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::{
+    collections::BTreeSet,
+    net::{IpAddr, Ipv4Addr},
+};
 
 use ipnet::IpNet;
 use ox_explain::{Packet, Verdict, explain};
 use ox_nft::{L4, compile};
 use ox_schema::{
     Action, AddrRef, Config, DhcpPool, Dns, Forward, IfaceAddr, Interface, Nat, Net, Outbound,
-    Policy, PortSpec, Proto, Rule, SCHEMA_VERSION, SELF_ZONE, ServiceRef, Translate, Zone, is_name,
+    Policy, PortSpec, Proto, Rule, SCHEMA_VERSION, SELF_ZONE, ServiceRef, Translate, WgPeer,
+    WireGuard, Zone, is_name,
 };
 
 pub use detect::{Detected, detect};
@@ -187,6 +191,7 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
         nat: Nat::default(),
         dns: None,
         dhcp: Default::default(),
+        wireguard: Default::default(),
     };
     for lan in &a.lans {
         config
@@ -396,6 +401,20 @@ pub fn describe(config: &Config) -> Vec<String> {
             ));
         }
         out.push(format!("{} → {to}: everything else is dropped", p.from));
+    }
+    for (name, w) in &config.wireguard {
+        out.push(format!(
+            "{name} is a WireGuard tunnel in zone {}{}, with {}",
+            w.zone,
+            w.listen_port
+                .map(|p| format!(", listening on udp/{p}"))
+                .unwrap_or_default(),
+            match w.peers.len() {
+                0 => "no peers yet".to_string(),
+                1 => format!("one peer ({})", w.peers[0].name),
+                n => format!("{n} peers"),
+            }
+        ));
     }
     for f in &config.nat.forward {
         out.push(format!(
@@ -701,6 +720,276 @@ pub fn add_forward(config: &mut Config, req: &ForwardRequest) -> Result<Vec<Stri
         req.service
     ));
     Ok(out)
+}
+
+/// "Add a device to the VPN": what the user asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnPeerRequest {
+    /// What the device is, such as "Ana's laptop".
+    pub name: String,
+    /// The device's WireGuard public key.
+    pub public_key: String,
+}
+
+/// What a new VPN device needs to be told, besides its own private key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnPeer {
+    /// What was done, in plain sentences.
+    pub done: Vec<String>,
+    /// The tunnel interface on the box.
+    pub tunnel: String,
+    pub listen_port: u16,
+    /// The device's address inside the tunnel.
+    pub address: IpNet,
+    /// The networks the device should send through the tunnel.
+    pub routes: Vec<IpNet>,
+    /// The box's address as a DNS server, when it answers DNS for the VPN.
+    pub dns: Option<IpAddr>,
+}
+
+/// The device's own config file, in the format every WireGuard app reads.
+/// `endpoint` is how the device finds the box from outside: a name or
+/// address, with or without a port.
+pub fn client_config(peer: &VpnPeer, private_key: &str, box_key: &str, endpoint: &str) -> String {
+    let endpoint = if let Ok(v6) = endpoint.parse::<std::net::Ipv6Addr>() {
+        format!("[{v6}]:{}", peer.listen_port)
+    } else if endpoint.parse::<std::net::SocketAddr>().is_ok()
+        || endpoint
+            .rsplit_once(':')
+            .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
+    {
+        // Already has a port.
+        endpoint.to_string()
+    } else {
+        format!("{endpoint}:{}", peer.listen_port)
+    };
+    let routes: Vec<String> = peer.routes.iter().map(ToString::to_string).collect();
+    let mut out = format!(
+        "[Interface]\nPrivateKey = {private_key}\nAddress = {}\n",
+        peer.address
+    );
+    if let Some(dns) = peer.dns {
+        out.push_str(&format!("DNS = {dns}\n"));
+    }
+    out.push_str(&format!(
+        "\n[Peer]\nPublicKey = {box_key}\nEndpoint = {endpoint}\nAllowedIPs = {}\nPersistentKeepalive = 25\n",
+        routes.join(", ")
+    ));
+    out
+}
+
+const VPN_ZONE: &str = "vpn";
+const VPN_PORT: u16 = 51820;
+
+/// Adds a device to the box's VPN, and sets the VPN up if there is none:
+/// a WireGuard tunnel in its own zone, the rule that lets devices connect
+/// from the internet, and rules that let them reach the inside networks.
+/// The config is unchanged on error.
+pub fn add_vpn_peer(config: &mut Config, req: &VpnPeerRequest) -> Result<VpnPeer, String> {
+    let peer_name = slug(&req.name, 32);
+    if !is_name(&peer_name) {
+        return Err("give the device a name that starts with a letter, such as \"laptop\"".into());
+    }
+    if ox_schema::decode_key(&req.public_key).is_none() {
+        return Err("that is not a WireGuard public key: 44 characters ending in '='".into());
+    }
+    let mut next = config.clone();
+    let mut done = vec![];
+
+    let existing = next
+        .wireguard
+        .iter()
+        .find(|(_, w)| w.zone == VPN_ZONE && w.listen_port.is_some())
+        .map(|(name, _)| name.clone());
+    let tunnel = match existing {
+        Some(name) => name,
+        None => {
+            let (wan_name, wan) = next
+                .interfaces
+                .iter()
+                .find(|(_, i)| i.default_route)
+                .ok_or("no interface carries the default route, so devices outside could not reach the box")?;
+            let (wan_name, wan_zone) = (wan_name.clone(), wan.zone.clone());
+            let inside_zones: BTreeSet<String> = next
+                .interfaces
+                .values()
+                .filter(|i| i.zone != wan_zone)
+                .map(|i| i.zone.clone())
+                .collect();
+            // A network for the tunnel that nothing on the box uses yet.
+            let used: Vec<IpNet> = next
+                .interfaces
+                .values()
+                .flat_map(|i| i.addresses.iter().map(|a| a.0.trunc()))
+                .collect();
+            let own: IpNet = (90..=99)
+                .map(|n| format!("10.{n}.0.1/24").parse::<IpNet>().expect("valid"))
+                .find(|net| !used.iter().any(|u| u.contains(&net.network()) || net.contains(&u.network())))
+                .ok_or("the networks 10.90.0.0/24 to 10.99.0.0/24 are all in use here; add the tunnel to the config by hand")?;
+            let name = (0..10)
+                .map(|n| format!("wg{n}"))
+                .find(|n| !next.interfaces.contains_key(n) && !next.wireguard.contains_key(n))
+                .ok_or("wg0 to wg9 are all taken")?;
+            next.zones.entry(VPN_ZONE.into()).or_insert(Zone {
+                description: Some("Devices connected over the VPN".into()),
+            });
+            next.wireguard.insert(
+                name.clone(),
+                WireGuard {
+                    zone: VPN_ZONE.into(),
+                    addresses: vec![IfaceAddr(own)],
+                    listen_port: Some(VPN_PORT),
+                    peers: vec![],
+                },
+            );
+            next.services
+                .entry("wireguard".into())
+                .or_insert_with(|| vec![format!("udp/{VPN_PORT}").parse().expect("built-in")]);
+            let policy = |next: &mut Config, from: &str, to: &str| -> usize {
+                match next
+                    .policies
+                    .iter()
+                    .position(|p| p.from == from && p.to == to)
+                {
+                    Some(i) => i,
+                    None => {
+                        next.policies.push(Policy {
+                            from: from.into(),
+                            to: to.into(),
+                            log_default: true,
+                            rules: vec![],
+                        });
+                        next.policies.len() - 1
+                    }
+                }
+            };
+            let i = policy(&mut next, &wan_zone, SELF_ZONE);
+            let id = fresh_id(&next, "r", "vpn-connect");
+            next.policies[i].rules.push(rule(
+                &id,
+                "Devices connect to the VPN",
+                vec![AddrRef::Any],
+                &["wireguard"],
+                "VPN setup: WireGuard answers only peers whose key it knows",
+            ));
+            done.push(format!(
+                "a VPN was set up: tunnel {name} with the box at {}, listening on udp/{VPN_PORT} on {wan_name} ({id})",
+                own.addr()
+            ));
+            for zone in &inside_zones {
+                let i = policy(&mut next, VPN_ZONE, zone);
+                let id = fresh_id(&next, "r", &format!("vpn-to-{zone}"));
+                next.policies[i].rules.push(rule(
+                    &id,
+                    &format!("VPN devices reach {zone}"),
+                    vec![AddrRef::Any],
+                    &["any"],
+                    "VPN setup: a connected device is treated like one on the inside network",
+                ));
+                done.push(format!(
+                    "devices on the VPN may reach everything in {zone} ({id})"
+                ));
+            }
+            let serves_dns = next.dns.is_some();
+            let i = policy(&mut next, VPN_ZONE, SELF_ZONE);
+            let id = fresh_id(&next, "r", "vpn-to-box");
+            let mut services = vec!["icmp", "icmpv6"];
+            if serves_dns {
+                services.extend(["udp/53", "tcp/53"]);
+            }
+            next.policies[i].rules.push(rule(
+                &id,
+                "VPN devices may ping the box and use its DNS",
+                vec![AddrRef::Any],
+                &services,
+                "VPN setup",
+            ));
+            if let Some(dns) = &mut next.dns
+                && !dns.zones.iter().any(|z| z == VPN_ZONE)
+            {
+                dns.zones.push(VPN_ZONE.into());
+                done.push(
+                    "the box answers DNS for VPN devices, so local names work for them".into(),
+                );
+            }
+            name
+        }
+    };
+
+    let wg = next.wireguard.get_mut(&tunnel).expect("found or just made");
+    let own = wg
+        .addresses
+        .iter()
+        .map(|a| a.0)
+        .find(|a| a.addr().is_ipv4() && a.prefix_len() <= 30)
+        .ok_or_else(|| {
+            format!("{tunnel} has no IPv4 network to give the device an address from")
+        })?;
+    if wg.peers.iter().any(|p| p.name == peer_name) {
+        return Err(format!("the VPN already has a device called '{peer_name}'"));
+    }
+    if wg.peers.iter().any(|p| p.public_key == req.public_key) {
+        return Err("the VPN already has a device with that key".into());
+    }
+    let taken: Vec<IpAddr> = wg
+        .peers
+        .iter()
+        .flat_map(|p| p.allowed.iter().map(|n| n.0.addr()))
+        .chain([own.addr()])
+        .collect();
+    let address = own
+        .hosts()
+        .find(|h| !taken.contains(h))
+        .ok_or_else(|| format!("{} has no free address left", own.trunc()))?;
+    let address = IpNet::new(address, 32).expect("a host route");
+    wg.peers.push(WgPeer {
+        name: peer_name.clone(),
+        public_key: req.public_key.clone(),
+        allowed: vec![Net(address)],
+        endpoint: None,
+        keepalive: None,
+    });
+    let listen_port = wg.listen_port.unwrap_or(VPN_PORT);
+    check(&next)?;
+
+    // What the device should send through the tunnel: the tunnel's own
+    // network and every network the VPN zone may reach.
+    let reachable: BTreeSet<&str> = next
+        .policies
+        .iter()
+        .filter(|p| p.from == VPN_ZONE && p.to != SELF_ZONE)
+        .map(|p| p.to.as_str())
+        .collect();
+    let mut routes = vec![own.trunc()];
+    for i in next
+        .interfaces
+        .values()
+        .filter(|i| reachable.contains(i.zone.as_str()))
+    {
+        for a in &i.addresses {
+            if a.0.addr().is_ipv4() && !routes.contains(&a.0.trunc()) {
+                routes.push(a.0.trunc());
+            }
+        }
+    }
+    let dns = next
+        .dns
+        .as_ref()
+        .filter(|d| d.zones.iter().any(|z| z == VPN_ZONE))
+        .map(|_| own.addr());
+    done.push(format!(
+        "{peer_name} was added to the VPN with the address {}",
+        address.addr()
+    ));
+    *config = next;
+    Ok(VpnPeer {
+        done,
+        tunnel,
+        listen_port,
+        address,
+        routes,
+        dns,
+    })
 }
 
 /// "Block a device": drops everything an inside address sends, to other
@@ -1210,6 +1499,148 @@ mod tests {
             other.to_string().contains("does not apply"),
             "the explanation says why the forward was not used: {other}"
         );
+    }
+
+    const KEY_A: &str = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
+    const KEY_B: &str = "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw=";
+
+    #[test]
+    fn adding_a_vpn_device_sets_the_vpn_up_and_proves_the_rules() {
+        let mut c = served();
+        let before = c.clone();
+        let laptop = add_vpn_peer(
+            &mut c,
+            &VpnPeerRequest {
+                name: "Ana's laptop".into(),
+                public_key: KEY_A.into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(laptop.tunnel, "wg0");
+        assert_eq!(laptop.address.to_string(), "10.90.0.2/32");
+        assert_eq!(laptop.dns, Some("10.90.0.1".parse().unwrap()));
+        let routes: Vec<String> = laptop.routes.iter().map(ToString::to_string).collect();
+        assert_eq!(routes, ["10.90.0.0/24", "192.168.10.0/24"]);
+        assert!(
+            laptop.done[0].starts_with("a VPN was set up"),
+            "{:?}",
+            laptop.done
+        );
+        assert!(c.validate().is_empty(), "{:?}", c.validate());
+
+        // The rules it wrote do what it said: a device on the VPN reaches
+        // the inside network and the box's DNS, the internet reaches the
+        // tunnel port and nothing else, and the VPN cannot go out by wan.
+        let rs = compile(&c).unwrap();
+        let verdict = |src: &str, dst: &str, l4, dport, iif: &str| {
+            let p = Packet {
+                src: src.parse().unwrap(),
+                dst: dst.parse().unwrap(),
+                l4,
+                dport,
+                iif: iif.into(),
+                box_addrs: vec!["100.64.3.9".parse().unwrap()],
+            };
+            explain(&rs, &p).unwrap().verdict
+        };
+        assert_eq!(
+            verdict("10.90.0.2", "192.168.10.20", L4::Tcp, Some(445), "wg0"),
+            Verdict::Accept
+        );
+        assert_eq!(
+            verdict("10.90.0.2", "10.90.0.1", L4::Udp, Some(53), "wg0"),
+            Verdict::Accept
+        );
+        assert_eq!(
+            verdict("10.90.0.2", "10.90.0.1", L4::Tcp, Some(22), "wg0"),
+            Verdict::Drop
+        );
+        assert_eq!(
+            verdict("10.90.0.2", "198.51.100.9", L4::Tcp, Some(443), "wg0"),
+            Verdict::Drop
+        );
+        assert_eq!(
+            verdict("198.51.100.7", "100.64.3.9", L4::Udp, Some(51820), "eth0"),
+            Verdict::Accept
+        );
+        assert_eq!(
+            verdict("198.51.100.7", "100.64.3.9", L4::Udp, Some(51821), "eth0"),
+            Verdict::Drop
+        );
+        // An inside device can answer the laptop: the way back is known.
+        assert_eq!(
+            verdict("192.168.10.20", "10.90.0.2", L4::Icmp, None, "eth1"),
+            Verdict::Drop,
+            "inside may not start connections to VPN devices; only replies pass"
+        );
+
+        // A second device joins the same VPN and gets the next address.
+        let phone = add_vpn_peer(
+            &mut c,
+            &VpnPeerRequest {
+                name: "phone".into(),
+                public_key: KEY_B.into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(phone.address.to_string(), "10.90.0.3/32");
+        assert_eq!(phone.done.len(), 1, "no second setup: {:?}", phone.done);
+        assert_eq!(c.wireguard["wg0"].peers.len(), 2);
+
+        // The same name or key again is refused and changes nothing.
+        let two = c.clone();
+        for (name, key, needle) in [
+            (
+                "phone",
+                "0000000000000000000000000000000000000000000=",
+                "already has a device called",
+            ),
+            ("tablet", KEY_B, "already has a device with that key"),
+            ("tablet", "not a key", "not a WireGuard public key"),
+            ("9", KEY_A, "give the device a name"),
+        ] {
+            let err = add_vpn_peer(
+                &mut c,
+                &VpnPeerRequest {
+                    name: name.into(),
+                    public_key: key.into(),
+                },
+            )
+            .unwrap_err();
+            assert!(err.contains(needle), "{name}: {err}");
+            assert_eq!(c, two);
+        }
+        assert_ne!(c, before);
+    }
+
+    #[test]
+    fn the_device_config_names_the_box_however_the_endpoint_is_written() {
+        let peer = VpnPeer {
+            done: vec![],
+            tunnel: "wg0".into(),
+            listen_port: 51820,
+            address: "10.90.0.2/32".parse().unwrap(),
+            routes: vec![
+                "10.90.0.0/24".parse().unwrap(),
+                "192.168.10.0/24".parse().unwrap(),
+            ],
+            dns: None,
+        };
+        for (given, written) in [
+            ("home.example.net", "home.example.net:51820"),
+            ("home.example.net:4500", "home.example.net:4500"),
+            ("203.0.113.10", "203.0.113.10:51820"),
+            ("2001:db8::5", "[2001:db8::5]:51820"),
+            ("[2001:db8::5]:4500", "[2001:db8::5]:4500"),
+        ] {
+            let text = client_config(&peer, "PRIVATE", "PUBLIC", given);
+            assert!(
+                text.contains(&format!("Endpoint = {written}\n")),
+                "{given}: {text}"
+            );
+            assert!(text.contains("AllowedIPs = 10.90.0.0/24, 192.168.10.0/24\n"));
+            assert!(!text.contains("DNS ="));
+        }
     }
 
     #[test]

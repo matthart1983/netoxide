@@ -106,6 +106,15 @@ enum Command {
     Hygiene,
     /// List the addresses DHCP has handed out
     Leases,
+    /// WireGuard tunnels: the box's public key and each peer's state
+    Vpn {
+        /// Print only the box's public key for this tunnel, making the key
+        /// if there is none. Use it to swap keys before a first commit
+        #[arg(long, value_name = "INTERFACE")]
+        key: Option<String>,
+        #[command(subcommand)]
+        action: Option<VpnCmd>,
+    },
     /// Approve a candidate someone else saved (four-eyes)
     Approve { candidate: String },
     /// Require a second person's approval before a commit: on or off
@@ -190,6 +199,24 @@ enum Command {
     /// Work on config files, without the daemon
     #[command(subcommand)]
     File(FileCmd),
+}
+
+#[derive(Subcommand)]
+enum VpnCmd {
+    /// Add a phone or laptop to the VPN, setting the VPN up if there is
+    /// none. Saved as a candidate; prints the config file for the device
+    Add {
+        /// What the device is, such as laptop
+        name: String,
+        /// How the device finds the box from outside: a name such as
+        /// home.example.net, or an address
+        #[arg(long)]
+        endpoint: String,
+        /// The device's own public key. Without it a key pair is made for
+        /// the device and its private key is printed once
+        #[arg(long)]
+        public_key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -334,6 +361,26 @@ fn text(v: &Value) -> &str {
 }
 
 /// `2026-11-14 10:52:03 UTC` from Unix seconds, without a date library.
+/// A length of time in the largest unit that fits.
+fn span(secs: u64) -> String {
+    match secs {
+        s if s >= 172_800 => format!("{} days", s / 86_400),
+        s if s >= 7200 => format!("{} hours", s / 3600),
+        s if s >= 120 => format!("{} minutes", s / 60),
+        s => format!("{s} seconds"),
+    }
+}
+
+/// A byte count in the largest unit that fits.
+fn bytes(n: u64) -> String {
+    match n {
+        n if n >= 1 << 30 => format!("{:.1} GiB", n as f64 / (1u64 << 30) as f64),
+        n if n >= 1 << 20 => format!("{:.1} MiB", n as f64 / (1u64 << 20) as f64),
+        n if n >= 1 << 10 => format!("{:.1} KiB", n as f64 / 1024.0),
+        n => format!("{n} B"),
+    }
+}
+
 fn when(secs: u64) -> String {
     let days = secs / 86_400;
     let (h, m, s) = ((secs % 86_400) / 3600, (secs % 3600) / 60, secs % 60);
@@ -658,6 +705,79 @@ fn daemon(cli: &Cli) -> Result<()> {
                     text(&r["kind"]),
                     text(&r["detail"])
                 );
+            }
+        }
+        Command::Vpn {
+            action:
+                Some(VpnCmd::Add {
+                    name,
+                    endpoint,
+                    public_key,
+                }),
+            ..
+        } => {
+            let body = json!({ "name": name, "endpoint": endpoint, "public_key": public_key });
+            let v = oxd.json("POST", "/v1/actions/vpn-peer", Some(&body))?;
+            for line in v["done"].as_array().into_iter().flatten() {
+                out!("{}", text(line));
+            }
+            let candidate = text(&v["candidate"]);
+            out!("\nSaved as candidate {candidate}. Nothing is applied yet.");
+            out!("Next: ox plan {candidate}  then  ox commit {candidate} --confirm 5m\n");
+            out!("The config for the device. Import it into the WireGuard app:\n");
+            out!("{}", text(&v["client_config"]));
+            if v["key_made_here"] == true {
+                out!(
+                    "This is the only copy of the device's private key. The box does not keep it."
+                );
+            }
+        }
+        Command::Vpn {
+            key: Some(iface), ..
+        } => {
+            let v = oxd.json("GET", &format!("/v1/wireguard/{iface}/key"), None)?;
+            out!("{}", text(&v["public_key"]));
+        }
+        Command::Vpn { key: None, .. } => {
+            let tunnels = oxd.json("GET", "/v1/wireguard", None)?;
+            let tunnels = tunnels.as_array().cloned().unwrap_or_default();
+            if tunnels.is_empty() {
+                out!("the running config has no WireGuard tunnel");
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64);
+            for t in &tunnels {
+                out!(
+                    "{}  zone {}  {}",
+                    text(&t["name"]),
+                    text(&t["zone"]),
+                    match t["listen_port"].as_u64() {
+                        Some(p) => format!("listens on udp/{p}"),
+                        None => "connects out only".to_string(),
+                    }
+                );
+                out!("  this box's public key  {}", text(&t["public_key"]));
+                for p in t["peers"].as_array().into_iter().flatten() {
+                    let state = match p["last_handshake"].as_i64() {
+                        Some(at) if now - at < 180 => "connected".to_string(),
+                        Some(at) => {
+                            format!("last heard from {} ago", span((now - at).max(0) as u64))
+                        }
+                        None => "never connected".to_string(),
+                    };
+                    out!(
+                        "  {:<16} {:<28} received {}  sent {}  {}",
+                        text(&p["name"]),
+                        state,
+                        bytes(p["rx_bytes"].as_u64().unwrap_or(0)),
+                        bytes(p["tx_bytes"].as_u64().unwrap_or(0)),
+                        p["seen_at"]
+                            .as_str()
+                            .map(|s| format!("from {s}"))
+                            .unwrap_or_default()
+                    );
+                }
             }
         }
         Command::Leases => {

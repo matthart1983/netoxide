@@ -420,3 +420,73 @@ fn names_the_kernel_reserves_and_odd_hostnames_are_refused() {
     let p = problems(&MINI.replace("hostname = \"t\"", "hostname = \"box\\u001b[2J\""));
     assert!(p[0].contains("must be a host name"), "{p:?}");
 }
+
+/// MINI with a tunnel and whatever else a case needs.
+fn tunnel(settings: &str, extra: &str) -> Vec<String> {
+    problems(&format!(
+        "{MINI}\n[zones.vpn]\n[wireguard.wg0]\nzone = \"vpn\"\naddresses = [\"10.90.0.1/24\"]\n{settings}\n{extra}"
+    ))
+}
+
+const PEER: &str = "[[wireguard.wg0.peer]]\nname = \"laptop\"\npublic_key = \"xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\"\nallowed = [\"10.90.0.2/32\"]\n";
+const TUNNEL_RULE: &str = "\n[[policy]]\nfrom = \"wan\"\nto = \"self\"\n[[policy.rule]]\nid = \"r-tunnel\"\nname = \"Tunnel\"\naction = \"accept\"\nservice = [\"udp/51820\"]\n";
+
+#[test]
+fn a_tunnel_needs_a_way_in_and_sound_peers() {
+    assert_eq!(
+        tunnel(&format!("listen_port = 51820\n{PEER}"), TUNNEL_RULE),
+        Vec::<String>::new()
+    );
+    // A listening tunnel with no rule for its port is unreachable.
+    let closed = tunnel(&format!("listen_port = 51820\n{PEER}"), "");
+    assert!(
+        closed[0].contains("no rule to self accepts it"),
+        "{closed:?}"
+    );
+    // No port and no endpoint: neither side could start.
+    let dead = tunnel(PEER, "");
+    assert!(
+        dead[0].contains("nothing could start this tunnel"),
+        "{dead:?}"
+    );
+    // A peer the box connects to needs no port here.
+    let out = tunnel(
+        &format!("{PEER}endpoint = \"198.51.100.7:51820\"\nkeepalive = 25\n"),
+        "",
+    );
+    assert_eq!(out, Vec::<String>::new());
+
+    let with = |peer: &str| tunnel(&format!("listen_port = 51820\n{peer}"), TUNNEL_RULE);
+    let bad_key = with(&PEER.replace("xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=", "short"));
+    assert!(bad_key[0].contains("not a WireGuard key"), "{bad_key:?}");
+    let nothing = with(&PEER.replace("[\"10.90.0.2/32\"]", "[]"));
+    assert!(nothing[0].contains("allowed is empty"), "{nothing:?}");
+    let twice = with(&format!("{PEER}{}", PEER.replace("laptop", "phone")));
+    assert!(
+        twice
+            .iter()
+            .any(|p| p.contains("public key is used by another peer")),
+        "{twice:?}"
+    );
+    assert!(
+        twice
+            .iter()
+            .any(|p| p.contains("also allowed for another peer")),
+        "{twice:?}"
+    );
+    // The name of a plain interface cannot be reused.
+    let clash = problems(&format!(
+        "{MINI}\n[wireguard.lan0]\nzone = \"lan\"\naddresses = [\"10.90.0.1/24\"]\n{}",
+        PEER.replace("wg0", "lan0") + "endpoint = \"198.51.100.7:51820\"\n"
+    ));
+    assert!(
+        clash.iter().any(|p| p.contains("already in [interfaces]")),
+        "{clash:?}"
+    );
+    // A private key has no place in the config.
+    let leaked = tunnel(
+        "private_key = \"xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\"\n",
+        "",
+    );
+    assert!(leaked[0].contains("unknown field"), "{leaked:?}");
+}

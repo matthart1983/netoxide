@@ -108,19 +108,41 @@ impl Dnsmasq {
             .is_some_and(|c| matches!(c.try_wait(), Ok(None)))
     }
 
-    fn stop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            // SIGTERM lets dnsmasq write its lease file before it exits.
-            let _ = kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
-            for _ in 0..20 {
+    /// Stops dnsmasq and waits for it to be gone. Never waits forever: a
+    /// daemon that may not signal its own child (it runs as another user,
+    /// which needs CAP_KILL) reports that instead of hanging.
+    fn stop(&mut self) -> Result<(), String> {
+        let Some(mut child) = self.child.take() else {
+            return Ok(());
+        };
+        let pid = Pid::from_raw(child.id() as i32);
+        let gone = |child: &mut Child, tries: u32| {
+            for _ in 0..tries {
                 if !matches!(child.try_wait(), Ok(None)) {
-                    return;
+                    return true;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            let _ = child.kill();
-            let _ = child.wait();
+            false
+        };
+        // SIGTERM lets dnsmasq write its lease file before it exits.
+        let asked = kill(pid, Signal::SIGTERM);
+        if gone(&mut child, 20) {
+            return Ok(());
         }
+        let forced = kill(pid, Signal::SIGKILL);
+        if gone(&mut child, 40) {
+            return Ok(());
+        }
+        let why = match (asked, forced) {
+            (Err(e), _) | (_, Err(e)) => format!(
+                "the daemon may not signal it ({e}); it needs the CAP_KILL capability, which dist/oxd.service grants"
+            ),
+            _ => "it did not exit".to_string(),
+        };
+        // Still ours to watch: the next attempt tries again.
+        self.child = Some(child);
+        Err(format!("dnsmasq could not be stopped: {why}"))
     }
 
     fn spawn(&mut self) -> Result<(), String> {
@@ -174,7 +196,7 @@ impl Dnsmasq {
         if conf == self.conf.as_ref() && (conf.is_none() || self.alive()) {
             return Ok(());
         }
-        self.stop();
+        self.stop()?;
         self.conf = None;
         let Some(text) = conf else {
             let _ = fs::remove_file(self.path("dnsmasq.conf"));
@@ -212,6 +234,6 @@ impl Dnsmasq {
 
 impl Drop for Dnsmasq {
     fn drop(&mut self) {
-        self.stop();
+        let _ = self.stop();
     }
 }

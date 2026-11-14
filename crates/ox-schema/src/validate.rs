@@ -80,6 +80,7 @@ impl Checker<'_> {
         self.policies();
         self.nat();
         self.services();
+        self.wireguard();
     }
 
     fn zones_and_interfaces(&mut self) {
@@ -136,6 +137,104 @@ impl Checker<'_> {
                         with_default.join(", ")
                     ),
                 );
+            }
+        }
+    }
+
+    fn wireguard(&mut self) {
+        let c = self.config;
+        for (name, wg) in &c.wireguard {
+            let at = format!("wireguard {name}");
+            let ok_chars = name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'));
+            if name.is_empty()
+                || name.len() > IFNAMSIZ
+                || !ok_chars
+                || matches!(name.as_str(), "." | ".." | "all" | "default")
+            {
+                self.add(
+                    &at,
+                    format!("interface names are 1 to {IFNAMSIZ} letters, digits, '.', '-' or '_'"),
+                );
+            }
+            if c.interfaces.contains_key(name) {
+                self.add(
+                    &at,
+                    "an interface with this name is already in [interfaces]",
+                );
+            }
+            if !c.zones.contains_key(&wg.zone) {
+                self.add(&at, format!("zone '{}' is not defined", wg.zone));
+            }
+            match wg.listen_port {
+                Some(0) => self.add(&at, "listen_port 0 is not a port"),
+                Some(port) => {
+                    let open = c
+                        .zones
+                        .keys()
+                        .any(|zone| self.box_accepts(zone, Proto::Udp, port));
+                    if !open {
+                        self.add(
+                            &at,
+                            format!(
+                                "peers connect to udp/{port} on the box, but no rule to self accepts it; \
+                                 add an accept rule for udp/{port} in the policy from the zone they arrive by"
+                            ),
+                        );
+                    }
+                }
+                None => {
+                    if !wg.peers.is_empty() && wg.peers.iter().all(|p| p.endpoint.is_none()) {
+                        self.add(
+                            &at,
+                            "nothing could start this tunnel: set listen_port so peers can connect, \
+                             or give a peer an endpoint to connect to",
+                        );
+                    }
+                }
+            }
+            let (mut names, mut keys, mut nets) =
+                (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+            for peer in &wg.peers {
+                let at = format!("{at}, peer {}", peer.name);
+                if !is_name(&peer.name) {
+                    self.add(
+                        &at,
+                        "peer names are lowercase letters, digits and hyphens, starting with a letter",
+                    );
+                }
+                if !names.insert(&peer.name) {
+                    self.add(&at, "this name is used by another peer");
+                }
+                if crate::decode_key(&peer.public_key).is_none() {
+                    self.add(
+                        &at,
+                        "public_key is not a WireGuard key: 44 characters ending in '='",
+                    );
+                } else if !keys.insert(&peer.public_key) {
+                    self.add(&at, "this public key is used by another peer");
+                }
+                if peer.allowed.is_empty() {
+                    self.add(
+                        &at,
+                        "allowed is empty, so nothing could be sent to or accepted from this peer",
+                    );
+                }
+                for net in &peer.allowed {
+                    if !nets.insert(net.0.trunc()) {
+                        self.add(
+                            &at,
+                            format!("{} is also allowed for another peer; WireGuard sends each address to one peer", net.0),
+                        );
+                    }
+                }
+                if peer.endpoint.is_some_and(|e| e.port() == 0) {
+                    self.add(&at, "endpoint needs a port");
+                }
+                if peer.keepalive == Some(0) {
+                    self.add(&at, "keepalive 0 means off; leave it out");
+                }
             }
         }
     }
@@ -501,7 +600,10 @@ impl Checker<'_> {
                 let has_address = c
                     .interfaces
                     .values()
-                    .any(|i| i.zone == *zone && !i.addresses.is_empty());
+                    .any(|i| i.zone == *zone && !i.addresses.is_empty())
+                    || c.wireguard
+                        .values()
+                        .any(|w| w.zone == *zone && !w.addresses.is_empty());
                 if !has_address {
                     self.add(
                         &at,

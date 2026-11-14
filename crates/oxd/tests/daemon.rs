@@ -616,6 +616,32 @@ fn the_https_api_needs_a_token_and_respects_its_role() {
     assert!(text.contains("may not save or delete candidates"), "{text}");
     assert_eq!(https(&d, "GET", "/v1/audit", Some(&viewer), None).0, 403);
     assert_eq!(https(&d, "GET", "/v1/audit", Some(&auditor), None).0, 200);
+    // Tunnels: a viewer sees their state, and may not make a key or add a device.
+    assert_eq!(
+        https(&d, "GET", "/v1/wireguard", Some(&viewer), None).0,
+        200
+    );
+    assert_eq!(https(&d, "GET", "/v1/wireguard", None, None).0, 401);
+    assert_eq!(
+        https(&d, "GET", "/v1/wireguard/wg0/key", Some(&viewer), None).0,
+        403
+    );
+    let device = r#"{"name":"laptop","endpoint":"box.example.net"}"#;
+    assert_eq!(
+        https(
+            &d,
+            "POST",
+            "/v1/actions/vpn-peer",
+            Some(&viewer),
+            Some(device)
+        )
+        .0,
+        403
+    );
+    assert!(
+        !d.dir.join("state/wireguard").exists(),
+        "a refused request made no key"
+    );
     // Only an admin manages tokens, and an operator is not one.
     assert_eq!(https(&d, "GET", "/v1/tokens", Some(&ana), None).0, 403);
     assert_eq!(
@@ -1153,6 +1179,258 @@ fn packets_cross_the_box_as_the_config_and_explain_say() {
         Some("outside web")
     );
 
+    drop(lab);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// What site A adds to the router example to reach site B through a tunnel.
+fn site_a(peer_key: &str) -> String {
+    format!(
+        r#"{ROUTER}
+[zones.vpn]
+
+[wireguard.wg0]
+zone = "vpn"
+addresses = ["10.90.0.1/30", "fd00:90::1/64"]
+listen_port = 51820
+
+[[wireguard.wg0.peer]]
+name = "site-b"
+public_key = "{peer_key}"
+allowed = ["10.90.0.2/32", "192.168.77.0/24", "fd00:90::2/128", "fd00:77::/64"]
+
+[[policy]]
+from = "wan"
+to = "self"
+
+[[policy.rule]]
+id = "r-tunnel-in"
+name = "Other sites connect to the tunnel"
+action = "accept"
+service = ["udp/51820"]
+
+[[policy]]
+from = "lan"
+to = "vpn"
+
+[[policy.rule]]
+id = "r-to-site-b"
+name = "Inside may use the web at site B"
+action = "accept"
+service = ["web"]
+"#
+    )
+}
+
+/// Site B: connects out to site A and lets site A use its web server.
+fn site_b(peer_key: &str) -> String {
+    format!(
+        r#"schema = 1
+hostname = "site-b"
+
+[zones.wan]
+[zones.lan]
+[zones.vpn]
+
+[interfaces.s0]
+zone = "wan"
+addresses = ["203.0.113.9/24"]
+
+[interfaces.b1]
+zone = "lan"
+addresses = ["192.168.77.1/24", "fd00:77::1/64"]
+
+[wireguard.wg0]
+zone = "vpn"
+addresses = ["10.90.0.2/30", "fd00:90::2/64"]
+
+[[wireguard.wg0.peer]]
+name = "site-a"
+public_key = "{peer_key}"
+allowed = ["10.90.0.1/32", "192.168.10.0/24", "fd00:90::1/128", "2001:db8:2::/64"]
+endpoint = "203.0.113.10:51820"
+keepalive = 25
+
+[[policy]]
+from = "vpn"
+to = "self"
+
+[[policy.rule]]
+id = "r-from-site-a"
+name = "Site A may use the web server here"
+action = "accept"
+service = ["tcp/80"]
+"#
+    )
+}
+
+/// Two boxes, each with its own daemon, join their inside networks with a
+/// WireGuard tunnel. A device behind the first reaches a server at the
+/// second, over IPv4 and IPv6, and only on the port the rules allow.
+#[test]
+fn two_boxes_join_their_networks_with_a_tunnel() {
+    let dir = std::env::temp_dir().join(format!("oxd-tunnel-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("b")).unwrap();
+    let wireguard = Command::new("unshare")
+        .args(["-Urn", "ip", "link", "add", "t0", "type", "wireguard"])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !(wireguard && have("curl", "--version") && have("nsenter", "--version")) {
+        skip("needs the kernel's wireguard module, curl and nsenter");
+        return;
+    }
+    let Some(mut lab) = Lab::start(&dir) else {
+        skip("needs unshare(1), unprivileged user namespaces and libnftables");
+        return;
+    };
+    let (client, site) = (lab.client, lab.server);
+
+    // Site B's inside network, and its daemon, in what the other test uses
+    // as the outside server's namespace.
+    for args in [
+        vec!["link", "add", "b1", "type", "dummy"],
+        vec!["link", "set", "b1", "up"],
+    ] {
+        assert!(lab.cmd(site, "ip").args(&args).status().unwrap().success());
+    }
+    let child = lab
+        .cmd(site, env!("CARGO_BIN_EXE_oxd"))
+        .arg("--state-dir")
+        .arg(dir.join("b/state"))
+        .arg("--socket")
+        .arg(dir.join("b/oxd.sock"))
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let b = Daemon {
+        child,
+        dir: dir.join("b"),
+    };
+    let start = Instant::now();
+    while UnixStream::connect(b.socket()).is_err() {
+        assert!(
+            start.elapsed() < Duration::from_secs(8),
+            "site B's daemon did not start"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Each site reads its public key before it has a tunnel, and gives it
+    // to the other. No private key appears anywhere.
+    let key = |d: &Daemon| {
+        d.ok("GET", "/v1/wireguard/wg0/key", "")["public_key"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (key_a, key_b) = (key(&lab.daemon), key(&b));
+    assert_ne!(key_a, key_b);
+    assert_eq!(
+        key(&lab.daemon),
+        key_a,
+        "the key does not change between calls"
+    );
+
+    lab.daemon
+        .ok("PUT", "/v1/candidates/tunnel", &site_a(&key_b));
+    lab.daemon.ok(
+        "POST",
+        "/v1/candidates/tunnel/commit",
+        r#"{"reason":"site to site"}"#,
+    );
+    b.ok("PUT", "/v1/candidates/tunnel", &site_b(&key_a));
+    b.ok(
+        "POST",
+        "/v1/candidates/tunnel/commit",
+        r#"{"reason":"site to site"}"#,
+    );
+
+    lab.serve(site, "::", 80, &dir, "site b web");
+    lab.serve(site, "::", 81, &dir, "site b other");
+    std::thread::sleep(Duration::from_millis(400));
+
+    for url in ["http://192.168.77.1/", "http://[fd00:77::1]/"] {
+        // A new IPv6 address is usable only once the kernel has checked
+        // that nobody else on the link has it, which takes a second or two.
+        let start = Instant::now();
+        let mut got = lab.fetch(client, url);
+        while got.is_none() && start.elapsed() < Duration::from_secs(8) {
+            got = lab.fetch(client, url);
+        }
+        assert_eq!(got.as_deref(), Some("site b web"), "{url}");
+    }
+    // Site A lets only web into the tunnel, and site B lets only port 80 in.
+    assert_eq!(lab.fetch(client, "http://192.168.77.1:81/"), None);
+    assert_eq!(lab.fetch(client, "http://[fd00:77::1]:81/"), None);
+    // Explain follows the route through the tunnel.
+    let body = json!({ "src": "192.168.10.50", "dst": "192.168.77.1", "proto": "tcp", "dport": 80, "in": "eth1" });
+    let explained = lab.daemon.ok("POST", "/v1/explain", &body.to_string());
+    assert_eq!(explained["running"]["verdict"], "ACCEPT");
+    assert!(
+        explained.to_string().contains("reached through the tunnel"),
+        "{explained}"
+    );
+    assert_eq!(lab.explain("192.168.77.1", "tcp", Some(81)), "DROP");
+
+    // Both ends report the peer as heard from, with traffic counted.
+    for (d, peer) in [(&lab.daemon, "site-b"), (&b, "site-a")] {
+        let tunnels = d.ok("GET", "/v1/wireguard", "");
+        let p = &tunnels[0]["peers"][0];
+        assert_eq!(p["name"], peer);
+        assert!(p["last_handshake"].as_i64().is_some(), "{tunnels}");
+        assert!(p["rx_bytes"].as_u64().unwrap() > 0 && p["tx_bytes"].as_u64().unwrap() > 0);
+        let text = tunnels.to_string();
+        assert!(
+            !text.contains("private"),
+            "no private key in the answer: {text}"
+        );
+    }
+    // The config and the commits hold public keys only.
+    let stored = std::fs::read_to_string(dir.join("state/commits/2.toml")).unwrap_or_default()
+        + &std::fs::read_to_string(dir.join("state/audit.log")).unwrap();
+    let private = std::fs::read_to_string(dir.join("state/wireguard/wg0.key")).unwrap();
+    assert!(!stored.contains(private.trim()));
+
+    // Taking the peer's inside network out of the tunnel stops the traffic
+    // and removes the route, while the tunnel itself stays.
+    let narrowed = site_a(&key_b).replace(r#", "192.168.77.0/24""#, "");
+    lab.daemon.ok("PUT", "/v1/candidates/narrow", &narrowed);
+    lab.daemon.ok(
+        "POST",
+        "/v1/candidates/narrow/commit",
+        r#"{"reason":"narrow"}"#,
+    );
+    assert_eq!(lab.fetch(client, "http://192.168.77.1/"), None);
+    assert_eq!(
+        lab.fetch(client, "http://[fd00:77::1]/").as_deref(),
+        Some("site b web"),
+        "the IPv6 network is still allowed"
+    );
+
+    // A config without the tunnel removes the interface.
+    let box_a = lab.daemon.child.id();
+    let has_wg0 = |lab: &Lab| {
+        lab.cmd(box_a, "ip")
+            .args(["link", "show", "wg0"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(has_wg0(&lab));
+    lab.daemon.ok("PUT", "/v1/candidates/plain", ROUTER);
+    lab.daemon.ok(
+        "POST",
+        "/v1/candidates/plain/commit",
+        r#"{"reason":"no tunnel"}"#,
+    );
+    assert!(!has_wg0(&lab), "the tunnel interface is gone");
+    assert_eq!(lab.fetch(client, "http://[fd00:77::1]/"), None);
+
+    drop(b);
     drop(lab);
     std::fs::remove_dir_all(&dir).unwrap();
 }

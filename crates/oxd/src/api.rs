@@ -96,7 +96,7 @@ impl FromRequestParts<Shared> for Caller {
             })?;
         state
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .identify(secret, now())
             .map(Caller)
             .ok_or_else(|| {
@@ -108,8 +108,33 @@ impl FromRequestParts<Shared> for Caller {
     }
 }
 
-pub fn router(shared: Shared, lease_file: PathBuf) -> Router {
+pub fn router(shared: Shared, lease_file: PathBuf, state_dir: PathBuf) -> Router {
+    let key_dir = state_dir.clone();
+    let vpn_dir = state_dir.clone();
     Router::new()
+        .route(
+            "/v1/actions/vpn-peer",
+            post(
+                move |state: State<Shared>, caller: Caller, body: Json<VpnPeerBody>| {
+                    let dir = vpn_dir.clone();
+                    async move { action_vpn_peer(state, caller, &dir, body) }
+                },
+            ),
+        )
+        .route(
+            "/v1/wireguard",
+            get(move |state: State<Shared>, caller: Caller| {
+                let dir = state_dir.clone();
+                async move { wireguard(state, caller, dir).await }
+            }),
+        )
+        .route(
+            "/v1/wireguard/{iface}/key",
+            get(move |caller: Caller, Path(iface): Path<String>| {
+                let dir = key_dir.clone();
+                async move { wireguard_key(&caller, &dir, &iface) }
+            }),
+        )
         .route("/v1/whoami", get(whoami))
         .route("/v1/status", get(status))
         .route("/v1/running", get(running))
@@ -199,7 +224,7 @@ async fn status(State(s): State<Shared>, caller: Caller) -> Api<Response> {
 async fn running(State(s): State<Shared>, caller: Caller) -> Api<String> {
     caller.may(Action::Read)?;
     s.lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .running_config()?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "there is no commit yet".into()))
 }
@@ -209,7 +234,7 @@ async fn running_json(State(s): State<Shared>, caller: Caller) -> Api<Response> 
     caller.may(Action::Read)?;
     let text = s
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .running_config()?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "there is no commit yet".into()))?;
     let (config, ruleset) = load(&text)?;
@@ -273,6 +298,84 @@ async fn action_forward(
         &ox_setup::candidate_name("forward", &body.name),
         |c| ox_setup::add_forward(c, &req),
     )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VpnPeerBody {
+    name: String,
+    /// How the device finds the box from outside: a name or an address.
+    endpoint: String,
+    /// The device's own public key. Without it the daemon makes a key pair
+    /// for the device and returns the private key once.
+    #[serde(default)]
+    public_key: Option<String>,
+}
+
+/// Adds a device to the VPN as a candidate, and returns the config file
+/// for the device.
+fn action_vpn_peer(
+    State(s): State<Shared>,
+    caller: Caller,
+    dir: &std::path::Path,
+    Json(body): Json<VpnPeerBody>,
+) -> Api<Response> {
+    let who = caller.may(Action::Edit)?;
+    let endpoint = body.endpoint.trim();
+    let plain = !endpoint.is_empty()
+        && endpoint.len() <= 255
+        && endpoint
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'));
+    if !plain {
+        return Err(invalid(
+            "say how the device reaches the box from outside: a name such as home.example.net, or an address",
+        ));
+    }
+    let (private, public) = match &body.public_key {
+        Some(key) => (None, key.clone()),
+        None => {
+            let (private, public) = crate::wg::new_keypair()
+                .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            (Some(private), public)
+        }
+    };
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    let text = e.running_config()?.ok_or_else(|| {
+        invalid(
+            "there is no commit yet; set the box up and commit a first config before changing it",
+        )
+    })?;
+    let mut config = Config::from_toml(&text).map_err(invalid)?;
+    let peer = ox_setup::add_vpn_peer(
+        &mut config,
+        &ox_setup::VpnPeerRequest {
+            name: body.name.clone(),
+            public_key: public,
+        },
+    )
+    .map_err(invalid)?;
+    let box_key = crate::wg::public_key(dir, &peer.tunnel)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let candidate = ox_setup::candidate_name("vpn", &body.name);
+    e.put_candidate(&candidate, &config.to_toml(), who, now())?;
+    // The device's private key goes back in this answer and nowhere else:
+    // not into the candidate, the audit log or the state directory.
+    let client_config = ox_setup::client_config(
+        &peer,
+        private
+            .as_deref()
+            .unwrap_or("<the device's own private key>"),
+        &box_key,
+        endpoint,
+    );
+    Ok(Json(json!({
+        "candidate": candidate,
+        "done": peer.done,
+        "client_config": client_config,
+        "key_made_here": private.is_some(),
+    }))
+    .into_response())
 }
 
 #[derive(Deserialize)]
@@ -469,10 +572,10 @@ async fn commit_candidate(
 ) -> Api<Response> {
     let who = caller.may(Action::Commit)?;
     check_window(&body)?;
-    let c =
-        s.lock()
-            .unwrap()
-            .commit_candidate(&name, who, &body.reason, body.confirm_secs, now())?;
+    let c = s
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .commit_candidate(&name, who, &body.reason, body.confirm_secs, now())?;
     Ok(Json(c).into_response())
 }
 
@@ -610,6 +713,75 @@ async fn explain_packet(
     .into_response())
 }
 
+/// The running config's tunnels: the box's public key, and each peer with
+/// what the kernel knows about it.
+async fn wireguard(State(s): State<Shared>, caller: Caller, dir: PathBuf) -> Api<Response> {
+    caller.may(Action::Read)?;
+    let (text, live) = {
+        let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+        (e.running_config()?, e.applier().name() == "kernel")
+    };
+    let Some(text) = text else {
+        return Ok(Json(json!([])).into_response());
+    };
+    let (config, _) = load(&text)?;
+    let mut tunnels = vec![];
+    for (name, wg) in &config.wireguard {
+        let seen = if live {
+            crate::wg::peers(name).await
+        } else {
+            vec![]
+        };
+        let peers: Vec<_> = wg
+            .peers
+            .iter()
+            .map(|p| {
+                let k = seen.iter().find(|k| k.public_key == p.public_key);
+                json!({
+                    "name": p.name,
+                    "public_key": p.public_key,
+                    "allowed": p.allowed,
+                    "endpoint": p.endpoint,
+                    "seen_at": k.and_then(|k| k.endpoint.clone()),
+                    "last_handshake": k.and_then(|k| k.last_handshake),
+                    "rx_bytes": k.map_or(0, |k| k.rx_bytes),
+                    "tx_bytes": k.map_or(0, |k| k.tx_bytes),
+                })
+            })
+            .collect();
+        tunnels.push(json!({
+            "name": name,
+            "zone": wg.zone,
+            "addresses": wg.addresses,
+            "listen_port": wg.listen_port,
+            "public_key": crate::wg::public_key(&dir, name)
+                .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+            "peers": peers,
+        }));
+    }
+    Ok(Json(json!(tunnels)).into_response())
+}
+
+/// The box's public key for a tunnel, made if there is none yet, so two
+/// sites can swap keys before either has the tunnel in its config.
+fn wireguard_key(caller: &Caller, dir: &std::path::Path, iface: &str) -> Api<Response> {
+    caller.may(Action::Edit)?;
+    let ok = !iface.is_empty()
+        && iface.len() <= 15
+        && iface
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
+    if !ok {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "that is not an interface name".into(),
+        ));
+    }
+    let key = crate::wg::public_key(dir, iface)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(json!({ "interface": iface, "public_key": key })).into_response())
+}
+
 /// The addresses DHCP has handed out. Empty when DHCP is not served.
 fn leases(caller: &Caller, path: PathBuf) -> Api<Response> {
     caller.may(Action::Read)?;
@@ -628,7 +800,7 @@ async fn audit(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     caller.may(Action::ReadAudit)?;
     let entries = s
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .audit()
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "verified": true, "entries": entries })).into_response())
@@ -809,7 +981,7 @@ async fn kernel(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     caller.may(Action::Read)?;
     let dump = s
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .applier()
         .dump()
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -833,12 +1005,14 @@ async fn put_settings(
     Json(body): Json<SettingsBody>,
 ) -> Api<Response> {
     let who = caller.may(Action::Manage)?;
-    Ok(Json(
-        s.lock()
-            .unwrap()
-            .set_four_eyes(body.four_eyes, who, now())?,
+    Ok(
+        Json(s.lock().unwrap_or_else(|e| e.into_inner()).set_four_eyes(
+            body.four_eyes,
+            who,
+            now(),
+        )?)
+        .into_response(),
     )
-    .into_response())
 }
 
 /// Tokens without their hashes: a name, a role and dates.
@@ -846,7 +1020,7 @@ async fn tokens(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     caller.may(Action::Manage)?;
     let rows: Vec<_> = s
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .tokens()?
         .into_iter()
         .map(|t| {
@@ -877,10 +1051,13 @@ async fn create_token(
     let who = caller.may(Action::Manage)?;
     let role = Role::parse(&body.role)
         .ok_or_else(|| invalid("role must be viewer, auditor, operator or admin"))?;
-    let secret = s
-        .lock()
-        .unwrap()
-        .create_token(&body.name, role, body.ttl_secs, who, now())?;
+    let secret = s.lock().unwrap_or_else(|e| e.into_inner()).create_token(
+        &body.name,
+        role,
+        body.ttl_secs,
+        who,
+        now(),
+    )?;
     Ok(Json(json!({ "name": body.name, "role": role.as_str(), "token": secret })).into_response())
 }
 

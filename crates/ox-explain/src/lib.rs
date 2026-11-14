@@ -177,17 +177,27 @@ fn route<'a>(rs: &'a Ruleset, dst: IpAddr, box_addrs: &[IpAddr]) -> Route<'a> {
     {
         return Route::Local;
     }
-    let connected = rs
+    // The most specific network wins, as in the kernel's route table.
+    let known = rs
         .interfaces
         .iter()
-        .flat_map(|i| i.addrs.iter().map(move |a| (i, a.trunc())))
-        .filter(|(_, net)| net.contains(&dst))
-        .max_by_key(|(_, net)| net.prefix_len());
-    if let Some((i, net)) = connected {
+        .flat_map(|i| {
+            i.addrs
+                .iter()
+                .map(move |a| (i, a.trunc(), "is connected"))
+                .chain(
+                    i.routes
+                        .iter()
+                        .map(move |r| (i, *r, "is reached through the tunnel")),
+                )
+        })
+        .filter(|(_, net, _)| net.contains(&dst))
+        .max_by_key(|(_, net, _)| net.prefix_len());
+    if let Some((i, net, how)) = known {
         return Route::Via {
             iface: &i.name,
             zone: &i.zone,
-            how: format!("{net} is connected"),
+            how: format!("{net} {how}"),
         };
     }
     let uplinks = || rs.interfaces.iter().filter(|i| i.default_route);

@@ -16,6 +16,7 @@ mod net;
 mod services;
 mod tls;
 mod web;
+mod wg;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -56,6 +57,10 @@ struct Managed {
     addresses: BTreeSet<(String, IpNet)>,
     /// Default routes: the interface and the router.
     routes: BTreeSet<(String, IpAddr)>,
+    /// WireGuard interfaces Netoxide created.
+    tunnels: BTreeSet<String>,
+    /// Routes through tunnels: the interface and the network.
+    tunnel_routes: BTreeSet<(String, IpNet)>,
 }
 
 fn block_on<T>(work: impl Future<Output = T>) -> T {
@@ -92,12 +97,30 @@ impl SystemApplier {
 
     /// Puts the target's addresses, routes and DHCP clients in place.
     fn bring_up(&mut self, target: &Target) -> Result<(), String> {
+        // Tunnels first: their interfaces must exist to be given addresses.
+        let created = block_on(wg::configure(&target.wireguard, &self.state_dir))?;
+        self.managed.tunnels.extend(created);
+        self.save_managed();
         let ensured = block_on(net::ensure_addresses(&target.addresses))?;
         self.missing = ensured.missing;
         self.managed.addresses.extend(ensured.added);
         self.managed.routes.extend(target.gateways.iter().cloned());
         self.save_managed();
         block_on(net::set_default_routes(&target.gateways))?;
+        // Addresses brought the tunnels up, so routes can now leave by them.
+        let wanted = wg::routes(&target.wireguard);
+        let stale: Vec<(String, IpNet)> = self
+            .managed
+            .tunnel_routes
+            .iter()
+            .filter(|r| !wanted.contains(r))
+            .cloned()
+            .collect();
+        self.managed.tunnel_routes.extend(wanted.iter().cloned());
+        self.save_managed();
+        block_on(wg::set_routes(&wanted, &stale))?;
+        self.managed.tunnel_routes.retain(|r| wanted.contains(r));
+        self.save_managed();
         for name in &target.dhcp_clients {
             if !self.dhcp.contains_key(name) {
                 let _in_runtime = tokio::runtime::Handle::current().enter();
@@ -130,6 +153,24 @@ impl SystemApplier {
             if !keep.dhcp_clients.contains(&name) {
                 block_on(dhcp::forget(&self.state_dir, &name));
             }
+        }
+        // Tunnels this config does not have. Their addresses and routes go
+        // with the interface.
+        let tunnels: Vec<String> = self
+            .managed
+            .tunnels
+            .iter()
+            .filter(|name| !keep.wireguard.contains_key(*name))
+            .cloned()
+            .collect();
+        if !tunnels.is_empty() {
+            block_on(wg::delete(&tunnels));
+            self.managed.tunnels.retain(|t| !tunnels.contains(t));
+            self.managed
+                .tunnel_routes
+                .retain(|(t, _)| !tunnels.contains(t));
+            self.managed.addresses.retain(|(t, _)| !tunnels.contains(t));
+            self.save_managed();
         }
         let routes: Vec<(String, IpAddr)> = self
             .managed
@@ -194,8 +235,21 @@ impl Applier for SystemApplier {
             let previous = self.current.clone();
             self.take_down_all_but(previous.as_ref());
             if let Some(previous) = &previous {
-                // A default route the failed target replaced.
+                // A default route the failed target replaced, and the
+                // peers and routes of tunnels it changed.
                 let _ = block_on(net::set_default_routes(&previous.gateways));
+                let _ = block_on(wg::configure(&previous.wireguard, &self.state_dir));
+                let back = wg::routes(&previous.wireguard);
+                let stale: Vec<(String, IpNet)> = self
+                    .managed
+                    .tunnel_routes
+                    .iter()
+                    .filter(|r| !back.contains(r))
+                    .cloned()
+                    .collect();
+                let _ = block_on(wg::set_routes(&back, &stale));
+                self.managed.tunnel_routes = back.into_iter().collect();
+                self.save_managed();
             }
             return Err(match undone {
                 Ok(()) => e,
@@ -429,7 +483,7 @@ async fn serve(args: Args) -> Result<(), String> {
         )
         .await?;
         // No connect info here, so every request must carry a token.
-        let app = api::router(shared.clone(), leases.clone());
+        let app = api::router(shared.clone(), leases.clone(), args.state_dir.clone());
         eprintln!("oxd: HTTPS on {addr} ({note}); every request needs an access token");
         tokio::spawn(async move {
             if let Err(e) = axum_server::bind_rustls(addr, config)
@@ -444,7 +498,7 @@ async fn serve(args: Args) -> Result<(), String> {
         let plain = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| format!("{addr}: {e}"))?;
-        let app = api::router(shared.clone(), leases.clone());
+        let app = api::router(shared.clone(), leases.clone(), args.state_dir.clone());
         eprintln!("oxd: HTTP on {addr}, loopback only; every request needs an access token");
         tokio::spawn(async move {
             if let Err(e) = axum::serve(plain, app).await {
@@ -455,7 +509,8 @@ async fn serve(args: Args) -> Result<(), String> {
     let socket = args.socket.clone();
     axum::serve(
         listener,
-        api::router(shared, leases).into_make_service_with_connect_info::<api::Peer>(),
+        api::router(shared, leases, args.state_dir.clone())
+            .into_make_service_with_connect_info::<api::Peer>(),
     )
     .with_graceful_shutdown(async {
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

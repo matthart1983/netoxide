@@ -11,6 +11,7 @@
 mod services;
 mod strings;
 mod validate;
+mod vpn;
 
 use std::{collections::BTreeMap, net::IpAddr, path::Path};
 
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 pub use services::{Dhcp, DhcpPool, Dns, DnsHost, Lease, Mac, StaticLease, is_hostname};
 pub use strings::{AddrRef, Net, PortSpec, Proto, ServiceRef, Translate, is_name};
 pub use validate::Problem;
+pub use vpn::{WgPeer, WireGuard, decode_key, encode_key};
 
 /// The schema version this build reads and writes.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -76,6 +78,9 @@ pub struct Config {
     /// IPv4 address pools, by interface name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dhcp: Dhcp,
+    /// WireGuard tunnels, by interface name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub wireguard: BTreeMap<String, WireGuard>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -311,11 +316,20 @@ impl Config {
 
     /// Interfaces in a zone, in name order.
     pub fn zone_interfaces(&self, zone: &str) -> Vec<&str> {
-        self.interfaces
+        let mut names: Vec<&str> = self
+            .interfaces
             .iter()
             .filter(|(_, i)| i.zone == zone)
             .map(|(name, _)| name.as_str())
-            .collect()
+            .chain(
+                self.wireguard
+                    .iter()
+                    .filter(|(_, w)| w.zone == zone)
+                    .map(|(name, _)| name.as_str()),
+            )
+            .collect();
+        names.sort_unstable();
+        names
     }
 
     /// The networks an address reference stands for. `None` means any.
