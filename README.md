@@ -13,6 +13,7 @@ It is meant for two groups: home-lab users who want one box that is quick to set
 - [Install on a box](#install-on-a-box)
 - [Who it is for](#who-it-is-for)
 - [Limits](#limits)
+- [How the code is written](#how-the-code-is-written)
 - [Documents](#documents)
 - [Licence and name](#licence-and-name)
 
@@ -139,6 +140,14 @@ The short version. The full list is in [docs/status.md](docs/status.md#limits-to
 - No single sign-on. Access is by token.
 - No fleet controller, Terraform provider or OS image.
 
+## How the code is written
+
+Most of the code, tests and documentation here were written by an AI coding assistant, Claude, working under the direction of one human maintainer who decides what gets built and merges it. Commits made that way carry a `Co-Authored-By` trailer.
+
+A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 163 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
+
+There is no AI on the box. The firewall does not call a model, send data anywhere, or include an assistant.
+
 ## Documents
 
 | | |
@@ -150,6 +159,9 @@ The short version. The full list is in [docs/status.md](docs/status.md#limits-to
 | [docs/access.md](docs/access.md) | Managing a box from another machine, tokens and roles |
 | [docs/reference.md](docs/reference.md) | Every command and every API route |
 | [docs/status.md](docs/status.md) | What works, the limits, and what is not built |
+| [docs/roadmap.md](docs/roadmap.md) | What comes next, in what order, and what stays free |
+| [docs/threat-model.md](docs/threat-model.md) | What it is built to resist, what it relies on, and what it does not defend against |
+| [docs/recovery.md](docs/recovery.md) | What to do if a change locks you out |
 | [docs/architecture.md](docs/architecture.md) | The crates, the design rules and the tests |
 | [CHANGELOG.md](CHANGELOG.md) | What each release changed |
 | [SECURITY.md](SECURITY.md) | How to report a vulnerability |

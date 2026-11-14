@@ -78,7 +78,10 @@ overviews with pictures, a short feature list, a two-minute try, limits. Keep
 it short. Detail lives in `docs/`: `getting-started.md`, `config.md`,
 `interfaces.md`, `access.md`, `reference.md` (every command and route),
 `status.md` (what works, limits, not built), `architecture.md` (crates, design
-rules, tests). When a feature lands, update `docs/status.md`,
+rules, tests). `roadmap.md` is the public plan (trust-gated phases; the build order for
+Phase 1 is there), `threat-model.md` and `recovery.md` are the trust pages.
+The README test count and the one in `architecture.md` must match the suite.
+When a feature lands, update `docs/status.md`,
 `docs/reference.md` and `CHANGELOG.md`; touch the README only if the front
 page is now wrong.
 
