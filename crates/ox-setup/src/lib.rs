@@ -472,6 +472,13 @@ fn fresh_id(config: &Config, prefix: &str, name: &str) -> String {
     id
 }
 
+/// A candidate name for a one-step action, such as `forward-home-assistant`.
+pub fn candidate_name(prefix: &str, name: &str) -> String {
+    format!("{prefix}-{}", slug(name, 20))
+        .trim_end_matches('-')
+        .to_string()
+}
+
 /// The zone whose interface network holds an address.
 fn zone_of(config: &Config, ip: IpAddr) -> Option<&str> {
     config

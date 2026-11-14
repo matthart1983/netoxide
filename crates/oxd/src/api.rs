@@ -113,6 +113,9 @@ pub fn router(shared: Shared, lease_file: PathBuf) -> Router {
         .route("/v1/whoami", get(whoami))
         .route("/v1/status", get(status))
         .route("/v1/running", get(running))
+        .route("/v1/running/json", get(running_json))
+        .route("/v1/actions/forward", post(action_forward))
+        .route("/v1/actions/block", post(action_block))
         .route("/v1/commits", get(commits))
         .route("/v1/commits/{id}", get(commit))
         .route("/v1/candidates", get(candidates))
@@ -197,6 +200,102 @@ async fn running(State(s): State<Shared>, caller: Caller) -> Api<String> {
         .unwrap()
         .running_config()?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "there is no commit yet".into()))
+}
+
+/// The running config as JSON, with what it does in plain sentences.
+async fn running_json(State(s): State<Shared>, caller: Caller) -> Api<Response> {
+    caller.may(Action::Read)?;
+    let text = s
+        .lock()
+        .unwrap()
+        .running_config()?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "there is no commit yet".into()))?;
+    let (config, ruleset) = load(&text)?;
+    Ok(Json(json!({
+        "config": config,
+        "summary": ruleset.summary(),
+        "describe": ox_setup::describe(&config),
+    }))
+    .into_response())
+}
+
+/// Applies a one-step action to the running config and saves the result
+/// as a candidate. Nothing is applied to the box.
+fn act(
+    s: &Shared,
+    who: &str,
+    candidate: &str,
+    change: impl FnOnce(&mut Config) -> Result<Vec<String>, String>,
+) -> Api<Response> {
+    let mut e = s.lock().unwrap();
+    let text = e.running_config()?.ok_or_else(|| {
+        invalid(
+            "there is no commit yet; set the box up and commit a first config before changing it",
+        )
+    })?;
+    let mut config = Config::from_toml(&text).map_err(invalid)?;
+    let done = change(&mut config).map_err(invalid)?;
+    e.put_candidate(candidate, &config.to_toml(), who, now())?;
+    Ok(Json(json!({ "candidate": candidate, "done": done })).into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForwardBody {
+    name: String,
+    /// The outside port, such as `tcp/443`.
+    port: String,
+    to: IpAddr,
+    #[serde(default)]
+    to_port: Option<u16>,
+    #[serde(default)]
+    address: Option<IpAddr>,
+}
+
+async fn action_forward(
+    State(s): State<Shared>,
+    caller: Caller,
+    Json(body): Json<ForwardBody>,
+) -> Api<Response> {
+    let who = caller.may(Action::Edit)?;
+    let req = ox_setup::ForwardRequest {
+        name: body.name.clone(),
+        service: body.port.parse().map_err(invalid)?,
+        to: body.to,
+        to_port: body.to_port,
+        address: body.address,
+    };
+    act(
+        &s,
+        who,
+        &ox_setup::candidate_name("forward", &body.name),
+        |c| ox_setup::add_forward(c, &req),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockBody {
+    address: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+async fn action_block(
+    State(s): State<Shared>,
+    caller: Caller,
+    Json(body): Json<BlockBody>,
+) -> Api<Response> {
+    let who = caller.may(Action::Edit)?;
+    let net: ox_schema::Net = body.address.parse().map_err(invalid)?;
+    let name = body
+        .name
+        .clone()
+        .filter(|n| !n.is_empty())
+        .unwrap_or(body.address.clone());
+    act(&s, who, &ox_setup::candidate_name("block", &name), |c| {
+        ox_setup::block(c, net, &name)
+    })
 }
 
 async fn commits(State(s): State<Shared>, caller: Caller) -> Api<Response> {

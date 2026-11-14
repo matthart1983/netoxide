@@ -104,6 +104,8 @@ struct Args {
     listen: Option<std::net::SocketAddr>,
     tls_cert: Option<PathBuf>,
     tls_key: Option<PathBuf>,
+    /// Loopback address for a plain HTTP listener, for a TLS proxy on this machine.
+    listen_http: Option<std::net::SocketAddr>,
 }
 
 const USAGE: &str = "\
@@ -123,6 +125,9 @@ oxd: the Netoxide daemon
   --listen <addr:port>
                       also serve the API and the web UI over HTTPS here.
                       Every request needs an access token (see `ox token`)
+  --listen-http <127.0.0.1:port>
+                      the same without TLS, on a loopback address only, for
+                      a TLS proxy running on this machine
   --tls-cert <file>   certificate chain for --listen, in PEM
   --tls-key <file>    private key for --listen, in PEM. Without these two, a
                       self-signed certificate is made and kept in the state
@@ -140,6 +145,7 @@ fn parse_args() -> Result<Args, String> {
         listen: None,
         tls_cert: None,
         tls_key: None,
+        listen_http: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -155,6 +161,20 @@ fn parse_args() -> Result<Args, String> {
                 args.listen = Some(v.parse().map_err(|_| {
                     format!("'{v}' is not an address and port, such as 0.0.0.0:8443")
                 })?);
+            }
+            "--listen-http" => {
+                let v = it.next().ok_or("--listen-http needs an address and port")?;
+                let addr: std::net::SocketAddr = v.parse().map_err(|_| {
+                    format!("'{v}' is not an address and port, such as 127.0.0.1:8080")
+                })?;
+                // Tokens would cross the network in the clear on any other address.
+                if !addr.ip().is_loopback() {
+                    return Err(
+                        "--listen-http only accepts a loopback address; use --listen for HTTPS"
+                            .into(),
+                    );
+                }
+                args.listen_http = Some(addr);
             }
             "--tls-cert" => {
                 args.tls_cert = Some(it.next().ok_or("--tls-cert needs a file")?.into())
@@ -245,6 +265,18 @@ async fn serve(args: Args) -> Result<(), String> {
                 .await
             {
                 eprintln!("oxd: the HTTPS listener stopped: {e}");
+            }
+        });
+    }
+    if let Some(addr) = args.listen_http {
+        let plain = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| format!("{addr}: {e}"))?;
+        let app = api::router(shared.clone(), leases.clone());
+        eprintln!("oxd: HTTP on {addr}, loopback only; every request needs an access token");
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(plain, app).await {
+                eprintln!("oxd: the HTTP listener stopped: {e}");
             }
         });
     }

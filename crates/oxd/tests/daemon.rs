@@ -655,3 +655,122 @@ fn the_https_api_needs_a_token_and_respects_its_role() {
     drop(d);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// The endpoints the web UI is built on, and the page itself.
+#[test]
+fn the_web_ui_endpoints_work_and_the_page_is_locked_down() {
+    if !(have("curl", "--version") && have("nsenter", "--version")) {
+        eprintln!("skipped: needs curl and nsenter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("oxd-web-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let Some(d) = start_home(&dir, &["--listen", "127.0.0.1:8443", "--dry-run"]) else {
+        eprintln!("skipped: needs unshare(1) and unprivileged user namespaces");
+        return;
+    };
+    std::thread::sleep(Duration::from_millis(300));
+
+    // One-step actions need a running config to start from.
+    let forward = r#"{"name":"Home Assistant","port":"tcp/443","to":"192.168.10.20","to_port":8123,"address":"203.0.113.10"}"#;
+    let (status, text) = d.call("POST", "/v1/actions/forward", forward);
+    assert_eq!(status, 422, "{text}");
+    assert!(text.contains("no commit yet"), "{text}");
+
+    d.ok("PUT", "/v1/candidates/home", HOME);
+    d.ok("POST", "/v1/candidates/home/commit", r#"{"reason":"home"}"#);
+
+    let view = d.ok("GET", "/v1/running/json", "");
+    assert_eq!(view["config"]["hostname"], "homebox");
+    assert!(
+        view["describe"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l.as_str().unwrap().contains("answers DNS"))
+    );
+
+    // Forward a port: saved as a candidate, with the rule it needs, and not applied.
+    let done = d.ok("POST", "/v1/actions/forward", forward);
+    assert_eq!(done["candidate"], "forward-home-assistant");
+    assert!(
+        done["done"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .starts_with("checked:")
+    );
+    let plan = d.ok("POST", "/v1/candidates/forward-home-assistant/plan", "");
+    assert!(plan["changes"].to_string().contains("r-fwd-home-assistant"));
+    assert_eq!(d.running(), 1);
+
+    // Block a device, and refuse an address that is not on the box's networks.
+    let done = d.ok(
+        "POST",
+        "/v1/actions/block",
+        r#"{"address":"192.168.10.66","name":"Smart TV"}"#,
+    );
+    assert_eq!(done["candidate"], "block-smart-tv");
+    let (status, text) = d.call("POST", "/v1/actions/block", r#"{"address":"10.9.9.9"}"#);
+    assert_eq!(status, 422, "{text}");
+    assert!(text.contains("not on any network"), "{text}");
+
+    // Check a config without storing it.
+    let ok = d.ok("POST", "/v1/check", HOME);
+    assert_eq!(ok["valid"], true);
+    let (status, text) = d.call("POST", "/v1/check", &HOME.replace("tcp/22", "tcp/0"));
+    assert_eq!(status, 422);
+    assert!(text.contains("tcp/0"), "{text}");
+    assert_eq!(
+        d.ok("GET", "/v1/candidates", "").as_array().unwrap().len(),
+        2,
+        "check stores nothing"
+    );
+
+    // A viewer cannot use the actions.
+    let viewer = d.ok("POST", "/v1/tokens", r#"{"name":"viewer","role":"viewer"}"#)["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        https(
+            &d,
+            "POST",
+            "/v1/actions/forward",
+            Some(&viewer),
+            Some(forward)
+        )
+        .0,
+        403
+    );
+
+    // The page and its two files are served without a token, and forbid
+    // inline script, other origins and framing.
+    let out = Command::new("nsenter")
+        .args(["--user", "--net", "--preserve-credentials", "-t"])
+        .arg(d.child.id().to_string())
+        .args(["curl", "-skD", "-", "https://127.0.0.1:8443/"])
+        .output()
+        .unwrap();
+    let page = String::from_utf8_lossy(&out.stdout).to_lowercase();
+    assert!(
+        page.contains("content-security-policy: default-src 'self'"),
+        "{page}"
+    );
+    assert!(
+        page.contains("x-frame-options: deny") && page.contains("x-content-type-options: nosniff")
+    );
+    assert!(page.contains("<script src=\"/app.js\">"), "{page}");
+    for file in ["/app.js", "/app.css"] {
+        let (code, body) = https(&d, "GET", file, None, None);
+        assert_eq!(code, 200);
+        assert!(body.len() > 1000, "{file} is empty");
+    }
+
+    drop(d);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
