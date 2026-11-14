@@ -1116,6 +1116,7 @@ name = "ox-cli"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "nix",
  "ox-client",
  "ox-explain",
  "ox-import",
@@ -1130,7 +1131,11 @@ dependencies = [
 name = "ox-client"
 version = "0.0.1"
 dependencies = [
+ "rustls",
+ "serde",
  "serde_json",
+ "sha2",
+ "toml",
 ]
 
 [[package]]

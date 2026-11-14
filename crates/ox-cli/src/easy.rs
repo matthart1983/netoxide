@@ -78,6 +78,13 @@ pub struct InitArgs<'a> {
 }
 
 pub fn init(args: &InitArgs, oxd: &Client) -> Result<()> {
+    if oxd.is_remote() {
+        return Err(format!(
+            "ox init looks at the ports of the machine it runs on, which is not {}; run it on the box",
+            oxd.target()
+        )
+        .into());
+    }
     let found = ox_setup::detect()?;
     let interactive = std::io::stdin().is_terminal() && (args.wan.is_none() || args.lan.is_empty());
     if (args.wan.is_none() || args.lan.is_empty()) && !interactive {

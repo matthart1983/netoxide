@@ -43,6 +43,7 @@ const state = {
   explain: { src: '', dst: '', proto: 'tcp', dport: '', in: '', compare: true, result: null },
   audit: [],
   tokens: [],
+  roles: [],
   newToken: null,
   notice: null,       // { kind: 'ok' | 'bad', text }
   problem: null,      // why the daemon cannot be read
@@ -70,12 +71,18 @@ async function call(method, path, body, type) {
   return data;
 }
 
+// What the signed-in role may do, as the daemon reports it. The daemon
+// checks every request again; this only decides which buttons to show.
 function may(action) {
-  const role = state.me && state.me.role;
+  const can = (state.me && state.me.can) || [];
   if (action === 'read') return true;
-  if (action === 'audit') return role !== 'viewer';
-  if (action === 'manage' || action === 'rollback') return role === 'admin';
-  return role === 'operator' || role === 'admin';
+  if (action === 'audit') return can.includes('read-audit');
+  return can.includes(action);
+}
+
+// 'changes only in vpn, network' for a role held to sections, else ''.
+function held(role) {
+  return role && role.sections ? 'changes only in ' + role.sections.join(', ') : '';
 }
 
 function when(secs) {
@@ -136,6 +143,7 @@ async function refresh(rerender) {
       state.meta = state.plan = null;
     }
     if (state.view === 'audit' && may('audit')) state.audit = (await call('GET', '/v1/audit')).entries;
+    if (state.view === 'settings') state.roles = await call('GET', '/v1/roles');
     if (state.view === 'settings' && may('manage')) state.tokens = await call('GET', '/v1/tokens');
     state.problem = null;
   } catch (e) {
@@ -645,12 +653,46 @@ function audit() {
 }
 
 const tokenDraft = { name: '', role: 'operator', days: '' };
+const ACTIONS = [
+  ['read-audit', 'Read the audit log'],
+  ['edit', 'Save and delete candidates'],
+  ['approve', 'Approve candidates'],
+  ['commit', 'Commit, confirm and revert'],
+  ['rollback', 'Roll back'],
+  ['manage', 'Manage tokens, roles and settings'],
+];
+const SECTIONS = [
+  ['firewall', 'Firewall: zones, rules, NAT'],
+  ['network', 'Network: hostname, interfaces'],
+  ['services', 'Services: DNS and DHCP'],
+  ['vpn', 'VPN: tunnels and devices'],
+];
+const roleDraft = { name: '', can: { edit: true, commit: true }, limit: false, sections: {} };
+
+function checks(list, picked, prefix) {
+  return list.map(([key, label]) => {
+    const id = prefix + key;
+    return h('div', { class: 'check' },
+      h('input', { type: 'checkbox', id, checked: !!picked[key], onchange: (e) => { picked[key] = e.target.checked; } }),
+      h('label', { for: id }, label));
+  });
+}
 
 function settings() {
   const s = state.status || {};
   const out = [h('div', { class: 'panel' },
     h('h2', null, 'You'),
-    h('p', null, state.me ? state.me.name + ', role ' + state.me.role : ''))];
+    h('p', null, state.me ? state.me.name + ', role ' + state.me.role : ''),
+    state.me && state.me.sections ? h('p', { class: 'dim' }, 'This role may make ' + held(state.me) + '.') : null)];
+  const https = s.https;
+  if (https) {
+    out.push(h('div', { class: 'panel' },
+      h('h2', null, 'Managing this box from another machine'),
+      h('p', null, 'Save the box there with ', h('code', null, 'ox remote add <name> https://<this box>:' + https.listen.split(':').pop()),
+        ' and an access token, then run ', h('code', null, 'ox --remote <name> status'), '.'),
+      h('p', null, 'It shows the fingerprint of the certificate it was offered. It should be this one:'),
+      h('p', { class: 'secret mono' }, https.fingerprint)));
+  }
   out.push(h('div', { class: 'panel' },
     h('h2', null, 'Four-eyes approval'),
     h('p', null, s.four_eyes
@@ -680,10 +722,36 @@ function settings() {
           field('Name', 'name', tokenDraft, { required: true, pattern: '[a-z][a-z0-9-]*', placeholder: 'laptop' }),
           h('div', null, h('label', { for: 'f-role' }, 'Role'),
             h('select', { id: 'f-role', onchange: (e) => { tokenDraft.role = e.target.value; } },
-              ['viewer', 'auditor', 'operator', 'admin'].map((r) => h('option', { value: r, selected: r === tokenDraft.role }, r)))),
+              state.roles.map((r) => h('option', { value: r.name, selected: r.name === tokenDraft.role }, r.name)))),
           field('Expires after days', 'days', tokenDraft, { inputmode: 'numeric', placeholder: 'never' })),
         h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Create token')))));
   }
+  const makeRole = (e) => {
+    e.preventDefault();
+    const picked = (o) => Object.keys(o).filter((k) => o[k]);
+    const body = { name: roleDraft.name, can: picked(roleDraft.can) };
+    if (roleDraft.limit) body.sections = picked(roleDraft.sections);
+    act(() => call('POST', '/v1/roles', body), (r) => { roleDraft.name = ''; return 'Role ' + r.name + ' made.'; });
+  };
+  out.push(h('div', { class: 'panel' },
+    h('h2', null, 'Roles'),
+    h('p', { class: 'dim' }, 'A role says what a token may do. Every role can read the config and status. A role held to parts of the config can only save, approve or commit changes that stay inside them.'),
+    table(['Role', 'May', 'Where', ''],
+      state.roles.map((r) => [r.name, r.can.join(', '), held(r) || 'any part of the config',
+        r.builtin ? h('span', { class: 'dim' }, 'built in')
+          : may('manage') ? h('button', { class: 'danger', onclick: () => act(() => call('DELETE', '/v1/roles/' + r.name), 'Deleted role ' + r.name + '.') }, 'Delete')
+            : ''])),
+    may('manage') ? h('form', { onsubmit: makeRole },
+      h('h3', null, 'Make a role'),
+      h('div', { class: 'fields' },
+        field('Name', 'name', roleDraft, { required: true, pattern: '[a-z][a-z0-9-]*', placeholder: 'helpdesk' })),
+      h('p', null, 'It may:'),
+      checks(ACTIONS, roleDraft.can, 'can-'),
+      h('div', { class: 'check' },
+        h('input', { type: 'checkbox', id: 'role-limit', checked: roleDraft.limit, onchange: (e) => { roleDraft.limit = e.target.checked; render(); } }),
+        h('label', { for: 'role-limit' }, 'Only in some parts of the config')),
+      roleDraft.limit ? checks(SECTIONS, roleDraft.sections, 'sec-') : null,
+      h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Make role'))) : null));
   return out;
 }
 

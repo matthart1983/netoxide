@@ -117,6 +117,14 @@ impl SocketBackend {
     pub fn new(socket: &Path) -> SocketBackend {
         SocketBackend(Client::new(socket))
     }
+
+    /// A box on the network, saved earlier with `ox remote add`.
+    pub fn remote(name: &str) -> Result<SocketBackend, String> {
+        let file = ox_client::remotes::path()?;
+        Ok(SocketBackend(Client::https(ox_client::remotes::find(
+            &file, name,
+        )?)))
+    }
 }
 
 fn s(v: &Value) -> String {

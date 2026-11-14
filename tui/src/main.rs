@@ -9,7 +9,10 @@
 //! Live against oxd: cargo run -- --socket /run/netoxide/oxd.sock
 //!                    (or --live, which uses $OX_SOCKET or the default path)
 //!
-//! Without --socket or --live, all data is mock data from `data.rs` and
+//! A box on the network: cargo run -- --remote <name>
+//!                    (a name saved with `ox remote add`, or $OX_REMOTE with --live)
+//!
+//! Without --socket, --remote or --live, all data is mock data from `data.rs` and
 //! nothing talks to a firewall.
 
 #![forbid(unsafe_code)]
@@ -44,8 +47,18 @@ fn main() -> io::Result<()> {
             .any(|a| a == "--live")
             .then(|| std::env::var("OX_SOCKET").unwrap_or_else(|_| "/run/netoxide/oxd.sock".into()))
     });
-    if let Some(socket) = socket {
-        let backend = live::SocketBackend::new(std::path::Path::new(&socket));
+    let live = args.iter().any(|a| a == "--live");
+    let remote = value("--remote").or_else(|| {
+        std::env::var("OX_REMOTE")
+            .ok()
+            .filter(|r| live && !r.is_empty() && value("--socket").is_none())
+    });
+    let backend = match (remote, socket) {
+        (Some(name), _) => Some(live::SocketBackend::remote(&name).map_err(io::Error::other)?),
+        (None, Some(socket)) => Some(live::SocketBackend::new(std::path::Path::new(&socket))),
+        (None, None) => None,
+    };
+    if let Some(backend) = backend {
         if let Some(which) = value("--snapshot") {
             let (w, h) = value("--size")
                 .and_then(|s| {

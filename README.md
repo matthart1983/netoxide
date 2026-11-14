@@ -41,7 +41,7 @@ The design rule is "easy first, advanced within reach". Each area has an easy pa
 | Rules | `ox forward` and `ox block` do it in one step and show the result first. **Work today.** "Add a guest network" is planned | Zone-pair rules, address groups, services, NAT. **Works today** |
 | Changes | Apply, with automatic undo if you lock yourself out. **Works today** | Named candidates, plan with flow impact, rollback, four-eyes approval. **Work today** |
 | Understanding | Press `x` on a rule in the terminal UI to see what it does to a packet. **Works today** | `ox explain` for any packet, against running and candidate. **Works today.** Live trace is planned |
-| Interface | Web UI and terminal UI. **Work today** | CLI and HTTP API with tokens and roles. **Work today.** Terraform provider is planned |
+| Interface | Web UI and terminal UI. **Work today** | CLI and HTTP API with tokens and roles, from the box or from another machine. **Work today.** Terraform provider is planned |
 | Scale | One box with no extra parts. **Works today** | Fleet controller, templates, staged rollouts. **Planned** |
 
 **If you run a home lab, be aware of where this is today.** The pieces of a home router are here: firewall, NAT, DNS, DHCP and a web UI, from a guided setup. None of it has run on real hardware yet, and there is no installer or OS image, so you install it by hand on an existing Linux machine ([`dist/README.md`](dist/README.md)). Treat it as something to try on a spare machine or VM with console access, not to put in front of your home network.
@@ -64,7 +64,8 @@ The research behind this is in [`docs/research/market-gap.md`](docs/research/mar
 | DNS and DHCP | The box answers DNS for its inside networks, with DNSSEC checking and local names, and hands out IPv4 addresses with fixed addresses per device. They are applied and reverted together with the firewall rules. Served by dnsmasq, which the daemon starts and restarts. |
 | Lockdown | With `oxd --lockdown`, a box with no config drops inbound and forwarded traffic until the first commit. |
 | Web UI | The daemon serves a browser interface over HTTPS: what the box does in plain sentences, rules with packet counts, NAT, network and leases, changes with plan, approve and commit with an undo timer, explain, audit, and settings. Forward a port, block a device or edit the config from it. |
-| Access control | The local socket identifies the caller from the kernel. The HTTPS listener needs an access token with a role: viewer, auditor, operator or admin. Four-eyes approval can require a second person before a commit. |
+| Access control | The local socket identifies the caller from the kernel. The HTTPS listener needs an access token with a role. A role is a set of actions and can be held to parts of the config, so a network admin cannot change firewall rules and a helpdesk can only add VPN devices. Four-eyes approval can require a second person before a commit. |
+| Remote management | `ox --remote <name>` and the terminal UI manage a box from another machine over HTTPS. A box's own certificate is checked by a saved fingerprint, as SSH does with host keys. |
 | Health | Prometheus metrics at `/metrics`, and a hygiene report of rules that never apply, add nothing, allow everything, or have seen no packets. |
 | Addresses and routes | On a commit the daemon puts the config's addresses on their interfaces, brings those links up, sets the default route through the `gateway` you name, and turns on packet forwarding, over netlink. It takes an address or route off again when a later config drops it or a commit fails, and only ever the ones it added itself. |
 | Port forwards that follow the address | A forward with no `address` applies to whatever address the box has, so it keeps working when the provider changes it. `ox forward` and the web form write that when the internet port has no fixed address. |
@@ -372,9 +373,37 @@ Open `https://<box>:8443/` and sign in with the token. The daemon makes its own 
 | Changes | Candidates with their plan; forward a port, block a device, or edit the whole config with a check before saving; approve and commit with an undo timer |
 | Explain | A packet you describe, judged by the running config and a candidate side by side |
 | Audit | The audit log, newest first |
-| Settings | Four-eyes approval and access tokens, for admins |
+| Settings | Four-eyes approval, access tokens and roles for admins; the certificate fingerprint for `ox remote add` |
 
 A commit waiting to be kept shows a countdown with Keep and Undo on every view. The page is three static files compiled into the daemon, with no build step and nothing loaded from elsewhere.
+
+## Manage a box from another machine
+
+`ox` and the terminal UI can talk to a box over its HTTPS listener. On the box, make a token and read the certificate's fingerprint:
+
+```sh
+ox token create laptop --role operator --days 90
+ox status          # the last lines show the listener and its certificate
+```
+
+On your machine, save the box under a name:
+
+```sh
+ox remote add home https://192.0.2.1:8443
+ox --remote home status
+ox -r home commit starter --confirm 5m
+```
+
+`ox remote add` shows the fingerprint of the certificate the box offered and asks whether it matches the one from `ox status`. After that `ox` accepts only that certificate, the way SSH keeps host keys. If the box later shows a different one, `ox` stops before sending the token and says so. A box with a certificate from an authority your machine trusts needs no fingerprint.
+
+| | |
+| --- | --- |
+| `ox remote add <name> <url> [--fingerprint sha256:…] [--token-file <file>]` | Save a box. Without the flags it asks for both |
+| `ox remote list` / `ox remote remove <name>` | The saved boxes |
+| `ox --remote <name> …` or `OX_REMOTE=<name>` | Run any command against a saved box |
+| `OX_URL`, `OX_TOKEN`, `OX_FINGERPRINT` | The same without a file, for scripts and CI |
+
+Saved boxes are in `~/.config/netoxide/remotes.toml`, readable only by you, because the file holds the tokens. `ox init` is the one command that refuses a remote box: it looks at the ports of the machine it runs on. A URL without a port means 8443.
 
 ## Access and roles
 
@@ -383,12 +412,36 @@ A commit waiting to be kept shows a countdown with Keep and Undo on every view. 
 | The Unix socket | The user that owns your process, as the kernel reports it | Everything. Whoever can open the socket file is an admin |
 | The HTTPS listener | The access token you send | What the token's role allows |
 
-| Role | May |
+| Role | May | Where |
+| --- | --- | --- |
+| viewer | Read the config, candidates, plans, status and metrics | |
+| auditor | The same, plus the audit log | |
+| operator | The same, plus save candidates, approve, commit, confirm and revert | Any part of the config |
+| network-admin | The same as an operator | Only the network, services and VPN sections |
+| security-admin | The same as an operator | Only the firewall section |
+| admin | Everything, including rollback, tokens, roles and settings | Any part of the config |
+
+A role is a set of actions, and it can be held to sections of the config:
+
+| Section | Config keys |
 | --- | --- |
-| viewer | Read the config, candidates, plans, status and metrics |
-| auditor | The same, plus the audit log |
-| operator | The same, plus save candidates, approve, commit, confirm and revert |
-| admin | Everything, including rollback, tokens and settings |
+| firewall | `zones`, `addresses`, `services`, `policy`, `nat` |
+| network | `hostname`, `interfaces`, `ipv6_autoconfig` |
+| services | `dns`, `dhcp` |
+| vpn | `wireguard` |
+
+A role held to sections can save, approve, commit, confirm or revert only a change that stays inside them. The daemon compares the change with the running config, so a stale candidate that would undo someone else's work in another section is refused too. Reading is never limited.
+
+Which zone a port or a tunnel is in decides which rules its traffic gets. So adding one, removing one or moving one to another zone counts as a firewall change as well, and a network admin cannot do it alone. They can still renumber a port, change its gateway, and edit DNS, DHCP and the peers of an existing tunnel.
+
+Make your own roles with `ox role create`, for example a helpdesk that may add VPN devices and nothing else:
+
+```sh
+ox role create helpdesk --can edit,commit --sections vpn
+ox token create desk --role helpdesk --days 90
+```
+
+The actions are `read-audit`, `edit`, `approve`, `commit`, `rollback` and `manage`. `manage` covers tokens, roles and settings, so it is full control and cannot be held to sections. Setting up the first VPN device also adds a firewall rule for the tunnel's port, so that step needs a role that may change both sections.
 
 Only the SHA-256 of a token's secret is stored, so the secret is shown once when you create it. Tokens can expire and be revoked.
 
@@ -468,7 +521,9 @@ Daemon commands. All take `--socket <path>` or the `OX_SOCKET` variable. The def
 | `ox approve <candidate>` | Approve a candidate someone else saved |
 | `ox four-eyes on\|off` | Require a second person's approval before a commit |
 | `ox token create <name> --role <role> [--days N]` / `list` / `revoke <name>` | Access tokens for the HTTPS API and the web UI |
-| `ox whoami` | Who the daemon thinks you are |
+| `ox role list` / `create <name> --can <actions> [--sections <sections>]` / `delete <name>` | Roles: what a token may do and in which parts of the config |
+| `ox remote add <name> <url>` / `list` / `remove <name>` | Boxes to manage from this machine with `ox --remote <name>` |
+| `ox whoami` | Who the daemon thinks you are, and what your role allows |
 | `ox leases` | The addresses DHCP has handed out |
 | `ox vpn` | Each tunnel: this box's public key, and every peer with when it was last heard from and how much it sent |
 | `ox vpn add <name> --endpoint <host> [--public-key <key>]` | Add a phone or laptop to the VPN, setting the VPN up if there is none. Saves a candidate and prints the device's config |
@@ -533,7 +588,8 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `GET /v1/audit` | | All entries. Fails if the hash chain is broken |
 | `GET /v1/hygiene` | | Findings about rules in the running config |
 | `GET /metrics` | | Prometheus metrics |
-| `GET /v1/whoami` | | The caller's name and role |
+| `GET /v1/whoami` | | The caller's name and role, with the role's actions and sections |
+| `GET` / `POST /v1/roles`, `DELETE /v1/roles/{name}` | `{"name", "can": [...], "sections": [...]}` | Roles. Omit `sections` for no limit |
 | `GET /v1/running/json` | | The running config as JSON, with what it does in sentences |
 | `POST /v1/check` | TOML | Validates a config without storing it |
 | `POST /v1/actions/forward`, `/v1/actions/block`, `/v1/actions/vpn-peer` | JSON | One-step actions; each saves a candidate |
@@ -545,7 +601,7 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `GET` / `POST /v1/tokens`, `DELETE /v1/tokens/{name}` | `{"name", "role", "ttl_secs"}` | Access tokens. The secret is returned once |
 | `GET /v1/kernel` | | The table as the kernel lists it |
 
-On the Unix socket the caller is whoever owns the calling process, as the kernel reports it, and is an admin. On the HTTPS listener every request carries `Authorization: Bearer <token>`, and the token's role decides what it may do: 401 without a valid token, 403 when the role does not allow the action. See [Access and roles](#access-and-roles).
+On the Unix socket the caller is whoever owns the calling process, as the kernel reports it, and is an admin. On the HTTPS listener every request carries `Authorization: Bearer <token>`, and the token's role decides what it may do: 401 without a valid token, 403 when the role does not allow the action or the change reaches outside the role's sections. See [Access and roles](#access-and-roles).
 
 ## How it is built
 
@@ -621,7 +677,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 145 tests. Nine of them use the real kernel inside a private, rootless network namespace:
+There are 161 tests. Eleven of them run a daemon inside a private, rootless network namespace, nine of those against the real kernel:
 
 - The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
 - The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.
@@ -631,9 +687,11 @@ There are 145 tests. Nine of them use the real kernel inside a private, rootless
 - Two boxes, each with its own daemon, swap public keys and join their inside networks with a WireGuard tunnel. A device behind one fetches a page from the other over IPv4 and IPv6, a port the rules do not allow is dropped, explain follows the route through the tunnel, both ends report the peer as connected, narrowing a peer's networks stops that traffic only, and removing the tunnel removes the interface.
 - Real packets cross the box between three namespaces, a client inside, the box, and a server outside: web and ping are allowed out and the source is rewritten, another port is dropped, a forwarded port reaches the inside server, the kernel's counters land on the right rules, and each result matches what `ox explain` says for the same packet. A change that is not kept stops blocking traffic when its window lapses. Renumbering the inside network takes the old address off the port and leaves an address someone else put there.
 - The HTTPS listener is called with curl: tokens, roles, four-eyes approval and revocation.
+- `ox` manages a box from a second machine over IPv4 and IPv6: a wrong fingerprint and a wrong token save nothing, a full change cycle runs, a certificate that is not the saved one stops `ox` before the token is sent, and roles held to sections are refused every change outside them, including keeping or undoing someone else's commit.
+- The HTTPS listener refuses the 33rd connection from one address, still serves another address, and closes connections that say nothing.
 - The web UI's endpoints and the page's security headers are checked.
 
-A separate test boots a virtual machine and checks the installed daemon under systemd: 116 checks across install, DHCP in both directions, DNS, IPv4 and IPv6 traffic, the undo timer, a killed daemon, a VPN device that connects and reaches the inside network, a reboot and removal. It needs QEMU with KVM and is not part of `cargo test`. See [`tests/vm/README.md`](tests/vm/README.md).
+A separate test boots a virtual machine and checks the installed daemon under systemd: 129 checks across install, DHCP in both directions, DNS, IPv4 and IPv6 traffic, the undo timer, a killed daemon, a VPN device that connects and reaches the inside network, `ox` run from a client on the inside network with a pinned certificate, a role refused a change outside its sections, a reboot and removal. It needs QEMU with KVM and is not part of `cargo test`. See [`tests/vm/README.md`](tests/vm/README.md).
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
@@ -645,10 +703,11 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 
 ## Limits today
 
-- **Access control is new and has had no outside audit.** Tokens, roles, four-eyes and the HTTPS listener are tested. One internal review pass found no way around them and eleven other defects, which are fixed except the three listed next. Nobody outside this project has reviewed any of it. There is no single sign-on (OIDC), and the roles are four fixed ones.
-- **Known and not fixed.** Token expiry and the undo timer use the wall clock, so a box whose clock jumps backwards extends both. The audit chain has no key, so someone who can write the state directory can rewrite the log and its head together; shipping the head off the box would close that. The HTTPS listener has no connection limit or header timeout of its own.
+- **Access control is new and has had no outside audit.** Tokens, roles, four-eyes and the HTTPS listener are tested. One internal review pass found no way around them and eleven other defects, which are fixed except the two listed next. Roles held to sections and `ox` over HTTPS had one internal pass of their own. It found that a network-only role could move a port into another zone, and four smaller defects; all five are fixed with tests. Nobody outside this project has reviewed any of it. There is no single sign-on (OIDC): access is by token.
+- **Known and not fixed.** Token expiry and the undo timer use the wall clock, so a box whose clock jumps backwards extends both. The audit chain has no key, so someone who can write the state directory can rewrite the log and its head together; shipping the head off the box would close that. The HTTPS listener holds at most 256 connections, 32 from one IPv4 address or IPv6 /64, gives a caller 30 seconds to send a request's headers, and closes a connection after 120 seconds with no bytes; that bounds what the daemon spends, and someone with enough addresses can still keep others out of the listener while they try.
+- **Sections are coarse.** There are four, split by top-level config key. A role cannot be held to one zone pair or one interface. A role held to the VPN section chooses the networks a peer may send from, and a rule that matches on source address inside the VPN zone will trust those. A saved fingerprint is trusted without checking the certificate's dates.
 - **An admin can get around four-eyes** by turning it off or making a second token. Both are in the audit log. Operators cannot.
-- **The web UI has been checked by hand in one browser.** Every screen and form was exercised in Chrome against a dry-run daemon: sign-in, overview, rules, NAT, a commit with its timer, forward a port, block a device, the config editor, explain against a candidate, and creating and revoking a token. There are no automated browser tests, and no other browser has been tried.
+- **The web UI has been checked by hand in one browser.** Every screen and form was exercised in Chrome against a dry-run daemon: sign-in, overview, rules, NAT, a commit with its timer, forward a port, block a device, the config editor, explain against a candidate, creating and revoking a token, and making and deleting a role. There are no automated browser tests, and no other browser has been tried.
 - **Nothing is loaded before the first commit** unless you start `oxd --lockdown`, so by default the kernel's own defaults apply until then.
 - **DNS and DHCP are new.** They are tested end to end in a namespace: `dig` against the resolver over IPv4 and IPv6, and a small DHCP client that gets a pool address and a fixed address through the firewall. No real device has used them. There are no DNS blocklists, IPv6 is announce-only (no DHCPv6), and the daemon runs dnsmasq directly, not as a sandboxed systemd unit as the spec asks.
 - **dnsmasq is the only backend.** The spec names Unbound and Kea. The config does not name the program, so they can be added without changing configs.
@@ -671,7 +730,7 @@ Roughly in the order planned:
 2. Services as sandboxed systemd units, and Unbound and Kea as backends beside dnsmasq.
 3. More one-step actions such as "add a guest network", rule editing in the terminal UI, and live trace.
 4. IPsec, and for WireGuard: all traffic through a tunnel, preshared keys, a QR code.
-5. Single sign-on (OIDC), finer roles, and remote use of `ox` over HTTPS.
+5. Single sign-on (OIDC), and roles held to single zones or interfaces.
 6. Multi-WAN, routing protocols, traffic shaping, IDS.
 7. OPNsense import, and the pfSense importer tested on real backups.
 8. HA, the fleet controller, a Terraform provider, and the OS image with signed A/B upgrades.

@@ -26,10 +26,11 @@ use ox_nft::{Ruleset, compile, render, render_empty, render_lockdown};
 use ox_schema::{Config, is_name};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+pub use audit::sha256_hex;
 pub use audit::{Audit, AuditError, Entry};
-pub use auth::{Action, CandidateMeta, Identity, Role, Settings, Token};
+pub use auth::{Action, CandidateMeta, Identity, Role, Section, Settings, Token, touched};
 
 /// How many commits the box keeps.
 pub const HISTORY: u64 = 100;
@@ -264,6 +265,8 @@ pub struct Engine<A: Applier> {
     audit: Audit,
     /// The access tokens, as last loaded or saved.
     token_cache: Vec<Token>,
+    /// The roles made on this box, as last loaded or saved.
+    role_cache: Vec<Role>,
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -277,6 +280,9 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 /// How many candidates may be stored. Each is at most as large as the API
 /// accepts, so this bounds what saved candidates can take from the disk.
 const MAX_CANDIDATES: usize = 100;
+
+/// How many roles may be made on one box.
+const MAX_ROLES: usize = 50;
 
 /// Text from a caller, made safe to print: no control characters, which
 /// could rewrite an administrator's terminal, and no longer than `max`.
@@ -373,6 +379,13 @@ impl<A: Applier> Engine<A> {
             audit: Audit::open(&dir.join("audit.log"))?,
             // A token file that cannot be read lets nobody in.
             token_cache: auth::load(&dir.join("tokens.json")).unwrap_or_default(),
+            // A damaged file leaves no custom roles, so their tokens stop
+            // working until it is repaired. It is never treated as empty
+            // when writing: see `create_role`.
+            role_cache: auth::load(&dir.join("roles.json")).unwrap_or_else(|e| {
+                eprintln!("oxd: the roles file is damaged, so tokens with roles made here will not work: {e}");
+                Vec::new()
+            }),
         };
         if let Some(damage) = engine.audit.take_damage() {
             eprintln!("audit log: {damage}");
@@ -625,7 +638,7 @@ impl<A: Applier> Engine<A> {
     pub fn create_token(
         &mut self,
         name: &str,
-        role: Role,
+        role: &str,
         ttl_secs: Option<u64>,
         who: &str,
         now: u64,
@@ -633,6 +646,16 @@ impl<A: Applier> Engine<A> {
         if !is_name(name) {
             return Err(StoreError::Invalid(format!(
                 "'{name}' is not a token name; use lowercase letters, digits and hyphens"
+            )));
+        }
+        if self.role(role).is_none() {
+            return Err(StoreError::Invalid(format!(
+                "there is no role called '{role}'; the roles are {}",
+                self.roles()
+                    .iter()
+                    .map(|r| r.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         }
         let mut tokens = self.tokens()?;
@@ -651,7 +674,7 @@ impl<A: Applier> Engine<A> {
         let secret = auth::new_secret()?;
         tokens.push(Token {
             name: name.to_string(),
-            role,
+            role: role.to_string(),
             sha256: audit::sha256_hex(secret.as_bytes()),
             created: now,
             expires,
@@ -663,8 +686,7 @@ impl<A: Applier> Engine<A> {
             who,
             "token created",
             &format!(
-                "{name} role {}{}",
-                role.as_str(),
+                "{name} role {role}{}",
                 ttl_secs
                     .map(|t| format!(", expires in {t} s"))
                     .unwrap_or_default()
@@ -689,7 +711,171 @@ impl<A: Applier> Engine<A> {
     pub fn identify(&self, secret: &str, now: u64) -> Option<Identity> {
         // From memory, so a flood of requests with made-up tokens costs no
         // disk reads while the engine is locked.
-        auth::verify(&self.token_cache, secret, now)
+        auth::verify(&self.token_cache, &self.role_cache, secret, now)
+    }
+
+    // ── roles ───────────────────────────────────────────────────────────
+
+    /// Every role: the built-in ones, then the ones made on this box.
+    pub fn roles(&self) -> Vec<Role> {
+        let mut roles = Role::builtins();
+        roles.extend(self.role_cache.iter().cloned());
+        roles
+    }
+
+    pub fn role(&self, name: &str) -> Option<Role> {
+        self.roles().into_iter().find(|r| r.name == name)
+    }
+
+    fn save_roles(&mut self, roles: Vec<Role>) -> Result<()> {
+        let json = serde_json::to_vec_pretty(&roles).expect("roles are plain JSON");
+        write_atomic(&self.dir.join("roles.json"), &json)?;
+        self.role_cache = roles;
+        Ok(())
+    }
+
+    /// Makes a role. Reading is part of every role.
+    pub fn create_role(
+        &mut self,
+        name: &str,
+        can: &[Action],
+        sections: Option<&[Section]>,
+        who: &str,
+        now: u64,
+    ) -> Result<Role> {
+        if !is_name(name) {
+            return Err(StoreError::Invalid(format!(
+                "'{name}' is not a role name; use lowercase letters, digits and hyphens"
+            )));
+        }
+        if self.role(name).is_some() {
+            return Err(StoreError::Invalid(format!(
+                "a role called '{name}' exists"
+            )));
+        }
+        // Read from disk, so a damaged file is an error here and is never
+        // written over with what little is in memory.
+        let on_disk: Vec<Role> =
+            auth::load(&self.dir.join("roles.json")).map_err(StoreError::Corrupt)?;
+        // A token left over from a role that is gone must not wake up with
+        // whatever a new role of the same name allows.
+        if let Some(token) = self.tokens()?.iter().find(|t| t.role == name) {
+            return Err(StoreError::Invalid(format!(
+                "the token {} still names a role called '{name}'; revoke it first",
+                token.name
+            )));
+        }
+        if on_disk.len() >= MAX_ROLES {
+            return Err(StoreError::Invalid(format!(
+                "there are already {MAX_ROLES} roles made on this box; delete some first"
+            )));
+        }
+        let mut role = Role {
+            name: name.to_string(),
+            can: can.iter().copied().collect(),
+            sections: sections.map(|s| s.iter().copied().collect()),
+            builtin: false,
+        };
+        role.can.insert(Action::Read);
+        if role.sections.as_ref().is_some_and(|s| s.is_empty()) {
+            return Err(StoreError::Invalid(
+                "a role held to no sections could change nothing; name at least one section, or none for no limit".into(),
+            ));
+        }
+        if role.sections.is_some() && role.may(Action::Manage) {
+            return Err(StoreError::Invalid(
+                "a role that manages tokens and roles can give itself anything, so it cannot be held to sections".into(),
+            ));
+        }
+        let mut roles = on_disk;
+        roles.push(role.clone());
+        self.save_roles(roles)?;
+        self.audit.append(
+            now,
+            who,
+            "role created",
+            &format!("{name}: {}", role.describe()),
+        )?;
+        Ok(role)
+    }
+
+    /// Deletes a role made on this box, unless a token still has it.
+    pub fn delete_role(&mut self, name: &str, who: &str, now: u64) -> Result<()> {
+        if Role::builtin(name).is_some() {
+            return Err(StoreError::Invalid(format!(
+                "'{name}' is a built-in role and cannot be deleted"
+            )));
+        }
+        if !self.role_cache.iter().any(|r| r.name == name) {
+            return Err(StoreError::NotFound(format!("role '{name}'")));
+        }
+        let users: Vec<String> = self
+            .tokens()?
+            .into_iter()
+            .filter(|t| t.role == name)
+            .map(|t| t.name)
+            .collect();
+        if !users.is_empty() {
+            return Err(StoreError::Invalid(format!(
+                "role '{name}' is still used by the token{} {}; revoke {} first",
+                if users.len() == 1 { "" } else { "s" },
+                users.join(", "),
+                if users.len() == 1 { "it" } else { "them" },
+            )));
+        }
+        let on_disk: Vec<Role> =
+            auth::load(&self.dir.join("roles.json")).map_err(StoreError::Corrupt)?;
+        let roles = on_disk.into_iter().filter(|r| r.name != name).collect();
+        self.save_roles(roles)?;
+        self.audit.append(now, who, "role deleted", name)?;
+        Ok(())
+    }
+
+    // ── which sections a change touches ─────────────────────────────────
+
+    /// The sections that would change if `text` became the running config.
+    pub fn touched_by(&self, text: &str) -> Result<BTreeSet<Section>> {
+        Ok(touched(self.running_config()?.as_deref(), text))
+    }
+
+    /// The sections the pending commit changed, for confirm and revert.
+    pub fn touched_by_pending(&self) -> Result<BTreeSet<Section>> {
+        let pending = self
+            .state
+            .pending
+            .as_ref()
+            .ok_or(StoreError::NothingPending)?;
+        let commit = self.commit(pending.commit)?;
+        let before = match commit.parent {
+            Some(id) => Some(self.commit_config(id)?),
+            None => None,
+        };
+        Ok(touched(
+            before.as_deref(),
+            &self.commit_config(pending.commit)?,
+        ))
+    }
+
+    /// The sections a rollback of `steps` commits would change.
+    pub fn touched_by_rollback(&self, steps: u64) -> Result<BTreeSet<Section>> {
+        self.touched_by(&self.rollback_text(steps)?.0)
+    }
+
+    fn rollback_text(&self, steps: u64) -> Result<(String, u64)> {
+        if steps == 0 {
+            return Err(StoreError::Invalid("rollback needs at least 1 step".into()));
+        }
+        let mut target = self.state.running;
+        for _ in 0..steps {
+            let id = target.ok_or_else(|| {
+                StoreError::Invalid(format!("there are fewer than {steps} commits to go back"))
+            })?;
+            target = self.commit(id)?.parent;
+        }
+        let id = target.ok_or_else(|| {
+            StoreError::Invalid(format!("there are fewer than {steps} commits to go back"))
+        })?;
+        Ok((self.commit_config(id)?, id))
     }
 
     pub fn candidate(&self, name: &str) -> Result<String> {
@@ -873,20 +1059,7 @@ impl<A: Applier> Engine<A> {
         confirm_secs: Option<u64>,
         now: u64,
     ) -> Result<Commit> {
-        if steps == 0 {
-            return Err(StoreError::Invalid("rollback needs at least 1 step".into()));
-        }
-        let mut target = self.state.running;
-        for _ in 0..steps {
-            let id = target.ok_or_else(|| {
-                StoreError::Invalid(format!("there are fewer than {steps} commits to go back"))
-            })?;
-            target = self.commit(id)?.parent;
-        }
-        let id = target.ok_or_else(|| {
-            StoreError::Invalid(format!("there are fewer than {steps} commits to go back"))
-        })?;
-        let text = self.commit_config(id)?;
+        let (text, id) = self.rollback_text(steps)?;
         self.apply_new(
             NewCommit {
                 text: &text,
@@ -1226,7 +1399,7 @@ mod tests {
         );
         assert_eq!(c.reason.chars().count(), 500);
         assert!(matches!(
-            e.create_token("t", Role::Viewer, Some(u64::MAX), "ana", 1600),
+            e.create_token("t", "viewer", Some(u64::MAX), "ana", 1600),
             Err(StoreError::Invalid(_))
         ));
         fs::remove_dir_all(d).unwrap();
@@ -1447,7 +1620,7 @@ mod tests {
         let d = dir("tokens");
         let mut e = open(&d, 1000);
         let secret = e
-            .create_token("ci", Role::Operator, Some(3600), "ana", 1000)
+            .create_token("ci", "operator", Some(3600), "ana", 1000)
             .unwrap();
         let stored = std::fs::read_to_string(d.join("tokens.json")).unwrap();
         assert!(
@@ -1456,17 +1629,19 @@ mod tests {
         );
 
         let who = e.identify(&secret, 1500).unwrap();
-        assert_eq!((who.name.as_str(), who.role), ("token:ci", Role::Operator));
+        assert_eq!(
+            (who.name.as_str(), who.role.name.as_str()),
+            ("token:ci", "operator")
+        );
         assert_eq!(e.identify("ox_wrong", 1500), None);
         assert_eq!(e.identify(&secret, 4600), None, "expired");
 
         assert!(
-            e.create_token("ci", Role::Viewer, None, "ana", 1001)
-                .is_err(),
+            e.create_token("ci", "viewer", None, "ana", 1001).is_err(),
             "names are unique"
         );
         assert!(
-            e.create_token("Bad Name", Role::Viewer, None, "ana", 1001)
+            e.create_token("Bad Name", "viewer", None, "ana", 1001)
                 .is_err()
         );
         e.revoke_token("ci", "ana", 1002).unwrap();
@@ -1482,6 +1657,86 @@ mod tests {
                 && events.contains(&"token revoked".to_string())
         );
         fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn roles_can_be_made_and_are_kept_while_a_token_uses_them() {
+        let d = dir("roles");
+        let mut e = open(&d, 1000);
+        let role = e
+            .create_role(
+                "helpdesk",
+                &[Action::Edit, Action::Commit],
+                Some(&[Section::Vpn]),
+                "ana",
+                1000,
+            )
+            .unwrap();
+        // Reading comes with every role.
+        assert!(role.may(Action::Read) && role.may(Action::Edit) && !role.may(Action::Approve));
+        assert_eq!(e.roles().len(), Role::builtins().len() + 1);
+
+        for (name, can, sections) in [
+            ("helpdesk", vec![Action::Edit], None),
+            ("admin", vec![Action::Edit], None),
+            ("Bad Name", vec![Action::Edit], None),
+            ("nothing", vec![Action::Edit], Some(vec![])),
+            ("boss", vec![Action::Manage], Some(vec![Section::Vpn])),
+        ] {
+            assert!(
+                matches!(
+                    e.create_role(name, &can, sections.as_deref(), "ana", 1001),
+                    Err(StoreError::Invalid(_))
+                ),
+                "{name}"
+            );
+        }
+        assert!(matches!(
+            e.create_token("t", "nobody", None, "ana", 1001),
+            Err(StoreError::Invalid(_))
+        ));
+
+        let secret = e
+            .create_token("desk", "helpdesk", None, "ana", 1002)
+            .unwrap();
+        let who = e.identify(&secret, 1003).unwrap();
+        assert_eq!(who.role, role);
+        assert!(matches!(
+            e.delete_role("helpdesk", "ana", 1004),
+            Err(StoreError::Invalid(m)) if m.contains("desk")
+        ));
+        assert!(matches!(
+            e.delete_role("viewer", "ana", 1004),
+            Err(StoreError::Invalid(_))
+        ));
+
+        // A damaged roles file stops its tokens, and is not written over.
+        drop(e);
+        let good = std::fs::read(d.join("roles.json")).unwrap();
+        std::fs::write(d.join("roles.json"), b"{ not json").unwrap();
+        let mut e = open(&d, 1005);
+        assert!(e.identify(&secret, 1005).is_none());
+        assert!(matches!(
+            e.create_role("other", &[Action::Edit], None, "ana", 1005),
+            Err(StoreError::Corrupt(_))
+        ));
+        assert_eq!(std::fs::read(d.join("roles.json")).unwrap(), b"{ not json");
+        std::fs::write(d.join("roles.json"), good).unwrap();
+
+        // The role and its token are still there after a restart.
+        drop(e);
+        let mut e = open(&d, 1005);
+        assert_eq!(e.identify(&secret, 1006).unwrap().role.name, "helpdesk");
+
+        e.revoke_token("desk", "ana", 1007).unwrap();
+        e.delete_role("helpdesk", "ana", 1008).unwrap();
+        assert!(matches!(
+            e.delete_role("helpdesk", "ana", 1009),
+            Err(StoreError::NotFound(_))
+        ));
+        let events: Vec<String> = e.audit().unwrap().into_iter().map(|x| x.event).collect();
+        assert!(events.contains(&"role created".to_string()));
+        assert!(events.contains(&"role deleted".to_string()));
     }
 
     #[test]
