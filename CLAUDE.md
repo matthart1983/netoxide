@@ -25,7 +25,8 @@ decision. This file gives you what you need to start working.
 | Daemon | `crates/oxd` | HTTP+JSON API on a Unix socket and on HTTPS (`--listen`), applies to the kernel, runs dnsmasq, serves the web UI and `/metrics` |
 | Interfaces | `crates/oxd/src/net.rs` | On apply: add the config's addresses over netlink, bring links up, set default routes (`gateway`), enable forwarding. Remembers what it added (`managed.json`) and removes only that, when a config drops it or a commit fails. Missing interfaces are reported in status, not fatal |
 | DHCP client | `crates/oxd/src/dhcp.rs` | `dhcp_client = true` on the uplink: a tokio task per interface speaks DHCP in raw Ethernet frames on a packet socket, installs address and default route, renews, and re-requests its old address after a restart. The validator requires a visible accept rule for udp/68 |
-| VM test | `tests/vm/` | Boots the host kernel in QEMU with a root disk built from the host's `/usr`, installs per `dist/README.md`, 99 checks under real systemd including a crash and a reboot. Not in CI |
+| WireGuard | `crates/ox-schema/src/vpn.rs`, `crates/oxd/src/wg.rs` | `[wireguard.<iface>]` with peers. The interface is made over rtnetlink and configured over the kernel's WireGuard generic-netlink family; no `wg` program. Private keys live in `<state>/wireguard/<iface>.key`, never in config, commits, audit log or API. Peers are updated in place so a commit does not reset sessions. Routes for peers' `allowed` networks are tracked in `managed.json`. Easy path: `add_vpn_peer` in `ox-setup`, `ox vpn add`, web form |
+| VM test | `tests/vm/` | Boots the host kernel in QEMU with a root disk built from the host's `/usr`, installs per `dist/README.md`, 116 checks under real systemd including a crash and a reboot. Not in CI |
 | Access control | `crates/ox-store/src/auth.rs`, `crates/oxd/src/api.rs` | Socket peer = admin, named from the kernel. HTTPS = bearer token with a role (viewer, auditor, operator, admin). Four-eyes approval. Every handler takes a `Caller` and calls `caller.may(Action::…)` first |
 | Web UI | `crates/oxd/web/` | `index.html`, `app.js`, `app.css`, compiled in with `include_str!`. No build step, no dependencies, strict CSP, daemon text inserted with `textContent` only |
 | Hygiene | `crates/ox-nft/src/hygiene.rs` | Shadowed, redundant and allow-everything rules; `oxd` adds "no packets" from kernel counters |
@@ -35,7 +36,7 @@ decision. This file gives you what you need to start working.
 | DNS and DHCP | `crates/ox-services` + `crates/oxd/src/services.rs` | `[dns]` and `[dhcp.<iface>]` in the schema, rendered as a dnsmasq config; `oxd` runs and restarts dnsmasq. Applied and reverted with the ruleset as one `Target` |
 | Easy path | `crates/ox-setup` | `detect` (ports of this machine), `starter` (guided-setup config), `add_forward`, `block`, `describe`. Behind `ox init`, `ox forward`, `ox block` |
 | Importer | `crates/ox-import` | pfSense config.xml → config + report + differential verify |
-| VPN, multi-WAN, routing protocols, IDS, HA, controller, Terraform, OS image | — | **Not started** |
+| IPsec, multi-WAN, routing protocols, IDS, HA, controller, Terraform, OS image | — | **Not started** |
 
 The daemon has run inside rootless network namespaces and in the test VM
 (`tests/vm/run.sh`: real systemd, root, virtio network cards, SELinux off).
@@ -132,14 +133,14 @@ Proposed next, not decided, roughly in this order:
 1. Run it on real hardware with SELinux enforcing, and a first watched deployment. DHCPv6 prefix delegation for the inside network. VLAN and PPPoE interfaces.
 2. Services as sandboxed systemd units instead of direct children of `oxd`; Unbound and Kea renderers beside dnsmasq. The schema must stay backend-neutral.
 3. More one-step actions (add a guest network, allow a service) in `ox-setup`, the same actions in the TUI, rule editing there, and `ox trace`.
-4. WireGuard, then IPsec.
+4. IPsec (strongSwan over VICI; not installed on Matt's machine). WireGuard follow-ups: full-tunnel peers (needs policy routing), preshared keys, a test against the official `wg` tools.
 5. OIDC sign-in, finer roles, and `ox` over HTTPS (the CLI client is Unix-socket only).
 6. Multi-WAN, FRR, CAKE, Suricata.
 7. OPNsense import, and testing the pfSense importer against real backups.
 8. HA, the fleet controller, a Terraform provider, the OS image.
 9. An independent security audit before any 1.0.
 
-Run `tests/vm/run.sh` after touching `dist/oxd.service`, the daemon's start-up, `net.rs` or `dhcp.rs`. It caught three bugs the namespace tests could not: the unit's system-call filter killed dnsmasq, a failed commit left addresses behind, and `ox explain` said "no route" for an uplink with no fixed address.
+Run `tests/vm/run.sh` after touching `dist/oxd.service`, the daemon's start-up, `net.rs` or `dhcp.rs`. It caught bugs the namespace tests could not: the unit's system-call filter killed dnsmasq, a failed commit left addresses behind, `ox explain` said "no route" for an uplink with no fixed address, and the daemon hung forever on any DNS or DHCP change because the unit gave it no right to signal dnsmasq (CAP_KILL). The namespace tests run dnsmasq as the daemon's own user, so they cannot see permission problems between the two.
 
 The strongest `cargo test` test is `packets_cross_the_box_as_the_config_and_explain_say` in `crates/oxd/tests/daemon.rs`: three namespaces, real traffic, and every result compared with explain. When you add a data-plane feature, extend that lab instead of trusting the rendered JSON alone.
 

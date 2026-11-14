@@ -52,6 +52,9 @@ pub struct Target {
     pub gateways: Vec<(String, std::net::IpAddr)>,
     /// Interfaces where the box asks the network for its IPv4 address.
     pub dhcp_clients: Vec<String>,
+    /// WireGuard tunnels to bring up, by interface name. Tunnels that are
+    /// not listed must not exist.
+    pub wireguard: BTreeMap<String, ox_schema::WireGuard>,
 }
 
 /// What the box does before it has any config.
@@ -77,6 +80,7 @@ impl Baseline {
             uplinks: vec![],
             gateways: vec![],
             dhcp_clients: vec![],
+            wireguard: BTreeMap::new(),
         }
     }
 }
@@ -292,6 +296,12 @@ fn target(config: &Config, ruleset: &Ruleset) -> Target {
             .interfaces
             .iter()
             .flat_map(|(name, i)| i.addresses.iter().map(move |a| (name.clone(), a.0)))
+            .chain(
+                config
+                    .wireguard
+                    .iter()
+                    .flat_map(|(name, w)| w.addresses.iter().map(move |a| (name.clone(), a.0))),
+            )
             .collect(),
         // Traffic to and from the box itself needs no routing.
         forwarding: !config.nat.is_empty()
@@ -316,6 +326,7 @@ fn target(config: &Config, ruleset: &Ruleset) -> Target {
             .filter(|(_, i)| i.dhcp_client)
             .map(|(name, _)| name.clone())
             .collect(),
+        wireguard: config.wireguard.clone(),
     }
 }
 

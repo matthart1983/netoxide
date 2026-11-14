@@ -169,11 +169,21 @@ pub fn diff(running: &Config, candidate: &Config) -> Vec<Change> {
         &candidate.interfaces,
         |i| {
             format!(
-                "zone {} addresses {}{}",
+                "zone {} addresses {}{}{}{}",
                 i.zone,
                 list(&i.addresses.iter().map(|a| a.0).collect::<Vec<_>>()),
                 if i.default_route {
                     " default route"
+                } else {
+                    ""
+                },
+                if i.gateway.is_empty() {
+                    String::new()
+                } else {
+                    format!(" through {}", list(&i.gateway))
+                },
+                if i.dhcp_client {
+                    " address from the network"
                 } else {
                     ""
                 }
@@ -295,6 +305,118 @@ pub fn diff(running: &Config, candidate: &Config) -> Vec<Change> {
         &by_id(&candidate.nat.outbound),
         outbound_summary,
     );
+
+    // The services the box runs.
+    let dns = |c: &Config| -> BTreeMap<String, ox_schema::Dns> {
+        c.dns
+            .iter()
+            .map(|d| ("resolver".to_string(), d.clone()))
+            .collect()
+    };
+    named(&mut out, "dns", &dns(running), &dns(candidate), |d| {
+        format!(
+            "answers {}; forwards to {}; DNSSEC {}; {}{} local name(s)",
+            list(&d.zones),
+            list(&d.upstream),
+            if d.dnssec { "on" } else { "off" },
+            d.domain
+                .as_ref()
+                .map(|x| format!("domain {x}; "))
+                .unwrap_or_default(),
+            d.hosts.len()
+        )
+    });
+    named(&mut out, "dhcp pool", &running.dhcp, &candidate.dhcp, |p| {
+        format!(
+            "{} to {}, kept for {}, {} fixed address(es){}",
+            p.first,
+            p.last,
+            p.lease,
+            p.statics.len(),
+            if p.dns.is_empty() {
+                String::new()
+            } else {
+                format!(", DNS {}", list(&p.dns))
+            }
+        )
+    });
+    if running.ipv6_autoconfig != candidate.ipv6_autoconfig {
+        out.push(Change {
+            kind: Kind::Changed,
+            what: "ipv6 announcements".into(),
+            detail: format!(
+                "{} → {}",
+                list(&running.ipv6_autoconfig),
+                list(&candidate.ipv6_autoconfig)
+            ),
+        });
+    }
+
+    // Tunnels, then their peers one by one, so adding a device reads as
+    // one added peer and not as a changed tunnel.
+    let shell = |c: &Config| -> BTreeMap<String, (String, String, Option<u16>)> {
+        c.wireguard
+            .iter()
+            .map(|(name, w)| {
+                let addrs: Vec<_> = w.addresses.iter().map(|a| a.0).collect();
+                (name.clone(), (w.zone.clone(), list(&addrs), w.listen_port))
+            })
+            .collect()
+    };
+    named(
+        &mut out,
+        "tunnel",
+        &shell(running),
+        &shell(candidate),
+        |(zone, addrs, port)| {
+            format!(
+                "zone {zone} addresses {addrs}{}",
+                port.map(|p| format!(" listening on udp/{p}"))
+                    .unwrap_or_default()
+            )
+        },
+    );
+    let peers = |c: &Config| -> BTreeMap<String, ox_schema::WgPeer> {
+        c.wireguard
+            .iter()
+            .flat_map(|(name, w)| {
+                w.peers
+                    .iter()
+                    .map(move |p| (format!("{name} {}", p.name), p.clone()))
+            })
+            .collect()
+    };
+    named(
+        &mut out,
+        "tunnel peer",
+        &peers(running),
+        &peers(candidate),
+        |p| {
+            format!(
+                "may use {}{}{}; key {}…",
+                list(&p.allowed),
+                p.endpoint
+                    .map(|e| format!("; reached at {e}"))
+                    .unwrap_or_default(),
+                p.keepalive
+                    .map(|k| format!("; keepalive {k} s"))
+                    .unwrap_or_default(),
+                p.public_key.chars().take(8).collect::<String>()
+            )
+        },
+    );
+
+    // A plan that says "no changes" for two different configs would be a
+    // lie. This catches a setting added to the schema and not to this list.
+    if out.is_empty() && running != candidate {
+        out.push(Change {
+            kind: Kind::Changed,
+            what: "config".into(),
+            detail:
+                "something differs that this plan has no description for; compare the two files"
+                    .into(),
+        });
+    }
     out
 }
 

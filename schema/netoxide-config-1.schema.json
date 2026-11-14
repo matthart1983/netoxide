@@ -396,6 +396,87 @@
       "description": "\"masquerade\" or a source address",
       "type": "string"
     },
+    "WgPeer": {
+      "additionalProperties": false,
+      "description": "A device or site on the other end of a tunnel.",
+      "properties": {
+        "allowed": {
+          "description": "The addresses this peer may send from, and that are routed to it:\none address for a laptop, whole networks for another site.",
+          "items": {
+            "$ref": "#/$defs/Net"
+          },
+          "type": "array"
+        },
+        "endpoint": {
+          "description": "Where to reach the peer, as address and port. Leave it out for a\npeer that connects to this box.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keepalive": {
+          "description": "Send a packet this often, in seconds, to keep a path through\nsomeone else's NAT open. 25 is the usual value.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "public_key": {
+          "description": "The peer's public key, as WireGuard prints it (44 characters).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "public_key",
+        "allowed"
+      ],
+      "type": "object"
+    },
+    "WireGuard": {
+      "additionalProperties": false,
+      "description": "One WireGuard interface.",
+      "properties": {
+        "addresses": {
+          "default": [],
+          "description": "Addresses of the box inside the tunnel, each with its prefix length.",
+          "items": {
+            "$ref": "#/$defs/IfaceAddr"
+          },
+          "type": "array"
+        },
+        "listen_port": {
+          "description": "The UDP port peers connect to. Leave it out on a box that only\nconnects out to its peers.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "peer": {
+          "items": {
+            "$ref": "#/$defs/WgPeer"
+          },
+          "type": "array"
+        },
+        "zone": {
+          "description": "The zone the tunnel is in. Policies from and to it decide what the\npeers may reach.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "zone"
+      ],
+      "type": "object"
+    },
     "Zone": {
       "additionalProperties": false,
       "properties": {
@@ -482,6 +563,13 @@
         "type": "array"
       },
       "description": "Named services, used in rules by name.",
+      "type": "object"
+    },
+    "wireguard": {
+      "additionalProperties": {
+        "$ref": "#/$defs/WireGuard"
+      },
+      "description": "WireGuard tunnels, by interface name.",
       "type": "object"
     },
     "zones": {

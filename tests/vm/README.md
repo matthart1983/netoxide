@@ -23,9 +23,10 @@ outside server that also plays the internet provider.
 - DNS: a local name, a name resolved through the upstream, and no answer for the outside.
 - A commit that is not confirmed is undone when its timer ends.
 - The daemon is killed: traffic keeps flowing, systemd restarts it, DNS and DHCP come back. Killed again with a commit waiting, the restart undoes that commit.
+- VPN: `ox vpn add` on the box, then a second daemon playing a laptop on the outside brings its tunnel up, fetches a page from the inside network and resolves a local name through the box. A commit that does not touch the tunnel leaves it connected.
 - HTTPS: a token gets in over IPv4 and IPv6, no token does not, a viewer cannot commit, the outside cannot reach the listener.
 - A reboot: the daemon starts, loads the same commit, and all the traffic checks pass again.
-- Removal as the install notes describe leaves no process and no rules.
+- Removal as the install notes describe leaves no process, no tunnel and no rules.
 
 ## How it works
 

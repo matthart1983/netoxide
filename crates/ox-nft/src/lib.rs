@@ -57,6 +57,9 @@ pub struct Iface {
     pub zone: String,
     pub addrs: Vec<IpNet>,
     pub default_route: bool,
+    /// Networks reached through this interface beyond its own: what a
+    /// WireGuard tunnel's peers are allowed.
+    pub routes: Vec<IpNet>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -586,7 +589,21 @@ pub fn compile(config: &Config) -> Result<Ruleset, CompileError> {
                 zone: i.zone.clone(),
                 addrs: i.addresses.iter().map(|a| a.0).collect(),
                 default_route: i.default_route,
+                routes: vec![],
             })
+            .chain(config.wireguard.iter().map(|(name, w)| {
+                Iface {
+                    name: name.clone(),
+                    zone: w.zone.clone(),
+                    addrs: w.addresses.iter().map(|a| a.0).collect(),
+                    default_route: false,
+                    routes: w
+                        .peers
+                        .iter()
+                        .flat_map(|p| p.allowed.iter().map(|n| n.0.trunc()))
+                        .collect(),
+                }
+            }))
             .collect(),
         chains,
         forwards: config

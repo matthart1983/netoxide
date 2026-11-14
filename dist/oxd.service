@@ -35,8 +35,9 @@ RuntimeDirectory=netoxide
 RuntimeDirectoryMode=0750
 
 # What it needs: load firewall rules, bind low ports for DNS and DHCP, send
-# DHCP replies, and let dnsmasq switch to its own user.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SETUID CAP_SETGID
+# DHCP replies, let dnsmasq switch to its own user, and stop dnsmasq again
+# once it runs as that user (CAP_KILL).
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_KILL
 AmbientCapabilities=
 NoNewPrivileges=yes
 

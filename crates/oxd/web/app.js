@@ -32,6 +32,8 @@ const state = {
   running: null,      // { config, summary, describe }
   hits: {},           // rule ID -> packets
   leases: [],
+  tunnels: [],        // WireGuard tunnels of the running config, with peer state
+  vpnDevice: null,    // the config for a device just added; shown once
   hygiene: [],       // findings about rules in the running config
   candidate: null,    // selected candidate name
   meta: null,
@@ -123,6 +125,7 @@ async function refresh(rerender) {
     }
     state.hits = parseHits(await call('GET', '/v1/kernel').catch(() => null));
     state.leases = await call('GET', '/v1/leases');
+    state.tunnels = await call('GET', '/v1/wireguard').catch(() => []);
     state.hygiene = await call('GET', '/v1/hygiene').catch(() => []);
     const names = state.status.candidates || [];
     if (!names.includes(state.candidate)) state.candidate = names[0] || null;
@@ -347,7 +350,31 @@ function network() {
           state.leases.map((l) => [l.address, h('span', { class: 'id' }, l.mac), l.name || h('span', { class: 'dim' }, 'no name'), when(l.expires)]))
         : h('p', { class: 'dim' }, 'No device has asked for an address yet.')));
   }
+  for (const t of state.tunnels) {
+    const now = Date.now() / 1000;
+    out.push(h('div', { class: 'panel' },
+      h('h2', null, 'VPN tunnel ' + t.name),
+      h('p', null, 'Zone ' + t.zone + ', ' + (t.addresses || []).join(', ') +
+        (t.listen_port ? ', listening on udp/' + t.listen_port + '.' : ', connects out only.')),
+      h('p', null, "This box's public key: ", h('code', null, t.public_key)),
+      t.peers.length
+        ? table(['Peer', 'State', 'May use', { label: 'Received', num: true }, { label: 'Sent', num: true }],
+          t.peers.map((p) => [h('b', null, p.name),
+            !p.last_handshake ? h('span', { class: 'dim' }, 'never connected')
+              : now - p.last_handshake < 180 ? h('span', { class: 'tag accept' }, 'connected')
+                : 'last heard from ' + when(p.last_handshake),
+            (p.allowed || []).join(', '), size(p.rx_bytes), size(p.tx_bytes)]))
+        : h('p', { class: 'dim' }, 'No peers yet.')));
+  }
   return out;
+}
+
+function size(n) {
+  if (!n) return '0';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+  return (i ? n.toFixed(1) : n) + ' ' + units[i];
 }
 
 function field(label, key, obj, attrs) {
@@ -370,20 +397,39 @@ function changes() {
       h('h2', null, 'New change'),
       h('button', { onclick: open('forward'), disabled: !state.running }, 'Forward a port'),
       h('button', { onclick: open('block'), disabled: !state.running }, 'Block a device'),
+      h('button', { onclick: open('vpn'), disabled: !state.running }, 'Add a VPN device'),
       h('button', { onclick: () => { state.draft = { name: '', text: '' }; state.form = 'edit'; loadDraft(); } }, 'Edit the config'),
     ] : null);
 
   let right;
   if (state.form === 'forward') right = forwardForm();
   else if (state.form === 'block') right = blockForm();
+  else if (state.form === 'vpn') right = vpnForm();
   else if (state.form === 'edit') right = editForm();
   else if (state.candidate) right = candidatePanel(pending);
   else right = h('div', { class: 'panel' }, h('p', { class: 'dim' }, 'Choose a candidate, or start a new change.'));
-  return h('div', { class: 'split' }, left, h('div', null, right));
+  return h('div', { class: 'split' }, left, h('div', null, vpnDevicePanel(), right));
+}
+
+// The config for a device that was just added. It holds the device's
+// private key, which the box does not keep, so it stays until dismissed
+// and is gone on reload.
+function vpnDevicePanel() {
+  const d = state.vpnDevice;
+  if (!d) return null;
+  return h('div', { class: 'panel' },
+    h('h2', null, 'Config for ' + d.name),
+    h('p', null, 'Import this into the WireGuard app on the device. The device connects once the candidate is committed.'),
+    h('pre', { class: 'secret' }, d.config),
+    h('p', { class: 'dim' }, d.made
+      ? "This is the only copy of the device's private key. The box does not keep it."
+      : "Put the device's own private key in place of the placeholder."),
+    h('div', { class: 'row' }, h('button', { onclick: () => { state.vpnDevice = null; render(); } }, 'I have saved it')));
 }
 
 const draftForward = { name: '', port: 'tcp/443', to: '', to_port: '', address: '' };
 const draftBlock = { address: '', name: '' };
+const draftVpn = { name: '', endpoint: '', public_key: '' };
 
 function saved(result) {
   state.candidate = result.candidate;
@@ -423,6 +469,29 @@ function blockForm() {
     h('div', { class: 'fields' },
       field('Device address', 'address', draftBlock, { required: true, placeholder: '192.168.10.66' }),
       field('What is it?', 'name', draftBlock, { placeholder: 'Smart TV' })),
+    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save as candidate'),
+      h('button', { type: 'button', onclick: () => { state.form = null; render(); } }, 'Cancel')));
+}
+
+function vpnForm() {
+  const go = (e) => {
+    e.preventDefault();
+    const body = { name: draftVpn.name, endpoint: draftVpn.endpoint };
+    if (draftVpn.public_key) body.public_key = draftVpn.public_key;
+    act(() => call('POST', '/v1/actions/vpn-peer', body), (result) => {
+      state.vpnDevice = { name: draftVpn.name, config: result.client_config, made: result.key_made_here };
+      draftVpn.name = '';
+      draftVpn.public_key = '';
+      return saved(result);
+    });
+  };
+  return h('form', { class: 'panel', onsubmit: go },
+    h('h2', null, 'Add a VPN device'),
+    h('p', { class: 'dim' }, 'Lets a phone or laptop reach the inside network from anywhere, over WireGuard. The first device also sets the VPN up: the tunnel, the rule that lets devices connect, and the rules for what they may reach.'),
+    h('div', { class: 'fields' },
+      field('What is it?', 'name', draftVpn, { required: true, placeholder: 'laptop' }),
+      field('How the device finds this box from outside', 'endpoint', draftVpn, { required: true, placeholder: 'home.example.net' }),
+      field("The device's public key, if it made its own", 'public_key', draftVpn, { placeholder: 'make one for it' })),
     h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save as candidate'),
       h('button', { type: 'button', onclick: () => { state.form = null; render(); } }, 'Cancel')));
 }

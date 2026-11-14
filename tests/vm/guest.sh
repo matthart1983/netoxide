@@ -18,6 +18,8 @@ note() { echo "# $*"; }
 check() {
     local name=$1
     shift
+    # A command that hangs fails the check and the run goes on.
+    [ "$(type -t "$1")" = file ] && set -- timeout 45 "$@"
     if "$@" >/tmp/out 2>&1; then ok "$name"; else
         bad "$name"
         tail -n 15 /tmp/out | sed 's/^/    /'
@@ -62,6 +64,13 @@ finish() {
     if [ "$fails" -eq 0 ]; then echo "VMTEST PASS"; else
         echo "VMTEST FAIL ($fails)"
         journalctl -u oxd --no-pager -n 60 | sed 's/^/    /'
+        journalctl -k --no-pager -n 4 | sed 's/^/    /'
+        # Where each of the daemon's threads is, in case it hangs.
+        for t in /proc/"$(systemctl show -p MainPID --value oxd)"/task/*; do
+            echo "    thread $(cat "$t/comm") syscall $(cut -d' ' -f1-3 "$t/syscall" 2>/dev/null)"
+            head -n 7 "$t/stack" 2>/dev/null | sed 's/^/        /'
+        done
+        ps -eo pid,ppid,stat,comm | grep -E "dnsmasq|modprobe|oxd" | sed 's/^/    /'
     fi
     sync
     systemctl poweroff
@@ -104,6 +113,21 @@ lab() {
         --dhcp-leasefile=/tmp/srv.leases >/tmp/srv-dns.log 2>&1 &
 }
 
+# A second Netoxide daemon in the server's namespace plays a laptop
+# somewhere on the internet that connects to the box's VPN.
+remote() { OX_SOCKET=$STATE/remote.sock ox "$@"; }
+remote_up() {
+    srv oxd --state-dir $STATE/remote --socket $STATE/remote.sock >/tmp/remote.log 2>&1 &
+    wait_for 5 remote status
+}
+vpn_checks() {
+    local when=$1
+    check "$when: the VPN device reaches the inside web server through the tunnel" wait_for 20 says inside sfetch http://192.168.50.50/
+    check "$when: it resolves a local name through the box" says 192.168.50.7 srv dig +short +time=2 +tries=1 @10.90.0.1 printer.home.arpa
+    check "$when: the tunnel does not open the box's admin port" times_out srv curl -sk --max-time 3 https://10.90.0.1:8443/v1/status
+    check "$when: ox vpn shows the device as connected" bash -c 'ox vpn | grep laptop | grep -q connected'
+}
+
 # The client asks the box for an address and takes what it is given.
 client_up() {
     ip -n cli link set eth1 up
@@ -126,7 +150,9 @@ traffic_checks() {
     check "$when: a port no rule allows is dropped" times_out cfetch http://203.0.113.2:8081/
     check "$when: and dropped over IPv6" times_out cfetch 'http://[2001:db8:113::2]:8081/'
     check "$when: the forwarded port reaches the inside server" says inside sfetch http://203.0.113.10:8080/
-    check "$when: the outside cannot reach another inside port" times_out sfetch http://192.168.50.50:8082/
+    if [ ! -e $STATE/vpn ]; then
+        check "$when: the outside cannot reach another inside port" times_out sfetch http://192.168.50.50:8082/
+    fi
     check "$when: inside can ping the box" cli ping -c1 -W2 192.168.50.1
     refute "$when: outside cannot ping the box" srv ping -c1 -W2 203.0.113.10
     check "$when: the box answers a local name" says 192.168.50.7 cli dig +short +time=2 +tries=1 @192.168.50.1 printer.home.arpa
@@ -200,6 +226,53 @@ if [ "$stage" = 1 ]; then
     wait_for 10 ox status
     check "crash with a commit waiting: the restart undoes it" wait_for 5 says outside cfetch http://203.0.113.2/
 
+    # --- VPN: one command on the box, then a device connects ---
+    touch $STATE/vpn
+    check "vpn: the laptop's daemon starts" remote_up
+    laptop_key=$(remote vpn --key wg0)
+    check "vpn: add the laptop with its own public key" bash -c "ox vpn add laptop --endpoint 203.0.113.10 --public-key '$laptop_key' >/tmp/vpn-add.txt"
+    check "vpn: the device config names the box and the inside network" bash -c 'grep -q "Endpoint = 203.0.113.10:51820" /tmp/vpn-add.txt && grep -q "AllowedIPs = 10.90.0.0/24, 192.168.50.0/24" /tmp/vpn-add.txt && grep -q "DNS = 10.90.0.1" /tmp/vpn-add.txt'
+    check "vpn: commit on the box" ox commit vpn-laptop --reason "vpn"
+    # Everything after this needs the daemon to answer.
+    [ "$fails" -eq 0 ] || finish
+    check "vpn: the tunnel interface exists under the unit's sandbox" ip link show wg0
+    box_key=$(ox vpn --key wg0)
+    # The laptop's side, written from what the device config says.
+    cat >/tmp/laptop.toml <<TOML
+schema = 1
+hostname = "laptop"
+[zones.wan]
+[zones.vpn]
+[interfaces.eth3]
+zone = "wan"
+addresses = ["203.0.113.2/24"]
+[wireguard.wg0]
+zone = "vpn"
+addresses = ["10.90.0.2/32"]
+[[wireguard.wg0.peer]]
+name = "home"
+public_key = "$box_key"
+allowed = ["10.90.0.0/24", "192.168.50.0/24"]
+endpoint = "203.0.113.10:51820"
+keepalive = 25
+# This namespace also plays the provider, so it takes what the box sends it.
+[[policy]]
+from = "wan"
+to = "self"
+[[policy.rule]]
+id = "r-provider"
+name = "The pretend provider's own services"
+action = "accept"
+TOML
+    # Without the tunnel the laptop would reach the inside network by the
+    # plain route the earlier checks use.
+    ip -n srv route del 192.168.50.0/24
+    check "vpn: the laptop's config is accepted" remote candidate save vpn /tmp/laptop.toml
+    check "vpn: the laptop brings its tunnel up" remote commit vpn
+    vpn_checks "vpn"
+    check "vpn: a commit that does not touch the tunnel leaves it connected" bash -c 'ox running >/tmp/now.toml && ox candidate save again /tmp/now.toml && ox commit again --reason "no change" && ox vpn | grep laptop | grep -q connected'
+    check "vpn: and traffic still flows right after it" says inside sfetch http://192.168.50.50/
+
     # --- HTTPS and tokens ---
     mkdir -p /etc/netoxide
     echo 'OXD_ARGS=--listen [::]:8443' >/etc/netoxide/oxd.env
@@ -237,15 +310,23 @@ check "reboot: the box gets its outside address again" wait_for 20 bash -c 'ip -
 check "reboot: the client gets its address" client_up
 wait_for 15 bash -c 'ip -n cli -6 addr show dev eth1 scope global | grep -q 2001:db8:50:'
 wait_for 10 bash -c '! ip -n cli -6 addr show dev eth1 | grep -q tentative'
+check "reboot: the laptop's daemon starts again" remote_up
 traffic_checks "after reboot"
+vpn_checks "after reboot"
 check "reboot: the audit log still verifies" ox audit
+
+# The pretend laptop's daemon is not part of the install.
+pkill -f "oxd --state-dir $STATE/remote"
+sleep 1
 
 # --- remove it, as dist/README.md says ---
 systemctl disable --now oxd
 nft delete table inet netoxide
 rm /etc/systemd/system/oxd.service /usr/bin/oxd /usr/bin/ox
 rm -r /var/lib/netoxide
+ip link del wg0
 refute "remove: no daemon left" pgrep -x oxd
 refute "remove: no dnsmasq of ours left" pgrep -f 'dnsmasq.*netoxide'
+refute "remove: no tunnel left" ip link show wg0
 refute "remove: no rules left" bash -c 'nft list tables | grep -q netoxide'
 finish

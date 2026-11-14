@@ -28,7 +28,7 @@ jobs:
       - name: Allow unprivileged user namespaces
         # The kernel tests run nftables, the daemon and dnsmasq inside a
         # rootless network namespace, which Ubuntu 24.04 blocks by default.
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 && sudo modprobe wireguard
       - name: Test
         # With this set, a kernel test that would skip itself fails instead.
         env:

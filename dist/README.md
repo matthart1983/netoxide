@@ -68,6 +68,25 @@ Open `https://<box>:8443/` and sign in with the token. The daemon makes its
 own certificate on first start, so the browser will warn. Give it a real one
 with `--tls-cert` and `--tls-key`.
 
+## A VPN for your own devices
+
+```sh
+sudo ox vpn add laptop --endpoint home.example.net
+sudo ox plan vpn-laptop
+sudo ox commit vpn-laptop --confirm 5m
+sudo ox confirm
+```
+
+The first command sets the VPN up if there is none (a WireGuard tunnel, the
+rule that lets devices connect, and rules that let them reach the inside
+network), adds the device, and prints a config file. Import that file into
+the WireGuard app on the device. `--endpoint` is the name or address the
+device uses to find the box from outside. The printed file holds the device's
+private key and is the only copy.
+
+`sudo ox vpn` shows each device and when it was last heard from. The kernel
+needs its `wireguard` module, which every current distribution kernel has.
+
 ## Locking down an unconfigured box
 
 Add `--lockdown` to `OXD_ARGS` to drop inbound and forwarded traffic while
@@ -87,5 +106,9 @@ needs a token; a viewer token is enough.
 sudo systemctl disable --now oxd
 sudo nft delete table inet netoxide     # the rules stay loaded until you do this
 sudo rm /etc/systemd/system/oxd.service /usr/bin/oxd /usr/bin/ox
-sudo rm -r /var/lib/netoxide            # commits, candidates, tokens, audit log
+sudo rm -r /var/lib/netoxide            # commits, candidates, tokens, audit log, VPN keys
+sudo ip link del wg0                    # once for each VPN tunnel, if you had any
 ```
+
+Addresses the daemon put on your network ports stay until the next reboot or
+until you remove them.

@@ -68,6 +68,7 @@ The research behind this is in [`docs/research/market-gap.md`](docs/research/mar
 | Health | Prometheus metrics at `/metrics`, and a hygiene report of rules that never apply, add nothing, allow everything, or have seen no packets. |
 | Addresses and routes | On a commit the daemon puts the config's addresses on their interfaces, brings those links up, sets the default route through the `gateway` you name, and turns on packet forwarding, over netlink. It takes an address or route off again when a later config drops it or a commit fails, and only ever the ones it added itself. |
 | Port forwards that follow the address | A forward with no `address` applies to whatever address the box has, so it keeps working when the provider changes it. `ox forward` and the web form write that when the internet port has no fixed address. |
+| VPN | WireGuard tunnels, using the kernel's own implementation over netlink. A tunnel is an interface in a zone, so ordinary policies decide what crosses it. `ox vpn add laptop --endpoint home.example.net` sets a VPN up, adds the device and prints the config file for its WireGuard app. Two boxes can join their networks the same way. The box's private key never leaves its state directory. |
 | Internet-side address | With `dhcp_client = true` the box asks the provider's network for its IPv4 address and router, renews the lease, and asks for the same address after a restart. `ox init` sets this up when you say the provider assigns the address. |
 | IPv6 and own traffic | The box can announce its IPv6 network so devices configure themselves, and policies from `self` filter what the box itself sends. |
 | Audit log | Every candidate save, commit, confirm and revert is appended to a hash-chained log. Editing or deleting a line breaks the chain, and the log says which line. Entries cut off the end are noticed too. A damaged log never stops the firewall loading: it is repaired or set aside, and the damage becomes the next entry. |
@@ -276,6 +277,29 @@ address = "192.168.10.5"
 name = "nas"
 ```
 
+A WireGuard tunnel is one more section. The config holds each peer's public key and never a private one:
+
+```toml
+[wireguard.wg0]
+zone = "vpn"                           # policies from and to "vpn" decide what peers reach
+addresses = ["10.90.0.1/24"]
+listen_port = 51820                    # needs an accept rule for udp/51820 to self
+
+[[wireguard.wg0.peer]]
+name = "laptop"
+public_key = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg="
+allowed = ["10.90.0.2/32"]             # one address for a device, whole networks for a site
+
+[[wireguard.wg0.peer]]
+name = "branch"
+public_key = "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykw="
+allowed = ["10.90.0.3/32", "192.168.77.0/24"]
+endpoint = "198.51.100.7:51820"        # this box connects out to that one
+keepalive = 25
+```
+
+`ox vpn --key wg0` prints this box's public key for a tunnel, before or after the tunnel is in the config, so two sites can swap keys first.
+
 DNSSEC checking is on unless you set `dnssec = false`. Clients are told to use the box as their resolver and router. A service needs a visible rule like everything else: validation refuses a config that serves DNS or DHCP to a zone without an accept rule for it in that zone's policy to `self`, and says which rule to add.
 
 Validation catches things like unknown zones and groups, duplicate rule IDs, rules whose source and destination are different address families, and a forward that names a rule from the wrong zone. A typo such as `tcp/99999` or `10.20.4.17/16` fails with the value named and the fix suggested.
@@ -446,6 +470,9 @@ Daemon commands. All take `--socket <path>` or the `OX_SOCKET` variable. The def
 | `ox token create <name> --role <role> [--days N]` / `list` / `revoke <name>` | Access tokens for the HTTPS API and the web UI |
 | `ox whoami` | Who the daemon thinks you are |
 | `ox leases` | The addresses DHCP has handed out |
+| `ox vpn` | Each tunnel: this box's public key, and every peer with when it was last heard from and how much it sent |
+| `ox vpn add <name> --endpoint <host> [--public-key <key>]` | Add a phone or laptop to the VPN, setting the VPN up if there is none. Saves a candidate and prints the device's config |
+| `ox vpn --key <interface>` | Print this box's public key for a tunnel, making the key if needed |
 | `ox kernel` | The Netoxide table as the kernel holds it |
 | `ox forward --name <text> --port tcp/443 --to <host>[:port] [--address <outside address>]` | Forward a port to an inside host; saved as a candidate |
 | `ox block <address> [--name <text>]` | Drop everything a device sends; saved as a candidate |
@@ -509,7 +536,9 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `GET /v1/whoami` | | The caller's name and role |
 | `GET /v1/running/json` | | The running config as JSON, with what it does in sentences |
 | `POST /v1/check` | TOML | Validates a config without storing it |
-| `POST /v1/actions/forward`, `/v1/actions/block` | JSON | One-step actions; each saves a candidate |
+| `POST /v1/actions/forward`, `/v1/actions/block`, `/v1/actions/vpn-peer` | JSON | One-step actions; each saves a candidate |
+| `GET /v1/wireguard` | | Tunnels of the running config with each peer's state |
+| `GET /v1/wireguard/{interface}/key` | | This box's public key for a tunnel; makes the key pair if there is none |
 | `GET /v1/candidates/{name}/meta` | | Author and approval of a candidate |
 | `POST /v1/candidates/{name}/approve` | | Four-eyes approval |
 | `GET` / `PUT /v1/settings` | `{"four_eyes": true}` | The four-eyes setting |
@@ -592,18 +621,19 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 137 tests. Eight of them use the real kernel inside a private, rootless network namespace:
+There are 145 tests. Nine of them use the real kernel inside a private, rootless network namespace:
 
 - The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
 - The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.
 - The home example's resolver is queried with `dig` over IPv4 and IPv6, a record is changed with a confirm window, and the old answer returns when the window lapses.
 - A small DHCP client on the far end of a virtual cable gets an address from the pool and a fixed address through the firewall, and stops being answered when the rule is removed.
 - A service that cannot start refuses the commit and leaves the kernel unchanged.
+- Two boxes, each with its own daemon, swap public keys and join their inside networks with a WireGuard tunnel. A device behind one fetches a page from the other over IPv4 and IPv6, a port the rules do not allow is dropped, explain follows the route through the tunnel, both ends report the peer as connected, narrowing a peer's networks stops that traffic only, and removing the tunnel removes the interface.
 - Real packets cross the box between three namespaces, a client inside, the box, and a server outside: web and ping are allowed out and the source is rewritten, another port is dropped, a forwarded port reaches the inside server, the kernel's counters land on the right rules, and each result matches what `ox explain` says for the same packet. A change that is not kept stops blocking traffic when its window lapses. Renumbering the inside network takes the old address off the port and leaves an address someone else put there.
 - The HTTPS listener is called with curl: tokens, roles, four-eyes approval and revocation.
 - The web UI's endpoints and the page's security headers are checked.
 
-A separate test boots a virtual machine and checks the installed daemon under systemd: 99 checks across install, DHCP in both directions, DNS, IPv4 and IPv6 traffic, the undo timer, a killed daemon, a reboot and removal. It needs QEMU with KVM and is not part of `cargo test`. See [`tests/vm/README.md`](tests/vm/README.md).
+A separate test boots a virtual machine and checks the installed daemon under systemd: 116 checks across install, DHCP in both directions, DNS, IPv4 and IPv6 traffic, the undo timer, a killed daemon, a VPN device that connects and reaches the inside network, a reboot and removal. It needs QEMU with KVM and is not part of `cargo test`. See [`tests/vm/README.md`](tests/vm/README.md).
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
@@ -628,7 +658,8 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 - **The systemd unit and the install steps have run only in the test VM**, with SELinux off and virtual network cards.
 - **Long zone pairs lose per-rule counters.** A pair that needs more than 32 nftables rules is merged: neighbouring rules with the same action become one set lookup and share a counter, so the TUI shows no packet count for them. Rules that log, match ICMP or any service, or overlap a neighbour are not merged. A pair that is still over 32 after merging is refused.
 - **Explain knows only connected networks and the default route.** A destination behind a static or dynamic route shows "no route".
-- **Schema 1 has no VPN, routing protocols, traffic shaping, schedules or HA.**
+- **The VPN is WireGuard only, and plain.** No IPsec or OpenVPN. A peer's `allowed` cannot be everything (`0.0.0.0/0`): sending all of the box's traffic through a tunnel needs policy routing, which is not built. A device can still send all of *its* traffic through the box if you add a policy from the VPN zone to the internet and an outbound NAT for it by hand. There are no preshared keys, and no QR code for phones: copy the config file over. The tunnel has been tested between two Netoxide daemons, not yet against the official WireGuard apps.
+- **Schema 1 has no routing protocols, traffic shaping, schedules or HA.**
 - **The importer reads pfSense only** and has not been tested on a real backup.
 - **Nothing has run on real hardware or under real traffic.** The furthest it has been is a virtual machine on one developer's computer.
 
@@ -639,7 +670,7 @@ Roughly in the order planned:
 1. Running it on real hardware, with SELinux enforcing, and a first deployment that is watched.
 2. Services as sandboxed systemd units, and Unbound and Kea as backends beside dnsmasq.
 3. More one-step actions such as "add a guest network", rule editing in the terminal UI, and live trace.
-4. WireGuard, then IPsec.
+4. IPsec, and for WireGuard: all traffic through a tunnel, preshared keys, a QR code.
 5. Single sign-on (OIDC), finer roles, and remote use of `ox` over HTTPS.
 6. Multi-WAN, routing protocols, traffic shaping, IDS.
 7. OPNsense import, and the pfSense importer tested on real backups.

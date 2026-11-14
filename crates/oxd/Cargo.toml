@@ -26,6 +26,15 @@ ox-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+netlink-packet-wireguard = "0.5.1"
+genetlink = "0.3.1"
+netlink-packet-generic = "0.5"
+netlink-packet-core = "0.9"
+base64 = "0.23.1"
+x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+toml.workspace = true
