@@ -23,6 +23,7 @@ decision. This file gives you what you need to start working.
 | Commit engine | `crates/ox-store` | Candidates, commits, commit-confirm, auto revert, rollback, hash-chained audit log |
 | Kernel apply | `crates/ox-libnft` | FFI to libnftables. The only crate with `unsafe` |
 | Daemon | `crates/oxd` | HTTP+JSON API on a Unix socket and on HTTPS (`--listen`), applies to the kernel, runs dnsmasq, serves the web UI and `/metrics` |
+| Interfaces | `crates/oxd/src/net.rs` | On apply: add the config's addresses over netlink, bring links up, enable forwarding. Additive only; never removes. Missing interfaces are reported in status, not fatal |
 | Access control | `crates/ox-store/src/auth.rs`, `crates/oxd/src/api.rs` | Socket peer = admin, named from the kernel. HTTPS = bearer token with a role (viewer, auditor, operator, admin). Four-eyes approval. Every handler takes a `Caller` and calls `caller.may(Action::…)` first |
 | Web UI | `crates/oxd/web/` | `index.html`, `app.js`, `app.css`, compiled in with `include_str!`. No build step, no dependencies, strict CSP, daemon text inserted with `textContent` only |
 | Hygiene | `crates/ox-nft/src/hygiene.rs` | Shadowed, redundant and allow-everything rules; `oxd` adds "no packets" from kernel counters |
@@ -128,6 +129,8 @@ Proposed next, not decided, roughly in this order:
 7. OPNsense import, and testing the pfSense importer against real backups.
 8. HA, the fleet controller, a Terraform provider, the OS image.
 9. An independent security audit before any 1.0.
+
+The strongest test is `packets_cross_the_box_as_the_config_and_explain_say` in `crates/oxd/tests/daemon.rs`: three namespaces, real traffic, and every result compared with explain. When you add a data-plane feature, extend that lab instead of trusting the rendered JSON alone.
 
 Rules for work on the API and the web UI:
 

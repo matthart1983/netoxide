@@ -42,6 +42,12 @@ pub struct Target {
     /// Config text for each service the box runs, by service name. A
     /// service that is not listed must not be running.
     pub services: BTreeMap<String, String>,
+    /// Addresses the box should have, by interface.
+    pub addresses: Vec<(String, ipnet::IpNet)>,
+    /// True when the config routes packets between zones.
+    pub forwarding: bool,
+    /// Interfaces that carry the default route.
+    pub uplinks: Vec<String>,
 }
 
 /// What the box does before it has any config.
@@ -62,6 +68,9 @@ impl Baseline {
                 Baseline::Lockdown => render_lockdown(),
             },
             services: BTreeMap::new(),
+            addresses: vec![],
+            forwarding: false,
+            uplinks: vec![],
         }
     }
 }
@@ -260,6 +269,23 @@ fn target(config: &Config, ruleset: &Ruleset) -> Target {
         services: ox_services::dnsmasq_conf(config)
             .map(|conf| (ox_services::DNSMASQ.to_string(), conf))
             .into_iter()
+            .collect(),
+        addresses: config
+            .interfaces
+            .iter()
+            .flat_map(|(name, i)| i.addresses.iter().map(move |a| (name.clone(), a.0)))
+            .collect(),
+        // Traffic to and from the box itself needs no routing.
+        forwarding: !config.nat.is_empty()
+            || config
+                .policies
+                .iter()
+                .any(|p| p.from != ox_schema::SELF_ZONE && p.to != ox_schema::SELF_ZONE),
+        uplinks: config
+            .interfaces
+            .iter()
+            .filter(|(_, i)| i.default_route)
+            .map(|(name, _)| name.clone())
             .collect(),
     }
 }

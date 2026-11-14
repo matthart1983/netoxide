@@ -1,0 +1,69 @@
+# A small router used by the data-plane test: an inside network that may use
+# the web and ping, hidden behind the box, and one port forwarded inwards.
+schema = 1
+hostname = "router"
+
+[zones.wan]
+[zones.lan]
+
+[interfaces.eth0]
+zone = "wan"
+addresses = ["203.0.113.10/24"]
+default_route = true
+
+[interfaces.eth1]
+zone = "lan"
+addresses = ["192.168.10.1/24", "2001:db8:2::1/64"]
+
+[services]
+web = ["tcp/80"]
+ping = ["icmp", "icmpv6"]
+
+[[policy]]
+from = "lan"
+to = "wan"
+
+[[policy.rule]]
+id = "r-web"
+name = "Inside may use the web and ping"
+action = "accept"
+service = ["web", "ping"]
+
+[[policy]]
+from = "lan"
+to = "self"
+
+[[policy.rule]]
+id = "r-ping-box"
+name = "Inside may ping the box"
+action = "accept"
+service = ["ping"]
+
+[[policy]]
+from = "wan"
+to = "lan"
+
+[[policy.rule]]
+id = "r-fwd-web"
+name = "Forwarded web server"
+action = "accept"
+destination = ["192.168.10.50"]
+service = ["web"]
+
+[[nat.forward]]
+id = "n-fwd-web"
+name = "Web server inside"
+from = "wan"
+address = "203.0.113.10"
+service = "tcp/8080"
+to = "192.168.10.50"
+to_port = 80
+rule = "r-fwd-web"
+
+[[nat.outbound]]
+id = "n-out"
+name = "Hide the inside network"
+from = "lan"
+to = "wan"
+source = ["192.168.10.0/24"]
+translate = "masquerade"

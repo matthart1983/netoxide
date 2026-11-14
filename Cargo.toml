@@ -23,6 +23,8 @@ ox-import = { path = "crates/ox-import" }
 roxmltree = "0.21"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
 sha2 = "0.11"
+rtnetlink = "0.24"
+futures-util = { version = "0.3", default-features = false }
 axum-server = { version = "0.9", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }

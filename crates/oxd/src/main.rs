@@ -11,6 +11,7 @@
 //! forwarding with the last commit.
 
 mod api;
+mod net;
 mod services;
 mod tls;
 mod web;
@@ -33,6 +34,8 @@ struct SystemApplier {
     dnsmasq: services::Dnsmasq,
     /// The last target that was applied in full, for undoing a half-applied one.
     current: Option<Target>,
+    /// Interfaces the config names that this machine does not have.
+    missing: Vec<String>,
 }
 
 fn load(ruleset: &Value) -> Result<(), String> {
@@ -47,7 +50,19 @@ impl Applier for SystemApplier {
         // Check the service config before anything changes.
         self.dnsmasq.check(conf)?;
         load(&target.ruleset)?;
-        if let Err(e) = self.dnsmasq.apply(conf) {
+        // Addresses and forwarding come after the rules, so nothing is
+        // routed before the firewall is in place, and before the services,
+        // which listen on those addresses.
+        let rest = (|| {
+            self.missing = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(net::ensure_addresses(&target.addresses))
+            })?;
+            if target.forwarding {
+                net::enable_forwarding(&target.uplinks)?;
+            }
+            self.dnsmasq.apply(conf)
+        })();
+        if let Err(e) = rest {
             // The firewall changed and the service did not follow. Go back,
             // so the box is never half in one config and half in another.
             let (ruleset, old) = match &self.current {
@@ -81,6 +96,12 @@ impl Applier for SystemApplier {
             .state()
             .map(|s| (ox_services::DNSMASQ.to_string(), s))
             .into_iter()
+            .chain(self.missing.iter().map(|name| {
+                (
+                    format!("interface {name}"),
+                    "not on this machine; its addresses were not set".to_string(),
+                )
+            }))
             .collect()
     }
 }
@@ -198,6 +219,7 @@ async fn serve(args: Args) -> Result<(), String> {
                 args.keep_privileges,
             ),
             current: None,
+            missing: vec![],
         })
     };
     let baseline = if args.lockdown {
