@@ -340,6 +340,7 @@ oxd: the Netoxide daemon
   --state-dir <dir>   where commits, candidates and the audit log live
                       (default /var/lib/netoxide)
   --socket <path>     Unix socket for the API (default /run/netoxide/oxd.sock)
+  --version           print the version and exit
   --dry-run           keep state and serve the API, but load nothing into the kernel
                       and start no services
   --lockdown          until the first commit, drop forwarded and inbound traffic.
@@ -378,6 +379,10 @@ fn parse_args() -> Result<Args, String> {
         match a.as_str() {
             "--state-dir" => args.state_dir = it.next().ok_or("--state-dir needs a value")?.into(),
             "--socket" => args.socket = it.next().ok_or("--socket needs a value")?.into(),
+            "--version" | "-V" => {
+                println!("oxd {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "--dry-run" => args.dry_run = true,
             "--lockdown" => args.lockdown = true,
             "--keep-service-privileges" => args.keep_privileges = true,

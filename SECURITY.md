@@ -1,6 +1,6 @@
 # Security
 
-Netoxide is pre-alpha. It has not had a security audit and has not run on
+Netoxide 0.1 is a preview. It has not had a security audit and has not run on
 production hardware. Do not rely on it to protect a real network yet.
 
 ## Reporting a problem

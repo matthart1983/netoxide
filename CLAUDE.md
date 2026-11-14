@@ -46,7 +46,7 @@ Nobody has run it on hardware.
 
 An internal security review on 14 Nov 2026 found no auth bypass or config
 injection. Its other findings are fixed, with tests, except two that are
-listed under "Limits today" in the README: wall-clock deadlines and the unkeyed
+listed under "Limits today" in `docs/status.md`: wall-clock deadlines and the unkeyed
 audit chain. Section-limited roles and the remote CLI had their own internal pass on
 15 Nov; its five findings are fixed. The one that mattered: zone membership of
 an interface or tunnel is a firewall change (`zones_of` in `auth.rs`), because
@@ -70,6 +70,29 @@ pending reverts it.
 `ox-import` keeps a model of the pfSense ruleset (`pf.rs`) and checks its own
 translation against it with generated probes. When you add a translation, the
 probe test must still pass with only the known "Pass association" difference.
+
+## Docs and releases
+
+The top-level `README.md` is the front page: status, the terminal and browser
+overviews with pictures, a short feature list, a two-minute try, limits. Keep
+it short. Detail lives in `docs/`: `getting-started.md`, `config.md`,
+`interfaces.md`, `access.md`, `reference.md` (every command and route),
+`status.md` (what works, limits, not built), `architecture.md` (crates, design
+rules, tests). When a feature lands, update `docs/status.md`,
+`docs/reference.md` and `CHANGELOG.md`; touch the README only if the front
+page is now wrong.
+
+The pictures in `docs/images/` are made by hand: `netoxide-tui --socket <s>
+--snapshot <screen> --size 132x34 --html-out <file>` writes a live screen as a
+page, and the web pictures are browser captures of a `--dry-run` daemon loaded
+with `examples/branch.toml` and `examples/branch-candidate.toml`. Retake them
+when a screen changes.
+
+The version is 0.1.0 and is set once, in the workspace `Cargo.toml`. Nothing
+has been tagged or released. `docs/releasing.md` has the checklist and the
+blockers (no licence, no name check, stacked PRs unmerged, repo private).
+`.github/workflows/release.yml` builds a draft release from a `v*` tag. Do not
+tag or publish; that is Matt's step.
 
 ## Names
 

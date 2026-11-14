@@ -1,0 +1,52 @@
+name: Release
+
+# Builds the binaries for a version tag and attaches them to a draft release.
+# A person reads the draft and publishes it; nothing is public before that.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install what the build and tests use
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nftables libnftables1 dnsmasq-base dnsutils curl util-linux iproute2 python3
+      - uses: dtolnay/rust-toolchain@stable
+      - name: The tag matches the version in Cargo.toml
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="oxd"))')
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, Cargo.toml $version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 && sudo modprobe wireguard
+      - name: Test
+        env:
+          OX_REQUIRE_KERNEL_TESTS: "1"
+        run: cargo test --workspace
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          name="netoxide-$VERSION-x86_64-linux"
+          mkdir -p "$name/dist" "$name/examples"
+          cp target/release/oxd target/release/ox target/release/netoxide-tui "$name/"
+          cp dist/oxd.service dist/README.md "$name/dist/"
+          cp examples/*.toml "$name/examples/"
+          cp README.md CHANGELOG.md SECURITY.md "$name/"
+          cp schema/netoxide-config-1.schema.json "$name/"
+          tar -czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --prerelease --title "Netoxide $VERSION" \
+            --notes "See CHANGELOG.md in the archive and in the repository." \
+            netoxide-*.tar.gz netoxide-*.tar.gz.sha256

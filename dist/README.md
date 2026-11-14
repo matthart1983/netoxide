@@ -13,6 +13,10 @@ console access, not on a box you can only reach over the network.
 
 ## Build and install
 
+From a release archive, unpack it and use `oxd` and `ox` from its top
+directory in place of `target/release/` below; there is nothing to build.
+From source:
+
 ```sh
 cargo build --release
 sudo install -m 0755 target/release/oxd target/release/ox /usr/bin/

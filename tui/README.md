@@ -14,7 +14,7 @@ counters), NAT, Interfaces, Changes, Explain and Audit. Keys: `1`…`6` and `tab
 for screens, `↑↓` and `←→` to move, `x` on a rule to explain a packet it is
 about, `c` and `w` on Changes to commit with a confirm window, `e`, `enter`
 and `m` on Explain, `y` and `r` anywhere to keep or undo an unconfirmed
-commit, `R` to reload, `?` for help, `q` to quit. The top-level README has
+commit, `R` to reload, `?` for help, `q` to quit. `docs/interfaces.md` has
 the full table.
 
 **Mock mode** is the design prototype described below. It covers the same
