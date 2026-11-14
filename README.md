@@ -1,13 +1,15 @@
 # Netoxide
 
-Netoxide is an open-source firewall and router OS for Linux with a Rust control plane. It is meant for teams that run 10 to 300 firewalls across sites, mostly people moving off pfSense or OPNsense.
+Netoxide is an open-source firewall and router OS for Linux with a Rust control plane. It is meant for two groups: home-lab users who want a firewall that is easy to set up on one box, and teams that run 10 to 300 firewalls across sites, mostly people moving off pfSense or OPNsense. The aim is one product that is easy to start with and keeps the advanced features within reach.
 
 **Status: pre-alpha.** What exists today is a single-box firewall core. A daemon applies a typed config to the kernel through nftables, with commit, confirm, automatic revert, rollback and an audit log. There is a CLI and a pfSense importer. It has only been run inside network namespaces, never on a production box. Do not put it in front of a real network.
 
+- [Who it is for](#who-it-is-for)
 - [What works today](#what-works-today)
 - [Try it without touching your machine](#try-it-without-touching-your-machine)
 - [The config](#the-config)
 - [How a change reaches the kernel](#how-a-change-reaches-the-kernel)
+- [The terminal UI](#the-terminal-ui)
 - [Explain a packet](#explain-a-packet)
 - [Import from pfSense](#import-from-pfsense)
 - [Command reference](#command-reference)
@@ -19,6 +21,26 @@ Netoxide is an open-source firewall and router OS for Linux with a Rust control 
 - [Not built yet](#not-built-yet)
 - [Documents](#documents)
 - [Licence and name](#licence-and-name)
+
+## Who it is for
+
+Two groups, with one product for both:
+
+- **Home-lab users and small offices** running one box, who want a firewall that is quick to set up, clear about what it is doing, and free in full.
+- **Teams and service providers** running 10 to 300 firewalls, who want config as code, safe changes, an audit trail and fleet management.
+
+The design rule is "easy first, advanced within reach". Each area has an easy path and an advanced path over the same config, so the easy path writes ordinary config that the advanced tools can read and change. Nothing a single box needs depends on a controller, a login server or a fleet feature.
+
+| Area | Easy path | Advanced path |
+| --- | --- | --- |
+| Setup | A guided setup that writes the config. **Planned** | Write the config file. **Works today** |
+| Rules | "Forward a port", "block a device", "add a guest network". **Planned** | Zone-pair rules, address groups, services, NAT. **Works today** |
+| Changes | Apply, with automatic undo if you lock yourself out. **Works today** | Named candidates, plan with flow impact, rollback. **Works today.** Four-eyes approval is planned |
+| Understanding | Press `x` on a rule in the terminal UI to see what it does to a packet. **Works today** | `ox explain` for any packet, against running and candidate. **Works today.** Live trace is planned |
+| Interface | Terminal UI: view, commit, confirm, undo. **Works today.** Web UI is planned | CLI and HTTP API. **Work today.** Terraform provider is planned |
+| Scale | One box with no extra parts. **Works today** | Fleet controller, templates, staged rollouts. **Planned** |
+
+**If you run a home lab, be aware of where this is today.** You still write a TOML file by hand, there is no DHCP or DNS server, and there is no web UI, so Netoxide cannot yet replace a home router. The easy path is what gets built next. See [Not built yet](#not-built-yet).
 
 ## Why
 
@@ -40,7 +62,7 @@ The research behind this is in [`docs/research/market-gap.md`](docs/research/mar
 | Explain | Says what happens to one packet and which rule decides: port forward, route, zone pair, rule, source NAT. Works for the running config and for a candidate that is not applied. |
 | pfSense import | Translates a `config.xml` backup into a config and a report, then checks its own translation against a model of the pfSense ruleset. |
 | CLI `ox` | Drives all of the above. |
-| TUI prototype | Eleven screens in the terminal, with mock data. It is not connected to the daemon yet. |
+| TUI | Six live screens backed by the daemon: Policy with kernel packet counters, NAT, Interfaces, Changes, Explain and Audit. You can commit, confirm and undo from it. A separate mock mode shows the eleven designed screens with sample data. |
 
 ## Try it without touching your machine
 
@@ -196,6 +218,27 @@ Plan output for the example candidate:
 
 The flows file is JSON Lines, one observed flow per line. See [`examples/flows.jsonl`](examples/flows.jsonl). Nothing collects flows yet, so you supply the file.
 
+## The terminal UI
+
+```sh
+cargo run -p netoxide-tui --release -- --socket $OX_SOCKET
+```
+
+It needs a terminal of at least 132×34. Everything on screen comes from the daemon and is read again once a second.
+
+| Screen | Shows | Keys |
+| --- | --- | --- |
+| Policy | Zone pairs and their rules from the running config, with the kernel's packet counter per rule | `←→` pair, `↑↓` rule, `x` explain a packet the rule is about |
+| NAT | Port forwards and outbound NAT | |
+| Interfaces | Interfaces, zones and addresses from the running config | |
+| Changes | Candidates, the plan for the selected one, the running commit | `c` commit, `w` confirm window |
+| Explain | A packet you type, judged by the running config and the selected candidate side by side | `e` edit, `enter` run, `m` compare on or off |
+| Audit | The audit log, newest first | `↑↓` |
+
+`y` keeps an unconfirmed commit and `r` undoes it, from any screen. A commit from the TUI always has a confirm window (30 s, 2, 5 or 10 min) and asks for a reason first.
+
+The TUI cannot edit rules or save candidates yet. Write the config in a file and use `ox candidate save`. Run it without `--socket` to see the eleven designed screens with sample data.
+
 ## Explain a packet
 
 ```sh
@@ -348,6 +391,7 @@ What the kernel gets, for the example config:
 - Established and related connections accepted first, invalid ones dropped.
 - One verdict-map lookup on the ingress and egress interface that jumps to the chain for the zone pair.
 - One chain per zone pair. Each config rule becomes one nftables rule per address family it covers, matching against named sets, with a counter and the rule ID as its comment.
+- A zone pair that would need more than 32 nftables rules is merged instead: neighbouring rules with the same action become one lookup in a set of (source, destination, protocol, port) entries. Neighbours only, so no rule moves past one with a different action.
 - A reload adds the table, deletes it and builds it again inside one transaction, so the swap is atomic.
 
 ## Design rules
@@ -379,18 +423,18 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 63 tests. Two of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. The other starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
+There are 76 tests. Two of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. The other starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
-The TUI test compares every screen with `tui/snapshots.txt`.
+The TUI tests compare every mock screen with `tui/snapshots.txt` and every live screen, drawn against a test fixture, with `tui/snapshots-live.txt`.
 
 ## Limits today
 
 - **The API has no security.** Whoever can open the socket file has full control. There is no TLS, login, role check or four-eyes approval, and the caller's name is taken from a header as given.
 - **Nothing is loaded before the first commit**, so the kernel's own defaults apply until then.
 - **The box's own outbound traffic is not filtered.** There are no rules for traffic the box sends.
-- **A zone pair may compile to at most 32 nftables rules.** The compiler refuses a longer one. It does not yet merge rules to fit.
+- **Long zone pairs lose per-rule counters.** A pair that needs more than 32 nftables rules is merged: neighbouring rules with the same action become one set lookup and share a counter, so the TUI shows no packet count for them. Rules that log, match ICMP or any service, or overlap a neighbour are not merged. A pair that is still over 32 after merging is refused.
 - **Explain knows only connected networks and the default route.** A destination behind a static or dynamic route shows "no route".
 - **Schema 1 has no VPN, DNS, DHCP, routing protocols, traffic shaping, schedules or HA.**
 - **The importer reads pfSense only** and has not been tested on a real backup.
@@ -398,15 +442,16 @@ The TUI test compares every screen with `tui/snapshots.txt`.
 
 ## Not built yet
 
-Roughly in the order planned:
+Roughly in the order planned. Ease of use on one box comes first:
 
-1. Connect the TUI to the daemon in place of its mock data.
-2. API security: TLS, OIDC or token login, roles, four-eyes approval.
-3. A rule merger, so long zone pairs compile.
-4. Services rendered from the config: DNS with Unbound, DHCP with Kea, then WireGuard and IPsec.
-5. A locked-down default before the first commit, and rules for the box's own traffic.
-6. OPNsense import, and the pfSense importer tested on real backups.
-7. HA, the fleet controller, the web UI, and the OS image with signed A/B upgrades.
+1. A guided first-run setup (`ox init`) that writes a complete, safe config, and a locked-down default before the first commit.
+2. DHCP with Kea and DNS with Unbound, rendered from the config.
+3. Plain-language actions such as "forward a port" and "block a device", and rule editing in the TUI.
+4. A web UI.
+5. API security: TLS, OIDC or token login, roles, four-eyes approval.
+6. WireGuard, then IPsec.
+7. OPNsense import, and the pfSense importer tested on real backups.
+8. HA, the fleet controller, and the OS image with signed A/B upgrades.
 
 The spec dates a 1.0 at August 2028 for a team of six. That date is a plan, not a commitment.
 

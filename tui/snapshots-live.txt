@@ -1,0 +1,282 @@
+── Policy ──
+ Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
+ 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+╭ zone pairs ──────────────╮╭ lan → dmz · 3 rules · first match wins ──────────────────────────────────────────────────────────────────────────────────────────╮
+│▸ lan → dmz            3  ││ #  rule                                                                                                 action packets    log    │
+│  lan → wan            1  ││▸1  r-0388 Finance to file servers                                                                       accept       1204        │
+│  guest → wan          1  ││      @finance-pcs → @finance-file-servers · smb, netbios, https                                                                  │
+│  wan → dmz            1  ││ 2  r-0301 Staff to intranet                                                                             accept      88410        │
+│  lan → self           2  ││      @staff → @intranet · http, https                                                                                            │
+│                          ││ 3  r-0277 Backups to NAS                                                                                accept          —        │
+│                          ││      @backup-agents → @nas · tcp/873                                                                                             │
+│                          ││ —  default for this pair: any → any · any                                                               drop         2114 logged │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          │╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+│                          │╭ rule ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                          ││r-0388  Finance to file servers                                                                                                   │
+│                          ││source          @finance-pcs                                                                                                      │
+│                          ││destination     @finance-file-servers                                                                                             │
+│                          ││service         smb, netbios, https                                                                                               │
+│                          ││reason          Open file share for finance, CHG-1984                                                                             │
+│                          ││state           enabled, in the kernel                                                                                            │
+╰ 8 rules · 5 pairs ───────╯╰ packets are kernel counters since the last load ─────────────────────────────────────────────────────────────────────────────────╯
+  ←→  zone pair   ↑↓  rule   x  explain   1-6  screens   R  reload   ?  help   q  quit
+── NAT ──
+ Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
+ 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+╭ port forwards · 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│id           name                                from zone  match                                translate to                        filter rule    packets   │
+│n-0010       Public web                          wan        203.0.113.10 tcp/443                 10.30.0.10                          r-0200             512880│
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰ a forward only rewrites the destination; its filter rule decides ────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ outbound · 2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│id           name                                            zones                  source                                         translate        packets   │
+│n-0100       Staff and guests to the internet                lan → wan              10.20.0.0/16                                   masquerade                —│
+│n-0101       Guests to the internet                          guest → wan            10.50.0.0/22                                   masquerade                —│
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  1-6  screens   R  reload   ?  help   q  quit
+── Interfaces ──
+ Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
+ 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+╭ interfaces · 4 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│interface        zone         zone description                      addresses                                                                   route         │
+│lan0.20          lan          Staff network                         10.20.0.1/16, 2001:db8:4a00:1::1/64                                                       │
+│lan0.30          dmz          Servers                               10.30.0.1/24, 2001:db8:4a00:2::1/64                                                       │
+│lan0.50          guest        Guest Wi-Fi                           10.50.0.1/22                                                                              │
+│wan0             wan          Internet                              203.0.113.10/32, 2001:db8:4a00::1/64                                        default route │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰ from the running config; link state is not read yet ─────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  1-6  screens   R  reload   ?  help   q  quit
+── Changes ──
+ Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
+ 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+╭ candidates ──────────────────────────────────────────────────────────────────────────────────╮╭ running ─────────────────────────────────────────────────────╮
+│▸ block-legacy-smb                                                                            ││#1  confirmed                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────╯│by              ana                                           │
+╭ plan · block-legacy-smb ─────────────────────────────────────────────────────────────────────╮│from            candidate base                                │
+│✓ schema validation passed                                                                    ││reason          first config                                  │
+│✓ compiled 9 rules in 5 zone pairs → 19 nftables rules, 27 sets, 2 verdict maps, longest chain││                                                              │
+│6                                                                                             ││                                                              │
+│✓ one nftables transaction, atomic swap                                                       │╰──────────────────────────────────────────────────────────────╯
+│                                                                                              │╭ commit ──────────────────────────────────────────────────────╮
+│2 change(s)                                                                                   ││confirm window  05:00                                         │
+│+ rule r-0412 "Drop SMB and NetBIOS": lan → dmz: drop any → any · smb, netbios, position 1    ││The commit reverts by itself unless you press y inside the    │
+│~ rule r-0388 "Finance to file servers": service: smb, netbios, https → https                 ││window.                                                       │
+│                                                                                              ││                                                              │
+│                                                                                              ││$ ox commit block-legacy-smb --confirm 300s                   │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+│                                                                                              ││                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
+  ↑↓  candidate   c  commit   w  confirm window   1-6  screens   R  reload   ?  help   q  quit
+── Explain ──
+ Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
+ 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+╭ why did this packet do that? ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│src —   dst —   proto tcp   dport —   in —                                                                                                                    │
+│                                                                                                                                                              │
+│also against candidate block-legacy-smb                                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ result ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Press e to type a packet, or press x on a rule in Policy.                                                                                                     │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  e  edit packet   enter  explain   m  compare candidate   1-6  screens   R  reload   ?  help   q  quit
+── Audit ──
+ Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
+ 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+╭ audit log · 4 entries · hash chain verified by oxd ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ #    time (UTC)          who          event             detail                                                                                    hash       │
+│▸   4 2026-11-14 10:56:03 jun          candidate saved   block-legacy-smb sha256 762941b3                                                          049f3ca1e0…│
+│    3 2026-11-14 10:55:03 ana          commit            #1 from candidate base sha256 1b81b81c reason: first config                               039f3ca1e0…│
+│    2 2026-11-14 10:54:03 ana          candidate saved   base sha256 1b81b81c                                                                      029f3ca1e0…│
+│    1 2026-11-14 10:53:03 system       start             no commit yet, nothing applied                                                            019f3ca1e0…│
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ entry ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│block-legacy-smb sha256 762941b3                                                                                                                              │
+│hash 049f3ca1e041d27b9cc07a3f122be890d477e1c5aae4f912bd0a9915cf22                                                                                             │
+│                                                                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑↓  entry   1-6  screens   R  reload   ?  help   q  quit

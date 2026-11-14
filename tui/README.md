@@ -1,10 +1,29 @@
 # netoxide-tui
 
-A terminal UI prototype for Netoxide, built with ratatui. It covers the same
-screens as the design canvas, with the same mock data, so the two can be
-compared side by side.
+The Netoxide terminal UI, built with ratatui. It has two modes.
 
-Nothing here talks to a firewall. All data lives in `src/data.rs`.
+**Live mode** is a client of the `oxd` daemon:
+
+```sh
+cargo run --release -- --socket /path/to/oxd.sock
+cargo run --release -- --live        # uses $OX_SOCKET, or /run/netoxide/oxd.sock
+```
+
+It has six screens, all backed by the daemon: Policy (with kernel packet
+counters), NAT, Interfaces, Changes, Explain and Audit. Keys: `1`…`6` and `tab`
+for screens, `↑↓` and `←→` to move, `x` on a rule to explain a packet it is
+about, `c` and `w` on Changes to commit with a confirm window, `e`, `enter`
+and `m` on Explain, `y` and `r` anywhere to keep or undo an unconfirmed
+commit, `R` to reload, `?` for help, `q` to quit. The top-level README has
+the full table.
+
+**Mock mode** is the design prototype described below. It covers the same
+eleven screens as the design canvas, with the same sample data, so the two can
+be compared side by side.
+
+## Mock mode
+
+In mock mode nothing talks to a firewall. All data lives in `src/data.rs`.
 
 ## Run
 

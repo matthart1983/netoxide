@@ -27,8 +27,10 @@ pub const MAX_CHAIN: usize = 32;
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CompileError {
     #[error(
-        "policy {from} → {to} compiles to {rules} nftables rules; the limit per chain is {MAX_CHAIN}. \
-         Merge rules that share an action into one rule with more sources, destinations or services"
+        "policy {from} → {to} still compiles to {rules} nftables rules after merging neighbours with the \
+         same action; the limit per chain is {MAX_CHAIN}. Rules that log, match ICMP or any service, or \
+         overlap a neighbour cannot be merged. Group rules with the same action together, or combine \
+         them into one rule with more sources, destinations or services"
     )]
     ChainTooLong {
         from: String,
@@ -78,7 +80,97 @@ impl Chain {
 
     /// How many nftables rules the chain renders to, without its final drop.
     pub fn nft_rules(&self) -> usize {
-        self.rules.iter().map(|r| r.expansions().len()).sum()
+        self.layout().iter().map(Segment::nft_rules).sum()
+    }
+
+    /// How the chain is laid out in the kernel.
+    ///
+    /// Up to [`MAX_CHAIN`] nftables rules, every config rule keeps its own
+    /// rule, counter and comment. Past that, neighbouring rules with the same
+    /// action are merged into one lookup in a set of
+    /// (source, destination, protocol, port) entries. Merging neighbours
+    /// keeps first-match order: no rule moves past one with another action.
+    pub fn layout(&self) -> Vec<Segment<'_>> {
+        let plain: usize = self.rules.iter().map(|r| r.expansions().len()).sum();
+        if plain <= MAX_CHAIN {
+            return self.rules.iter().map(Segment::Single).collect();
+        }
+        let mut out: Vec<Segment> = vec![];
+        let mut run: Vec<&CRule> = vec![];
+        let mut held: Vec<Tuple> = vec![];
+        fn flush<'a>(run: &mut Vec<&'a CRule>, out: &mut Vec<Segment<'a>>) {
+            match run.len() {
+                0 => {}
+                1 => out.push(Segment::Single(run.pop().expect("one rule"))),
+                _ => out.push(Segment::Run(std::mem::take(run))),
+            }
+        }
+        for rule in &self.rules {
+            let tuples: Vec<Tuple> = [Family::V4, Family::V6]
+                .into_iter()
+                .flat_map(|f| rule.tuples(f))
+                .collect();
+            // nftables refuses a set whose entries overlap, so a rule that
+            // overlaps the run so far starts a new one.
+            let joins = rule.mergeable()
+                && run.first().is_some_and(|first| first.action == rule.action)
+                && !tuples.iter().any(|t| held.iter().any(|h| h.overlaps(t)));
+            if !joins {
+                flush(&mut run, &mut out);
+                held.clear();
+            }
+            if rule.mergeable() {
+                run.push(rule);
+                held.extend(tuples);
+            } else {
+                out.push(Segment::Single(rule));
+            }
+        }
+        flush(&mut run, &mut out);
+        out
+    }
+}
+
+/// One stretch of a chain as it is rendered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Segment<'a> {
+    /// A rule with its own nftables rules, counter and comment.
+    Single(&'a CRule),
+    /// Neighbouring rules with one action, rendered as one set lookup per
+    /// address family. They share a counter.
+    Run(Vec<&'a CRule>),
+}
+
+impl Segment<'_> {
+    pub fn nft_rules(&self) -> usize {
+        match self {
+            Segment::Single(r) => r.expansions().len(),
+            Segment::Run(rules) => [Family::V4, Family::V6]
+                .into_iter()
+                .filter(|f| rules.iter().any(|r| !r.tuples(*f).is_empty()))
+                .count(),
+        }
+    }
+}
+
+/// One entry of a merged set: a packet matches when all four parts do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tuple {
+    pub src: IpNet,
+    pub dst: IpNet,
+    pub proto: Proto,
+    pub first: u16,
+    pub last: u16,
+}
+
+impl Tuple {
+    fn overlaps(&self, other: &Tuple) -> bool {
+        let nets = |a: &IpNet, b: &IpNet| a.contains(&b.network()) || b.contains(&a.network());
+        self.proto == other.proto
+            && self.first <= other.last
+            && other.first <= self.last
+            && nets(&self.src, &other.src)
+            && nets(&self.dst, &other.dst)
     }
 }
 
@@ -233,6 +325,52 @@ pub enum SvcKind {
 }
 
 impl CRule {
+    /// True when the rule can join a merged run: it matches ports only, and
+    /// it does not log, since a log line names one rule.
+    pub fn mergeable(&self) -> bool {
+        !self.log
+            && !self.svc.any
+            && !self.svc.icmp
+            && !self.svc.icmpv6
+            && !self.svc.ports.is_empty()
+    }
+
+    /// The rule as set entries for one address family. "Any" becomes the
+    /// whole address space.
+    pub fn tuples(&self, family: Family) -> Vec<Tuple> {
+        let whole: IpNet = match family {
+            Family::V4 => "0.0.0.0/0".parse().expect("valid"),
+            Family::V6 => "::/0".parse().expect("valid"),
+        };
+        let side = |m: &AddrMatch| -> Vec<IpNet> {
+            match (m, family) {
+                (AddrMatch::Any, _) => vec![whole],
+                (AddrMatch::Nets { v4, .. }, Family::V4) => {
+                    v4.iter().map(|n| IpNet::V4(*n)).collect()
+                }
+                (AddrMatch::Nets { v6, .. }, Family::V6) => {
+                    v6.iter().map(|n| IpNet::V6(*n)).collect()
+                }
+            }
+        };
+        let (srcs, dsts) = (side(&self.src), side(&self.dst));
+        let mut out = vec![];
+        for src in &srcs {
+            for dst in &dsts {
+                for (proto, first, last) in &self.svc.ports {
+                    out.push(Tuple {
+                        src: *src,
+                        dst: *dst,
+                        proto: *proto,
+                        first: *first,
+                        last: *last,
+                    });
+                }
+            }
+        }
+        out
+    }
+
     /// The nftables rules this rule becomes: one per address family and
     /// service kind that can match. A rule over IPv4 and IPv6 addresses needs
     /// two, because one nftables rule matches one family's address field.
@@ -358,7 +496,10 @@ impl Ruleset {
             s.sets,
             s.verdict_maps,
             s.longest_chain
-        )
+        ) + &match s.merged {
+            0 => String::new(),
+            n => format!(", {n} rules merged into shared lookups"),
+        }
     }
 }
 

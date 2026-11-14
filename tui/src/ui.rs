@@ -12,13 +12,13 @@ use ratatui::{
 use crate::app::{App, CommitPhase, Screen};
 use crate::data::{self, Action};
 
-const ACCENT: Color = Color::Cyan;
-const DIM: Color = Color::DarkGray;
-const OK: Color = Color::Green;
-const WARN: Color = Color::Yellow;
-const BAD: Color = Color::Red;
+pub(crate) const ACCENT: Color = Color::Cyan;
+pub(crate) const DIM: Color = Color::DarkGray;
+pub(crate) const OK: Color = Color::Green;
+pub(crate) const WARN: Color = Color::Yellow;
+pub(crate) const BAD: Color = Color::Red;
 
-fn panel(title: impl AsRef<str>) -> Block<'static> {
+pub(crate) fn panel(title: impl AsRef<str>) -> Block<'static> {
     let title = title.as_ref();
     let b = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -30,13 +30,13 @@ fn panel(title: impl AsRef<str>) -> Block<'static> {
     }
 }
 
-fn header(cells: &[&'static str]) -> Row<'static> {
+pub(crate) fn header(cells: &[&'static str]) -> Row<'static> {
     Row::new(cells.iter().map(|c| Cell::from(*c)))
         .style(Style::new().fg(DIM).add_modifier(Modifier::BOLD))
         .bottom_margin(0)
 }
 
-fn sel_style() -> Style {
+pub(crate) fn sel_style() -> Style {
     Style::new()
         .bg(Color::Rgb(30, 41, 59))
         .add_modifier(Modifier::BOLD)
@@ -50,14 +50,14 @@ fn action_cell(a: Action) -> Cell<'static> {
     Cell::from(Span::styled(a.label(), Style::new().fg(color).bold()))
 }
 
-fn kv(k: &str, v: impl Into<String>) -> Line<'static> {
+pub(crate) fn kv(k: &str, v: impl Into<String>) -> Line<'static> {
     Line::from(vec![
         Span::styled(format!("{k:<16}"), Style::new().fg(DIM)),
         Span::raw(v.into()),
     ])
 }
 
-fn mmss(secs: u64) -> String {
+pub(crate) fn mmss(secs: u64) -> String {
     format!("{:02}:{:02}", secs / 60, secs % 60)
 }
 
@@ -251,7 +251,7 @@ fn draw_help(f: &mut Frame) {
     );
 }
 
-fn centered(area: Rect, w: u16, h: u16) -> Rect {
+pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width);
     let h = h.min(area.height);
     Rect {

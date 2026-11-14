@@ -8,7 +8,7 @@ use ipnet::{Ipv4Net, Ipv6Net};
 use ox_schema::{Action, SELF_ZONE, Translate};
 use serde_json::{Value, json};
 
-use crate::{AddrMatch, CRule, Chain, Family, Ruleset, SvcKind, TABLE};
+use crate::{AddrMatch, CRule, Chain, Family, Ruleset, Segment, SvcKind, TABLE};
 
 /// Counts for the plan output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -19,6 +19,8 @@ pub struct Stats {
     pub verdict_maps: usize,
     /// Rules in the longest zone-pair chain.
     pub longest_chain: usize,
+    /// Config rules that share a merged set lookup, and so share a counter.
+    pub merged: usize,
 }
 
 const FAMILY: &str = "inet";
@@ -240,18 +242,86 @@ fn dispatch(out: &mut Out, rs: &Ruleset) {
 
 fn pair_chain(out: &mut Out, chain: &Chain) {
     let name = chain.name();
-    for rule in &chain.rules {
-        filter_rule(out, &name, rule);
+    for (i, segment) in chain.layout().iter().enumerate() {
+        match segment {
+            Segment::Single(rule) => filter_rule(out, &name, rule),
+            Segment::Run(rules) => merged_run(out, &name, i, rules),
+        }
     }
     let mut end = vec![];
     if chain.log_default {
         end.push(log(&format!("ox default {}-{} ", chain.from, chain.to)));
     }
     end.extend([counter(), verdict(Action::Drop)]);
-    out.rule(&name, Some("default"), end);
+    // The comment is unique per pair so its counter can be read back.
+    out.rule(
+        &name,
+        Some(&format!("default {}-{}", chain.from, chain.to)),
+        end,
+    );
 
     out.stats.rules += chain.nft_rules();
     out.stats.longest_chain = out.stats.longest_chain.max(chain.nft_rules());
+}
+
+/// Renders neighbouring rules with one action as one set lookup per family.
+fn merged_run(out: &mut Out, chain: &str, index: usize, rules: &[&CRule]) {
+    let comment = format!(
+        "merged {} … {} ({} rules)",
+        rules[0].id,
+        rules[rules.len() - 1].id,
+        rules.len()
+    );
+    for (family, tag, ip, addr_type) in [
+        (Family::V4, "4", "ip", "ipv4_addr"),
+        (Family::V6, "6", "ip6", "ipv6_addr"),
+    ] {
+        let elems: Vec<Value> = rules
+            .iter()
+            .flat_map(|r| r.tuples(family))
+            .map(|t| {
+                let net = |n: &ipnet::IpNet| {
+                    json!({ "prefix": { "addr": n.network().to_string(), "len": n.prefix_len() } })
+                };
+                let port = if t.first == t.last {
+                    json!(t.first)
+                } else {
+                    json!({ "range": [t.first, t.last] })
+                };
+                json!({ "concat": [net(&t.src), net(&t.dst), t.proto.as_str(), port] })
+            })
+            .collect();
+        if elems.is_empty() {
+            continue;
+        }
+        let set = format!("{}_m{index}_{tag}", chain.trim_start_matches("p_"));
+        out.add(
+            "set",
+            json!({
+                "name": set,
+                "type": [addr_type, addr_type, "inet_proto", "inet_service"],
+                "flags": ["interval"],
+                "elem": elems,
+            }),
+        );
+        out.stats.sets += 1;
+        out.rule(
+            chain,
+            Some(&comment),
+            vec![
+                eq(
+                    json!({ "concat": [
+                        payload(ip, "saddr"), payload(ip, "daddr"),
+                        meta("l4proto"), payload("th", "dport")
+                    ] }),
+                    json!(format!("@{set}")),
+                ),
+                counter(),
+                verdict(rules[0].action),
+            ],
+        );
+    }
+    out.stats.merged += rules.len();
 }
 
 fn filter_rule(out: &mut Out, chain: &str, rule: &CRule) {

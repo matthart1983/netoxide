@@ -3,8 +3,6 @@
 //! Most commands talk to `oxd` over its Unix socket. The commands under
 //! `ox file` work on config files alone and need no daemon.
 
-mod client;
-
 use std::{
     net::IpAddr,
     path::{Path, PathBuf},
@@ -12,7 +10,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
-use client::Client;
+use ox_client::Client;
 use ox_explain::{Packet, explain};
 use ox_nft::{L4, Ruleset, compile, render};
 use ox_schema::Config;
@@ -211,6 +209,22 @@ fn parse_window(s: &str) -> std::result::Result<u64, String> {
         .map_err(|_| format!("'{s}' is not a time; write 5m or 90s"))
 }
 
+/// `println!` that ignores a closed pipe, so `ox history | head` ends quietly.
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+
+/// `print!` with the same behaviour.
+macro_rules! outp {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = write!(std::io::stdout(), $($arg)*);
+    }};
+}
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn load(path: &Path) -> Result<(Config, Ruleset)> {
@@ -272,20 +286,20 @@ fn commit_line(c: &Value) -> String {
 }
 
 fn print_plan(summary: &str, changes: &[String], flows: Option<(usize, &[String])>) {
-    println!("✓ schema validation passed");
-    println!("✓ compiled {summary}");
-    println!("✓ one nftables transaction, atomic swap");
-    println!("\n{} change(s)", changes.len());
+    out!("✓ schema validation passed");
+    out!("✓ compiled {summary}");
+    out!("✓ one nftables transaction, atomic swap");
+    out!("\n{} change(s)", changes.len());
     for c in changes {
-        println!("  {c}");
+        out!("  {c}");
     }
     if let Some((checked, hits)) = flows {
-        println!(
+        out!(
             "\n{} of {checked} replayed flows get a different verdict",
             hits.len()
         );
         for h in hits {
-            println!("  {h}");
+            out!("  {h}");
         }
     }
 }
@@ -304,14 +318,14 @@ fn daemon(cli: &Cli) -> Result<()> {
         Command::Status => {
             let s = oxd.json("GET", "/v1/status", None)?;
             match &s["running"] {
-                Value::Null => println!("running     no commit yet; nothing is loaded"),
-                c => println!("running     {}", commit_line(c)),
+                Value::Null => out!("running     no commit yet; nothing is loaded"),
+                c => out!("running     {}", commit_line(c)),
             }
             if let Some(left) = s["reverts_in"].as_u64() {
-                println!("pending     reverts in {left} s unless you run `ox confirm`");
+                out!("pending     reverts in {left} s unless you run `ox confirm`");
             }
             let names = strings(&s["candidates"]);
-            println!(
+            out!(
                 "candidates  {}",
                 if names.is_empty() {
                     "none".into()
@@ -319,9 +333,9 @@ fn daemon(cli: &Cli) -> Result<()> {
                     names.join(", ")
                 }
             );
-            println!("applier     {}", text(&s["applier"]));
+            out!("applier     {}", text(&s["applier"]));
         }
-        Command::Running => print!("{}", oxd.get("/v1/running")?),
+        Command::Running => outp!("{}", oxd.get("/v1/running")?),
         Command::Candidate(cmd) => match cmd {
             CandidateCmd::Save { name, file } => {
                 oxd.send(
@@ -329,19 +343,19 @@ fn daemon(cli: &Cli) -> Result<()> {
                     &format!("/v1/candidates/{name}"),
                     Some(("text/plain", &read(file)?)),
                 )?;
-                println!("saved candidate {name}");
+                out!("saved candidate {name}");
             }
             CandidateCmd::List => {
                 for n in strings(&oxd.json("GET", "/v1/candidates", None)?) {
-                    println!("{n}");
+                    out!("{n}");
                 }
             }
             CandidateCmd::Show { name } => {
-                print!("{}", oxd.get(&format!("/v1/candidates/{name}"))?);
+                outp!("{}", oxd.get(&format!("/v1/candidates/{name}"))?);
             }
             CandidateCmd::Rm { name } => {
                 oxd.send("DELETE", &format!("/v1/candidates/{name}"), None)?;
-                println!("deleted candidate {name}");
+                out!("deleted candidate {name}");
             }
         },
         Command::Plan { candidate, flows } => {
@@ -375,25 +389,23 @@ fn daemon(cli: &Cli) -> Result<()> {
                 &format!("/v1/candidates/{candidate}/commit"),
                 Some(&json!({ "confirm_secs": confirm, "reason": reason })),
             )?;
-            println!("applied {}", commit_line(&c));
+            out!("applied {}", commit_line(&c));
             if let Some(secs) = confirm {
-                println!(
-                    "run `ox confirm` within {secs} s to keep it, or `ox revert` to undo it now"
-                );
+                out!("run `ox confirm` within {secs} s to keep it, or `ox revert` to undo it now");
             }
         }
         Command::Confirm => {
-            println!(
+            out!(
                 "kept {}",
                 commit_line(&oxd.json("POST", "/v1/confirm", None)?)
             );
         }
         Command::Revert => {
             let c = oxd.json("POST", "/v1/revert", None)?;
-            println!("undone {}", commit_line(&c));
+            out!("undone {}", commit_line(&c));
             match c["parent"].as_u64() {
-                Some(p) => println!("running #{p} again; the candidate is kept"),
-                None => println!("no config is loaded; the candidate is kept"),
+                Some(p) => out!("running #{p} again; the candidate is kept"),
+                None => out!("no config is loaded; the candidate is kept"),
             }
         }
         Command::Rollback {
@@ -406,19 +418,19 @@ fn daemon(cli: &Cli) -> Result<()> {
                 "/v1/rollback",
                 Some(&json!({ "steps": steps, "confirm_secs": confirm, "reason": reason })),
             )?;
-            println!("applied {}", commit_line(&c));
+            out!("applied {}", commit_line(&c));
         }
         Command::History => {
             let commits = oxd.json("GET", "/v1/commits", None)?;
             for c in commits.as_array().into_iter().flatten() {
-                println!("{}", commit_line(c));
+                out!("{}", commit_line(c));
             }
         }
         Command::Show { id } => {
             let v = oxd.json("GET", &format!("/v1/commits/{id}"), None)?;
-            println!("{}", commit_line(&v["commit"]));
-            println!("sha256 {}\n", text(&v["commit"]["sha256"]));
-            print!("{}", text(&v["config"]));
+            out!("{}", commit_line(&v["commit"]));
+            out!("sha256 {}\n", text(&v["commit"]["sha256"]));
+            outp!("{}", text(&v["config"]));
         }
         Command::Explain { packet, candidate } => {
             let v = oxd.json(
@@ -429,23 +441,23 @@ fn daemon(cli: &Cli) -> Result<()> {
                     "dport": packet.dport, "in": packet.iif, "candidate": candidate,
                 })),
             )?;
-            println!("{}", text(&v["packet"]));
+            out!("{}", text(&v["packet"]));
             match (&v["running"], &v["candidate"]) {
                 (Value::Null, Value::Null) => {
-                    println!("\nthere is no commit yet, so nothing decides this packet");
+                    out!("\nthere is no commit yet, so nothing decides this packet");
                 }
-                (r, Value::Null) => print!("\n{}", text(&r["text"])),
+                (r, Value::Null) => outp!("\n{}", text(&r["text"])),
                 (r, c) => {
                     if !r.is_null() {
-                        print!("\nrunning\n{}", text(&r["text"]));
+                        outp!("\nrunning\n{}", text(&r["text"]));
                     }
-                    print!(
+                    outp!(
                         "\ncandidate {}\n{}",
                         candidate.as_deref().unwrap_or(""),
                         text(&c["text"])
                     );
                     if !r.is_null() && r["verdict"] != c["verdict"] {
-                        println!(
+                        out!(
                             "\nthe candidate changes this packet: {} → {}",
                             text(&r["verdict"]),
                             text(&c["verdict"])
@@ -459,7 +471,7 @@ fn daemon(cli: &Cli) -> Result<()> {
             let entries = v["entries"].as_array().cloned().unwrap_or_default();
             for e in &entries {
                 let hash = text(&e["hash"]);
-                println!(
+                out!(
                     "{:>4}  {}  {:<10} {:<18} {}  {}…",
                     e["seq"],
                     when(e["time"].as_u64().unwrap_or(0)),
@@ -469,11 +481,11 @@ fn daemon(cli: &Cli) -> Result<()> {
                     &hash[..hash.len().min(12)],
                 );
             }
-            println!("\nchain verified: {} entries", entries.len());
+            out!("\nchain verified: {} entries", entries.len());
         }
         Command::Kernel => {
             let dump = oxd.json("GET", "/v1/kernel", None)?;
-            println!("{}", serde_json::to_string_pretty(&dump)?);
+            out!("{}", serde_json::to_string_pretty(&dump)?);
         }
         Command::Schema | Command::File(_) | Command::Import { .. } => {
             unreachable!("handled before the daemon is contacted")
@@ -486,25 +498,25 @@ fn file(cmd: &FileCmd) -> Result<()> {
     match cmd {
         FileCmd::Validate { config } => {
             let (c, rs) = load(config)?;
-            println!("{}: valid, schema {}", config.display(), c.schema);
-            println!("{}", rs.summary());
+            out!("{}: valid, schema {}", config.display(), c.schema);
+            out!("{}", rs.summary());
         }
         FileCmd::Compile { config, stats } => {
             let (_, rs) = load(config)?;
             if *stats {
-                println!("{}", rs.summary());
+                out!("{}", rs.summary());
             } else {
-                println!("{}", serde_json::to_string_pretty(&render(&rs).0)?);
+                out!("{}", serde_json::to_string_pretty(&render(&rs).0)?);
             }
         }
         FileCmd::Diff { running, candidate } => {
             let ((old, _), (new, _)) = (load(running)?, load(candidate)?);
             let changes = ox_plan::diff(&old, &new);
             if changes.is_empty() {
-                println!("no changes");
+                out!("no changes");
             }
             for c in changes {
-                println!("{c}");
+                out!("{c}");
             }
         }
         FileCmd::Plan {
@@ -548,16 +560,16 @@ fn file(cmd: &FileCmd) -> Result<()> {
             };
             let (_, rs) = load(config)?;
             let running = explain(&rs, &packet)?;
-            println!("{packet}");
+            out!("{packet}");
             match candidate {
-                None => print!("\n{running}"),
+                None => outp!("\n{running}"),
                 Some(path) => {
                     let (_, cand_rs) = load(path)?;
                     let cand = explain(&cand_rs, &packet)?;
-                    print!("\nrunning ({})\n{running}", config.display());
-                    print!("\ncandidate ({})\n{cand}", path.display());
+                    outp!("\nrunning ({})\n{running}", config.display());
+                    outp!("\ncandidate ({})\n{cand}", path.display());
                     if running.verdict != cand.verdict {
-                        println!(
+                        out!(
                             "\nthe candidate changes this packet: {} → {}",
                             running.verdict.as_str(),
                             cand.verdict.as_str()
@@ -573,7 +585,7 @@ fn file(cmd: &FileCmd) -> Result<()> {
 fn import(backup: &Path, out: Option<&Path>, verify: Option<&Path>) -> Result<()> {
     let imported = ox_import::import_pfsense(&read(backup)?)
         .map_err(|e| format!("{}: {e}", backup.display()))?;
-    print!("{}", imported.report);
+    outp!("{}", imported.report);
 
     let (packets, what) = match verify {
         Some(path) => {
@@ -586,22 +598,22 @@ fn import(backup: &Path, out: Option<&Path>, verify: Option<&Path>) -> Result<()
         None => (imported.probes(), "generated probes"),
     };
     let diffs = imported.verify(&packets);
-    println!(
+    out!(
         "\nverify: {} of {} {what} get a different verdict",
         diffs.len(),
         packets.len()
     );
     for d in &diffs {
-        println!("  {d}");
+        out!("  {d}");
     }
 
     match out {
         Some(path) => {
             std::fs::write(path, imported.config.to_toml())
                 .map_err(|e| format!("{}: {e}", path.display()))?;
-            println!("\nwrote {}", path.display());
+            out!("\nwrote {}", path.display());
         }
-        None => println!("\nno config written; pass --out <file> to keep it"),
+        None => out!("\nno config written; pass --out <file> to keep it"),
     }
     Ok(())
 }
@@ -610,7 +622,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match &cli.command {
         Command::Schema => serde_json::to_string_pretty(&Config::json_schema())
-            .map(|s| println!("{s}"))
+            .map(|s| out!("{s}"))
             .map_err(Into::into),
         Command::File(cmd) => file(cmd),
         Command::Import {
