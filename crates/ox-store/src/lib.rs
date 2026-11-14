@@ -21,55 +21,110 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use ox_nft::{Ruleset, compile, render, render_empty};
+use ox_nft::{Ruleset, compile, render, render_empty, render_lockdown};
 use ox_schema::{Config, is_name};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 pub use audit::{Audit, AuditError, Entry};
 
 /// How many commits the box keeps.
 pub const HISTORY: u64 = 100;
 
-/// Loads rulesets into whatever enforces them.
+/// Everything one config asks the box to do.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Target {
+    /// The firewall, as a libnftables JSON document that is one transaction.
+    pub ruleset: Value,
+    /// Config text for each service the box runs, by service name. A
+    /// service that is not listed must not be running.
+    pub services: BTreeMap<String, String>,
+}
+
+/// What the box does before it has any config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Baseline {
+    /// Load nothing. The kernel's own defaults apply.
+    #[default]
+    Open,
+    /// Drop forwarded and inbound traffic until the first commit.
+    Lockdown,
+}
+
+impl Baseline {
+    fn target(self) -> Target {
+        Target {
+            ruleset: match self {
+                Baseline::Open => render_empty(),
+                Baseline::Lockdown => render_lockdown(),
+            },
+            services: BTreeMap::new(),
+        }
+    }
+}
+
+/// Puts a target into effect: the firewall and the services together.
 pub trait Applier: Send {
-    /// Applies a libnftables JSON document as one transaction. On `Err`
-    /// nothing has changed.
-    fn apply(&mut self, ruleset: &Value) -> std::result::Result<(), String>;
+    /// Applies the whole target. On `Err` the box is as it was before.
+    fn apply(&mut self, target: &Target) -> std::result::Result<(), String>;
     /// The Netoxide table as the enforcer holds it now.
     fn dump(&mut self) -> std::result::Result<Value, String>;
     fn name(&self) -> &'static str;
+    /// Called about once a second, for work such as restarting a service
+    /// that stopped.
+    fn tick(&mut self) {}
+    /// Each service and its state in a few words.
+    fn services(&mut self) -> Vec<(String, String)> {
+        vec![]
+    }
 }
 
 /// Applies nothing and remembers the last ruleset. For dry runs and tests.
 #[derive(Default)]
 pub struct NullApplier {
-    pub last: Option<Value>,
+    pub last: Option<Target>,
     pub applied: usize,
     /// When set, the next `apply` fails with this message.
     pub fail_next: Option<String>,
 }
 
 impl Applier for NullApplier {
-    fn apply(&mut self, ruleset: &Value) -> std::result::Result<(), String> {
+    fn apply(&mut self, target: &Target) -> std::result::Result<(), String> {
         if let Some(msg) = self.fail_next.take() {
             return Err(msg);
         }
-        self.last = Some(ruleset.clone());
+        self.last = Some(target.clone());
         self.applied += 1;
         Ok(())
     }
     fn dump(&mut self) -> std::result::Result<Value, String> {
-        Ok(self.last.clone().unwrap_or(Value::Null))
+        Ok(self
+            .last
+            .as_ref()
+            .map_or(Value::Null, |t| t.ruleset.clone()))
     }
     fn name(&self) -> &'static str {
         "dry-run"
     }
+    fn services(&mut self) -> Vec<(String, String)> {
+        self.last
+            .iter()
+            .flat_map(|t| t.services.keys())
+            .map(|name| (name.clone(), "would run (dry run)".to_string()))
+            .collect()
+    }
 }
 
 impl Applier for Box<dyn Applier> {
-    fn apply(&mut self, ruleset: &Value) -> std::result::Result<(), String> {
-        (**self).apply(ruleset)
+    fn apply(&mut self, target: &Target) -> std::result::Result<(), String> {
+        (**self).apply(target)
+    }
+    fn tick(&mut self) {
+        (**self).tick();
+    }
+    fn services(&mut self) -> Vec<(String, String)> {
+        (**self).services()
     }
     fn dump(&mut self) -> std::result::Result<Value, String> {
         (**self).dump()
@@ -158,6 +213,12 @@ pub struct Status {
     pub reverts_in: Option<u64>,
     pub candidates: Vec<String>,
     pub applier: String,
+    /// Each service and its state in a few words.
+    #[serde(default)]
+    pub services: Vec<(String, String)>,
+    /// True while the box has no config and drops inbound and forwarded traffic.
+    #[serde(default)]
+    pub lockdown: bool,
 }
 
 /// What `apply_new` needs to make a commit.
@@ -175,6 +236,7 @@ struct NewCommit<'a> {
 pub struct Engine<A: Applier> {
     dir: PathBuf,
     applier: A,
+    baseline: Baseline,
     state: State,
     audit: Audit,
 }
@@ -185,6 +247,17 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     f.write_all(data)?;
     f.sync_all()?;
     fs::rename(&tmp, path)
+}
+
+/// The firewall and the service configs one config renders to.
+fn target(config: &Config, ruleset: &Ruleset) -> Target {
+    Target {
+        ruleset: render(ruleset).0,
+        services: ox_services::dnsmasq_conf(config)
+            .map(|conf| (ox_services::DNSMASQ.to_string(), conf))
+            .into_iter()
+            .collect(),
+    }
 }
 
 fn check(text: &str) -> Result<(Config, Ruleset)> {
@@ -199,6 +272,12 @@ impl<A: Applier> Engine<A> {
     /// A commit that was still pending is reverted. Otherwise the running
     /// commit is applied again, so a restart or reboot ends in a known state.
     pub fn open(dir: &Path, applier: A, now: u64) -> Result<Engine<A>> {
+        Engine::open_with(dir, applier, Baseline::Open, now)
+    }
+
+    /// Like [`Engine::open`], with a choice of what the box does while it
+    /// has no config.
+    pub fn open_with(dir: &Path, applier: A, baseline: Baseline, now: u64) -> Result<Engine<A>> {
         fs::create_dir_all(dir.join("commits"))?;
         fs::create_dir_all(dir.join("candidates"))?;
         let state = match fs::read_to_string(dir.join("state.json")) {
@@ -213,19 +292,31 @@ impl<A: Applier> Engine<A> {
         let mut engine = Engine {
             dir: dir.to_path_buf(),
             applier,
+            baseline,
             state,
             audit: Audit::open(&dir.join("audit.log"))?,
         };
         if engine.state.pending.is_some() {
             engine.revert("system", true, now)?;
         } else if let Some(id) = engine.state.running {
-            let ruleset = engine.ruleset_of(Some(id))?;
-            engine.applier.apply(&ruleset).map_err(StoreError::Apply)?;
+            let target = engine.target_of(Some(id))?;
+            engine.applier.apply(&target).map_err(StoreError::Apply)?;
             engine.audit.append(
                 now,
                 "system",
                 "start",
                 &format!("applied running commit #{id}"),
+            )?;
+        } else if baseline == Baseline::Lockdown {
+            engine
+                .applier
+                .apply(&baseline.target())
+                .map_err(StoreError::Apply)?;
+            engine.audit.append(
+                now,
+                "system",
+                "start",
+                "no commit yet, inbound and forwarded traffic is dropped",
             )?;
         } else {
             engine
@@ -299,19 +390,20 @@ impl<A: Applier> Engine<A> {
             .transpose()
     }
 
-    fn ruleset_of(&self, id: Option<u64>) -> Result<Value> {
+    /// What a commit asks of the box, or the baseline when there is none.
+    fn target_of(&self, id: Option<u64>) -> Result<Target> {
         match id {
-            None => Ok(render_empty()),
+            None => Ok(self.baseline.target()),
             Some(id) => {
-                let (_, rs) = check(&self.commit_config(id)?).map_err(|e| {
+                let (config, rs) = check(&self.commit_config(id)?).map_err(|e| {
                     StoreError::Corrupt(format!("commit #{id} no longer loads: {e}"))
                 })?;
-                Ok(render(&rs).0)
+                Ok(target(&config, &rs))
             }
         }
     }
 
-    pub fn status(&self, now: u64) -> Result<Status> {
+    pub fn status(&mut self, now: u64) -> Result<Status> {
         Ok(Status {
             running: self.running()?,
             reverts_in: self
@@ -321,6 +413,8 @@ impl<A: Applier> Engine<A> {
                 .map(|p| p.deadline.saturating_sub(now)),
             candidates: self.candidates()?,
             applier: self.applier.name().to_string(),
+            services: self.applier.services(),
+            lockdown: self.baseline == Baseline::Lockdown && self.state.running.is_none(),
         })
     }
 
@@ -381,11 +475,11 @@ impl<A: Applier> Engine<A> {
         if let Some(p) = &self.state.pending {
             return Err(StoreError::Busy { commit: p.commit });
         }
-        let (_, ruleset) = check(text)?;
+        let (config, ruleset) = check(text)?;
         // Apply first. If the daemon dies before the commit is recorded, the
         // next start applies the old running commit again.
         self.applier
-            .apply(&render(&ruleset).0)
+            .apply(&target(&config, &ruleset))
             .map_err(StoreError::Apply)?;
 
         let id = self.state.next_id;
@@ -536,7 +630,7 @@ impl<A: Applier> Engine<A> {
             .clone()
             .ok_or(StoreError::NothingPending)?;
         let mut commit = self.commit(pending.commit)?;
-        let previous = self.ruleset_of(commit.parent)?;
+        let previous = self.target_of(commit.parent)?;
         self.applier.apply(&previous).map_err(StoreError::Apply)?;
         commit.outcome = Outcome::Reverted { auto, at: now };
         self.save_commit(&commit)?;
@@ -560,6 +654,7 @@ impl<A: Applier> Engine<A> {
 
     /// Reverts the pending commit if its window has passed. Call this often.
     pub fn tick(&mut self, now: u64) -> Result<Option<Commit>> {
+        self.applier.tick();
         match &self.state.pending {
             Some(p) if now >= p.deadline => self.revert("system", true, now).map(Some),
             _ => Ok(None),
@@ -846,6 +941,64 @@ mod tests {
             ]
         );
         fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn services_are_applied_with_the_firewall_and_go_back_with_it() {
+        const HOME: &str = include_str!("../../../examples/home.toml");
+        let d = dir("services");
+        let mut e = open(&d, 1000);
+        e.put_candidate("base", BRANCH, "ana", 1001).unwrap();
+        e.commit_candidate("base", "ana", "no services", None, 1002)
+            .unwrap();
+        assert!(e.applier().last.as_ref().unwrap().services.is_empty());
+
+        e.put_candidate("home", HOME, "ana", 1003).unwrap();
+        e.commit_candidate("home", "ana", "dns and dhcp", Some(60), 1004)
+            .unwrap();
+        let conf = e.applier().last.as_ref().unwrap().services["dnsmasq"].clone();
+        assert!(conf.contains("dhcp-range=interface:eth1,192.168.10.100"));
+        assert_eq!(e.status(1005).unwrap().services.len(), 1);
+
+        // Not confirmed: the service config goes away with the rules.
+        e.tick(1064).unwrap().unwrap();
+        assert!(e.applier().last.as_ref().unwrap().services.is_empty());
+        assert!(has_rule(&mut e, "r-0388"));
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn lockdown_holds_until_the_first_commit_and_returns_after_its_revert() {
+        let d = dir("lockdown");
+        let locked = |e: &mut Engine<NullApplier>| {
+            e.applier()
+                .dump()
+                .unwrap()
+                .to_string()
+                .contains("\"comment\":\"lockdown\"")
+        };
+        let mut e =
+            Engine::open_with(&d, NullApplier::default(), Baseline::Lockdown, 1000).unwrap();
+        assert!(locked(&mut e));
+        assert!(e.status(1000).unwrap().lockdown);
+
+        e.put_candidate("base", BRANCH, "ana", 1001).unwrap();
+        e.commit_candidate("base", "ana", "first", Some(60), 1002)
+            .unwrap();
+        assert!(!locked(&mut e) && has_rule(&mut e, "r-0388"));
+        assert!(!e.status(1003).unwrap().lockdown);
+
+        // Reverting the first commit must not leave the box open.
+        e.tick(1062).unwrap().unwrap();
+        assert!(locked(&mut e));
+
+        // Without the option, a box with no commit has nothing loaded.
+        let d2 = dir("open");
+        let mut open_box = open(&d2, 1000);
+        assert_eq!(open_box.applier().applied, 0);
+        assert!(!open_box.status(1000).unwrap().lockdown);
+        fs::remove_dir_all(d).unwrap();
+        fs::remove_dir_all(d2).unwrap();
     }
 
     #[test]

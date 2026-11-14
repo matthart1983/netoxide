@@ -134,6 +134,74 @@ pub fn render_empty() -> Value {
     ] })
 }
 
+/// The ruleset for a box that has no config yet: nothing is forwarded and
+/// nothing new is let in. The box can still reach out, so it can get an
+/// address and be set up from its console.
+pub fn render_lockdown() -> Value {
+    let table = json!({ "family": FAMILY, "name": TABLE });
+    let mut out = Out {
+        cmds: vec![
+            json!({ "add": { "table": table } }),
+            json!({ "delete": { "table": table } }),
+            json!({ "add": { "table": table } }),
+        ],
+        stats: Stats::default(),
+    };
+    for (name, hook, policy) in [
+        ("input", "input", "drop"),
+        ("forward", "forward", "drop"),
+        ("output", "output", "accept"),
+    ] {
+        out.add(
+            "chain",
+            json!({ "name": name, "type": "filter", "hook": hook, "prio": 0, "policy": policy }),
+        );
+    }
+    out.rule(
+        "input",
+        None,
+        vec![eq(meta("iifname"), json!("lo")), verdict(Action::Accept)],
+    );
+    out.rule(
+        "input",
+        None,
+        vec![
+            ct_state(&["established", "related"]),
+            verdict(Action::Accept),
+        ],
+    );
+    out.rule(
+        "input",
+        Some("ipv6 neighbour discovery"),
+        vec![
+            eq(
+                payload("icmpv6", "type"),
+                json!({ "set": [
+                    "nd-neighbor-solicit", "nd-neighbor-advert",
+                    "nd-router-solicit", "nd-router-advert"
+                ] }),
+            ),
+            verdict(Action::Accept),
+        ],
+    );
+    // DHCPv6 replies come from the provider's link-local address and are not
+    // tracked as answers to the request.
+    out.rule(
+        "input",
+        Some("dhcpv6 replies"),
+        vec![
+            eq(
+                payload("ip6", "saddr"),
+                json!({ "prefix": { "addr": "fe80::", "len": 10 } }),
+            ),
+            eq(payload("udp", "dport"), json!(546)),
+            verdict(Action::Accept),
+        ],
+    );
+    out.rule("input", Some("lockdown"), vec![counter()]);
+    json!({ "nftables": out.cmds })
+}
+
 /// A command that lists the Netoxide table as the kernel holds it.
 pub fn list_command() -> Value {
     json!({ "nftables": [{ "list": { "table": { "family": FAMILY, "name": TABLE } } }] })
