@@ -9,7 +9,7 @@ results.
 The full spec is in `docs/spec.md`. Read it before any design or architecture
 decision. This file gives you what you need to start working.
 
-## Current state (14 Nov 2026)
+## Current state (15 Nov 2026)
 
 | What | Where | State |
 | --- | --- | --- |
@@ -26,8 +26,10 @@ decision. This file gives you what you need to start working.
 | Interfaces | `crates/oxd/src/net.rs` | On apply: add the config's addresses over netlink, bring links up, set default routes (`gateway`), enable forwarding. Remembers what it added (`managed.json`) and removes only that, when a config drops it or a commit fails. Missing interfaces are reported in status, not fatal |
 | DHCP client | `crates/oxd/src/dhcp.rs` | `dhcp_client = true` on the uplink: a tokio task per interface speaks DHCP in raw Ethernet frames on a packet socket, installs address and default route, renews, and re-requests its old address after a restart. The validator requires a visible accept rule for udp/68 |
 | WireGuard | `crates/ox-schema/src/vpn.rs`, `crates/oxd/src/wg.rs` | `[wireguard.<iface>]` with peers. The interface is made over rtnetlink and configured over the kernel's WireGuard generic-netlink family; no `wg` program. Private keys live in `<state>/wireguard/<iface>.key`, never in config, commits, audit log or API. Peers are updated in place so a commit does not reset sessions. Routes for peers' `allowed` networks are tracked in `managed.json`. Easy path: `add_vpn_peer` in `ox-setup`, `ox vpn add`, web form |
-| VM test | `tests/vm/` | Boots the host kernel in QEMU with a root disk built from the host's `/usr`, installs per `dist/README.md`, 116 checks under real systemd including a crash and a reboot. Not in CI |
-| Access control | `crates/ox-store/src/auth.rs`, `crates/oxd/src/api.rs` | Socket peer = admin, named from the kernel. HTTPS = bearer token with a role (viewer, auditor, operator, admin). Four-eyes approval. Every handler takes a `Caller` and calls `caller.may(Action::…)` first |
+| VM test | `tests/vm/` | Boots the host kernel in QEMU with a root disk built from the host's `/usr`, installs per `dist/README.md`, 129 checks under real systemd including a crash and a reboot. Not in CI |
+| Access control | `crates/ox-store/src/auth.rs`, `crates/oxd/src/api.rs` | Socket peer = admin, named from the kernel. HTTPS = bearer token with a role. A role is a set of actions, optionally held to sections of the config (firewall, network, services, vpn); six are built in and more are made with `ox role create`. Four-eyes approval. Every handler takes a `Caller` and calls `caller.may(Action::…)` first, and every handler that changes the config also calls `caller.within(&touched)` |
+| Remote CLI | `crates/ox-client/` (`tls.rs`, `remotes.rs`), `crates/ox-cli/src/remote.rs` | `ox --remote <name>` and the TUI's `--remote` talk to the HTTPS listener. A self-signed box is pinned by certificate SHA-256 (shown by `ox status`); otherwise the machine's CA bundle decides. Tested end to end in `crates/ox-cli/tests/remote.rs` |
+| Listener limits | `crates/oxd/src/limit.rs` | 256 connections, 32 per IPv4 address or IPv6 /64, 30 s for a request's headers, closed after 120 s with no bytes (`OXD_IDLE_SECS` shortens it for tests) |
 | Web UI | `crates/oxd/web/` | `index.html`, `app.js`, `app.css`, compiled in with `include_str!`. No build step, no dependencies, strict CSP, daemon text inserted with `textContent` only |
 | Hygiene | `crates/ox-nft/src/hygiene.rs` | Shadowed, redundant and allow-everything rules; `oxd` adds "no packets" from kernel counters |
 | Packaging | `dist/`, `.github/workflows/ci.yml`, `SECURITY.md` | systemd unit (`Type=notify`; runs in the VM test), install steps (run by the VM test), CI |
@@ -43,9 +45,12 @@ The daemon has run inside rootless network namespaces and in the test VM
 Nobody has run it on hardware.
 
 An internal security review on 14 Nov 2026 found no auth bypass or config
-injection. Its other findings are fixed, with tests, except three that are
-listed under "Limits today" in the README: wall-clock deadlines, the unkeyed
-audit chain, and no connection limit on the HTTPS listener. A damaged audit
+injection. Its other findings are fixed, with tests, except two that are
+listed under "Limits today" in the README: wall-clock deadlines and the unkeyed
+audit chain. Section-limited roles and the remote CLI had their own internal pass on
+15 Nov; its five findings are fixed. The one that mattered: zone membership of
+an interface or tunnel is a firewall change (`zones_of` in `auth.rs`), because
+rules are written between zones. A damaged audit
 log must never stop the rules loading (`Audit::open` repairs or sets aside).
 
 `ox-nft::Ruleset` is the one resolved form of a config. `render` turns it into
@@ -120,7 +125,7 @@ crates/
   ox-libnft/      the audited FFI crate for libnftables
   oxd/            the daemon: API on a Unix socket, commit-confirm clock
   ox-cli/         the `ox` binary
-  ox-client/      HTTP client for the oxd socket, shared by ox and the TUI
+  ox-client/      HTTP client for oxd, shared by ox and the TUI: the Unix socket, or HTTPS with a pinned certificate
   ox-setup/       guided setup and one-step actions; all return ordinary Config
   ox-services/    renders [dns] and [dhcp] as a dnsmasq config; text only, no process handling
   ox-import/      pfSense backup → config, report, verify
@@ -134,7 +139,7 @@ Proposed next, not decided, roughly in this order:
 2. Services as sandboxed systemd units instead of direct children of `oxd`; Unbound and Kea renderers beside dnsmasq. The schema must stay backend-neutral.
 3. More one-step actions (add a guest network, allow a service) in `ox-setup`, the same actions in the TUI, rule editing there, and `ox trace`.
 4. IPsec (strongSwan over VICI; not installed on Matt's machine). WireGuard follow-ups: full-tunnel peers (needs policy routing), preshared keys, a test against the official `wg` tools.
-5. OIDC sign-in, finer roles, and `ox` over HTTPS (the CLI client is Unix-socket only).
+5. OIDC sign-in (needs an outbound HTTPS client and JWT checks in the daemon, and a test identity provider). Roles held to one zone pair or interface.
 6. Multi-WAN, FRR, CAKE, Suricata.
 7. OPNsense import, and testing the pfSense importer against real backups.
 8. HA, the fleet controller, a Terraform provider, the OS image.
@@ -147,6 +152,7 @@ The strongest `cargo test` test is `packets_cross_the_box_as_the_config_and_expl
 Rules for work on the API and the web UI:
 
 - A new route takes a `Caller` and checks `caller.may(...)` before anything else. Add its case to the HTTPS test in `crates/oxd/tests/daemon.rs`.
+- A route that changes the config, or keeps or undoes a change, also calls `caller.within(...)` with the sections the change touches (`Engine::touched_by*`). A new top-level config key needs a case in `Section::of_key`; a test fails until it has one, and an unknown key counts as every section.
 - Never trust a name the client sends. On the socket it comes from `SO_PEERCRED`; on HTTPS from the token.
 - In `app.js`, build elements with `h()` and pass daemon text as children. Never assign `innerHTML`. No inline script or style: the CSP forbids both.
 - To look at the web UI, run `oxd --dry-run --listen-http 127.0.0.1:8098` with a scratch state directory and open it in a browser. `--dry-run` loads nothing into the kernel.

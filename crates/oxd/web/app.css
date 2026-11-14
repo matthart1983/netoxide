@@ -147,6 +147,8 @@ input, select, textarea {
 textarea { min-height: 420px; resize: vertical; white-space: pre; }
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 12px; }
 .row > * { flex: 0 0 auto; }
+.check { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.check label { margin: 0; font-size: inherit; color: inherit; }
 .fields { display: grid; gap: 0 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 
 .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }

@@ -9,7 +9,7 @@
 //! - **The HTTPS listener.** Every request carries an access token, and the
 //!   token's role decides what it may do.
 
-use std::{net::IpAddr, path::PathBuf};
+use std::{collections::BTreeSet, net::IpAddr, path::PathBuf};
 
 use axum::{
     Json, Router,
@@ -23,11 +23,15 @@ use ox_explain::{Explanation, Packet, explain};
 use ox_nft::{Ruleset, compile};
 use ox_plan::FlowProto;
 use ox_schema::Config;
-use ox_store::{Action, Identity, Role, StoreError};
+use ox_store::{Action, Identity, Role, Section, StoreError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{Shared, now, web};
+
+/// Where the HTTPS listener is and the fingerprint of its certificate, set
+/// once at start when there is a listener.
+pub static HTTPS: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
 
 /// The user ID of the process on the other end of a Unix socket connection.
 #[derive(Clone, Copy, Debug)]
@@ -64,12 +68,51 @@ impl Caller {
                 format!(
                     "{} has the role {}, which may not {}",
                     self.0.name,
-                    self.0.role.as_str(),
+                    self.0.role.name,
                     action.describe()
                 ),
             ))
         }
     }
+
+    /// Refuses the request if the change it would make reaches outside the
+    /// sections of the config the caller's role is held to.
+    fn within(&self, touched: &BTreeSet<Section>) -> Api<()> {
+        let outside = self.0.role.outside(touched);
+        if outside.is_empty() {
+            return Ok(());
+        }
+        let names = |s: &mut dyn Iterator<Item = &Section>| {
+            s.map(|x| x.as_str()).collect::<Vec<_>>().join(", ")
+        };
+        Err(ApiError(
+            StatusCode::FORBIDDEN,
+            format!(
+                "{} has the role {}, which may only change {}; this would also change {}",
+                self.0.name,
+                self.0.role.name,
+                names(&mut self.0.role.sections.iter().flatten()),
+                names(&mut outside.iter()),
+            ),
+        ))
+    }
+}
+
+/// Checks that the caller may save `text` as the candidate `name`: the
+/// change must stay inside the caller's sections, and so must the candidate
+/// it would replace, so a limited role cannot wipe out a draft it could not
+/// have deleted.
+fn may_save(
+    caller: &Caller,
+    e: &ox_store::Engine<Box<dyn ox_store::Applier>>,
+    name: &str,
+    text: &str,
+) -> Api<()> {
+    caller.within(&e.touched_by(text)?)?;
+    if let Ok(old) = e.candidate(name) {
+        caller.within(&e.touched_by(&old)?)?;
+    }
+    Ok(())
 }
 
 impl FromRequestParts<Shared> for Caller {
@@ -80,7 +123,7 @@ impl FromRequestParts<Shared> for Caller {
         if let Some(ConnectInfo(Peer(uid))) = parts.extensions.get::<ConnectInfo<Peer>>() {
             return Ok(Caller(Identity {
                 name: user_name(*uid),
-                role: Role::Admin,
+                role: Role::admin(),
             }));
         }
         let secret = parts
@@ -164,6 +207,8 @@ pub fn router(shared: Shared, lease_file: PathBuf, state_dir: PathBuf) -> Router
         .route("/v1/settings", get(settings).put(put_settings))
         .route("/v1/tokens", get(tokens).post(create_token))
         .route("/v1/tokens/{name}", axum::routing::delete(revoke_token))
+        .route("/v1/roles", get(roles).post(create_role))
+        .route("/v1/roles/{name}", axum::routing::delete(delete_role))
         .route(
             "/v1/leases",
             get(move |caller: Caller| {
@@ -210,7 +255,14 @@ fn load(text: &str) -> Api<(Config, Ruleset)> {
 }
 
 async fn whoami(caller: Caller) -> Response {
-    Json(json!({ "name": caller.0.name, "role": caller.0.role.as_str() })).into_response()
+    let role = &caller.0.role;
+    Json(json!({
+        "name": caller.0.name,
+        "role": role.name,
+        "can": role.can,
+        "sections": role.sections,
+    }))
+    .into_response()
 }
 
 async fn status(State(s): State<Shared>, caller: Caller) -> Api<Response> {
@@ -218,6 +270,7 @@ async fn status(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
     let mut v = serde_json::to_value(e.status(now())?).expect("status is plain JSON");
     v["four_eyes"] = json!(e.settings()?.four_eyes);
+    v["https"] = HTTPS.get().cloned().unwrap_or_default();
     Ok(Json(v).into_response())
 }
 
@@ -250,7 +303,7 @@ async fn running_json(State(s): State<Shared>, caller: Caller) -> Api<Response> 
 /// as a candidate. Nothing is applied to the box.
 fn act(
     s: &Shared,
-    who: &str,
+    caller: &Caller,
     candidate: &str,
     change: impl FnOnce(&mut Config) -> Result<Vec<String>, String>,
 ) -> Api<Response> {
@@ -262,7 +315,9 @@ fn act(
     })?;
     let mut config = Config::from_toml(&text).map_err(invalid)?;
     let done = change(&mut config).map_err(invalid)?;
-    e.put_candidate(candidate, &config.to_toml(), who, now())?;
+    let text = config.to_toml();
+    may_save(caller, &e, candidate, &text)?;
+    e.put_candidate(candidate, &text, &caller.0.name, now())?;
     Ok(Json(json!({ "candidate": candidate, "done": done })).into_response())
 }
 
@@ -284,7 +339,7 @@ async fn action_forward(
     caller: Caller,
     Json(body): Json<ForwardBody>,
 ) -> Api<Response> {
-    let who = caller.may(Action::Edit)?;
+    caller.may(Action::Edit)?;
     let req = ox_setup::ForwardRequest {
         name: body.name.clone(),
         service: body.port.parse().map_err(invalid)?,
@@ -294,7 +349,7 @@ async fn action_forward(
     };
     act(
         &s,
-        who,
+        &caller,
         &ox_setup::candidate_name("forward", &body.name),
         |c| ox_setup::add_forward(c, &req),
     )
@@ -358,7 +413,9 @@ fn action_vpn_peer(
     let box_key = crate::wg::public_key(dir, &peer.tunnel)
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let candidate = ox_setup::candidate_name("vpn", &body.name);
-    e.put_candidate(&candidate, &config.to_toml(), who, now())?;
+    let text = config.to_toml();
+    may_save(&caller, &e, &candidate, &text)?;
+    e.put_candidate(&candidate, &text, who, now())?;
     // The device's private key goes back in this answer and nowhere else:
     // not into the candidate, the audit log or the state directory.
     let client_config = ox_setup::client_config(
@@ -391,16 +448,19 @@ async fn action_block(
     caller: Caller,
     Json(body): Json<BlockBody>,
 ) -> Api<Response> {
-    let who = caller.may(Action::Edit)?;
+    caller.may(Action::Edit)?;
     let net: ox_schema::Net = body.address.parse().map_err(invalid)?;
     let name = body
         .name
         .clone()
         .filter(|n| !n.is_empty())
         .unwrap_or(body.address.clone());
-    act(&s, who, &ox_setup::candidate_name("block", &name), |c| {
-        ox_setup::block(c, net, &name)
-    })
+    act(
+        &s,
+        &caller,
+        &ox_setup::candidate_name("block", &name),
+        |c| ox_setup::block(c, net, &name),
+    )
 }
 
 async fn commits(State(s): State<Shared>, caller: Caller) -> Api<Response> {
@@ -451,9 +511,9 @@ async fn put_candidate(
     body: String,
 ) -> Api<Response> {
     let who = caller.may(Action::Edit)?;
-    s.lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .put_candidate(&name, &body, who, now())?;
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    may_save(&caller, &e, &name, &body)?;
+    e.put_candidate(&name, &body, who, now())?;
     Ok(Json(json!({ "saved": name })).into_response())
 }
 
@@ -463,9 +523,9 @@ async fn delete_candidate(
     Path(name): Path<String>,
 ) -> Api<Response> {
     let who = caller.may(Action::Edit)?;
-    s.lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .delete_candidate(&name, who, now())?;
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    caller.within(&e.touched_by(&e.candidate(&name)?)?)?;
+    e.delete_candidate(&name, who, now())?;
     Ok(Json(json!({ "deleted": name })).into_response())
 }
 
@@ -475,12 +535,9 @@ async fn approve(
     Path(name): Path<String>,
 ) -> Api<Response> {
     let who = caller.may(Action::Approve)?;
-    Ok(Json(
-        s.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .approve(&name, who, now())?,
-    )
-    .into_response())
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    caller.within(&e.touched_by(&e.candidate(&name)?)?)?;
+    Ok(Json(e.approve(&name, who, now())?).into_response())
 }
 
 /// Checks a config without storing it. The body is the config text.
@@ -572,31 +629,24 @@ async fn commit_candidate(
 ) -> Api<Response> {
     let who = caller.may(Action::Commit)?;
     check_window(&body)?;
-    let c = s
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .commit_candidate(&name, who, &body.reason, body.confirm_secs, now())?;
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    caller.within(&e.touched_by(&e.candidate(&name)?)?)?;
+    let c = e.commit_candidate(&name, who, &body.reason, body.confirm_secs, now())?;
     Ok(Json(c).into_response())
 }
 
 async fn confirm(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     let who = caller.may(Action::Commit)?;
-    Ok(Json(
-        s.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .confirm(who, now())?,
-    )
-    .into_response())
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    caller.within(&e.touched_by_pending()?)?;
+    Ok(Json(e.confirm(who, now())?).into_response())
 }
 
 async fn revert(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     let who = caller.may(Action::Commit)?;
-    Ok(Json(
-        s.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .revert(who, false, now())?,
-    )
-    .into_response())
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    caller.within(&e.touched_by_pending()?)?;
+    Ok(Json(e.revert(who, false, now())?).into_response())
 }
 
 async fn rollback(
@@ -606,7 +656,9 @@ async fn rollback(
 ) -> Api<Response> {
     let who = caller.may(Action::Rollback)?;
     check_window(&body)?;
-    let c = s.lock().unwrap_or_else(|e| e.into_inner()).rollback(
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    caller.within(&e.touched_by_rollback(body.steps.unwrap_or(1))?)?;
+    let c = e.rollback(
         body.steps.unwrap_or(1),
         who,
         &body.reason,
@@ -762,10 +814,14 @@ async fn wireguard(State(s): State<Shared>, caller: Caller, dir: PathBuf) -> Api
     Ok(Json(json!(tunnels)).into_response())
 }
 
+/// How many tunnel keys the key route will make.
+const MAX_TUNNEL_KEYS: usize = 32;
+
 /// The box's public key for a tunnel, made if there is none yet, so two
 /// sites can swap keys before either has the tunnel in its config.
 fn wireguard_key(caller: &Caller, dir: &std::path::Path, iface: &str) -> Api<Response> {
     caller.may(Action::Edit)?;
+    caller.within(&BTreeSet::from([Section::Vpn]))?;
     let ok = !iface.is_empty()
         && iface.len() <= 15
         && iface
@@ -776,6 +832,16 @@ fn wireguard_key(caller: &Caller, dir: &std::path::Path, iface: &str) -> Api<Res
             StatusCode::BAD_REQUEST,
             "that is not an interface name".into(),
         ));
+    }
+    // Each new name makes a key file. A box has a handful of tunnels, so a
+    // caller asking for many names is filling the disk, not swapping keys.
+    let keys = dir.join("wireguard");
+    let held = std::fs::read_dir(&keys).map_or(0, Iterator::count);
+    if held >= MAX_TUNNEL_KEYS && !keys.join(format!("{iface}.key")).exists() {
+        return Err(invalid(format!(
+            "this box already holds keys for {MAX_TUNNEL_KEYS} tunnels; remove unused ones from {} first",
+            keys.display()
+        )));
     }
     let key = crate::wg::public_key(dir, iface)
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -1025,7 +1091,7 @@ async fn tokens(State(s): State<Shared>, caller: Caller) -> Api<Response> {
         .into_iter()
         .map(|t| {
             json!({
-                "name": t.name, "role": t.role.as_str(), "created": t.created,
+                "name": t.name, "role": t.role, "created": t.created,
                 "expires": t.expires, "created_by": t.created_by,
             })
         })
@@ -1049,16 +1115,14 @@ async fn create_token(
     Json(body): Json<TokenBody>,
 ) -> Api<Response> {
     let who = caller.may(Action::Manage)?;
-    let role = Role::parse(&body.role)
-        .ok_or_else(|| invalid("role must be viewer, auditor, operator or admin"))?;
     let secret = s.lock().unwrap_or_else(|e| e.into_inner()).create_token(
         &body.name,
-        role,
+        &body.role,
         body.ttl_secs,
         who,
         now(),
     )?;
-    Ok(Json(json!({ "name": body.name, "role": role.as_str(), "token": secret })).into_response())
+    Ok(Json(json!({ "name": body.name, "role": body.role, "token": secret })).into_response())
 }
 
 async fn revoke_token(
@@ -1071,6 +1135,81 @@ async fn revoke_token(
         .unwrap_or_else(|e| e.into_inner())
         .revoke_token(&name, who, now())?;
     Ok(Json(json!({ "revoked": name })).into_response())
+}
+
+/// Every role, with what it can do and where.
+async fn roles(State(s): State<Shared>, caller: Caller) -> Api<Response> {
+    caller.may(Action::Read)?;
+    Ok(Json(s.lock().unwrap_or_else(|e| e.into_inner()).roles()).into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoleBody {
+    name: String,
+    /// Actions: read-audit, edit, approve, commit, rollback, manage.
+    can: Vec<String>,
+    /// Sections changes must stay inside: firewall, network, services, vpn.
+    /// Omit for no limit.
+    #[serde(default)]
+    sections: Option<Vec<String>>,
+}
+
+async fn create_role(
+    State(s): State<Shared>,
+    caller: Caller,
+    Json(body): Json<RoleBody>,
+) -> Api<Response> {
+    let who = caller.may(Action::Manage)?;
+    let list = |all: &[&str]| all.join(", ");
+    let can = body
+        .can
+        .iter()
+        .map(|a| {
+            Action::parse(a).ok_or_else(|| {
+                invalid(format!(
+                    "'{a}' is not an action; the actions are {}",
+                    list(&Action::ALL.map(Action::as_str))
+                ))
+            })
+        })
+        .collect::<Api<Vec<_>>>()?;
+    let sections = match &body.sections {
+        None => None,
+        Some(names) => Some(
+            names
+                .iter()
+                .map(|n| {
+                    Section::parse(n).ok_or_else(|| {
+                        invalid(format!(
+                            "'{n}' is not a section; the sections are {}",
+                            list(&Section::ALL.map(Section::as_str))
+                        ))
+                    })
+                })
+                .collect::<Api<Vec<_>>>()?,
+        ),
+    };
+    let role = s.lock().unwrap_or_else(|e| e.into_inner()).create_role(
+        &body.name,
+        &can,
+        sections.as_deref(),
+        who,
+        now(),
+    )?;
+    Ok(Json(role).into_response())
+}
+
+async fn delete_role(
+    State(s): State<Shared>,
+    caller: Caller,
+    Path(name): Path<String>,
+) -> Api<Response> {
+    let who = caller.may(Action::Manage)?;
+    s.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .delete_role(&name, who, now())?;
+    Ok(Json(json!({ "deleted": name })).into_response())
 }
 
 /// Headers every response should carry when a browser is on the other end.

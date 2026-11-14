@@ -1,13 +1,23 @@
 //! `ox`: the Netoxide command line tool.
 //!
-//! Most commands talk to `oxd` over its Unix socket. The commands under
-//! `ox file` work on config files alone and need no daemon.
+//! Most commands talk to `oxd`: over its Unix socket on the box, or over
+//! HTTPS from another machine with `--remote`. The commands under `ox file`
+//! work on config files alone and need no daemon.
+
+/// Text made safe to print. What `ox` prints mostly comes from a daemon,
+/// which with `--remote` is another machine: its control characters could
+/// rewrite the terminal, so only line breaks and tabs get through.
+pub(crate) fn plain(text: String) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect()
+}
 
 /// `println!` that ignores a closed pipe, so `ox history | head` ends quietly.
 macro_rules! out {
     ($($arg:tt)*) => {{
         use std::io::Write as _;
-        let _ = writeln!(std::io::stdout(), $($arg)*);
+        let _ = writeln!(std::io::stdout(), "{}", $crate::plain(format!($($arg)*)));
     }};
 }
 
@@ -15,11 +25,12 @@ macro_rules! out {
 macro_rules! outp {
     ($($arg:tt)*) => {{
         use std::io::Write as _;
-        let _ = write!(std::io::stdout(), $($arg)*);
+        let _ = write!(std::io::stdout(), "{}", $crate::plain(format!($($arg)*)));
     }};
 }
 
 mod easy;
+mod remote;
 
 use std::{
     net::IpAddr,
@@ -45,8 +56,40 @@ struct Cli {
         default_value = "/run/netoxide/oxd.sock"
     )]
     socket: PathBuf,
+    /// A box on the network, by the name it was saved under with `ox remote add`
+    #[arg(
+        long,
+        short,
+        global = true,
+        env = "OX_REMOTE",
+        conflicts_with = "socket"
+    )]
+    remote: Option<String>,
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    /// The daemon to talk to: a saved box, a box named by the environment,
+    /// or the one on this machine.
+    fn client(&self) -> Result<Client> {
+        if let Some(name) = &self.remote {
+            let file = ox_client::remotes::path()?;
+            return Ok(Client::https(ox_client::remotes::find(&file, name)?));
+        }
+        // For scripts and CI, where there is no file to keep a box in.
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        if let Some(url) = var("OX_URL") {
+            let token = var("OX_TOKEN")
+                .ok_or("OX_URL is set, so OX_TOKEN must hold an access token for that box")?;
+            return Ok(Client::https(ox_client::remotes::remote(
+                &url,
+                var("OX_FINGERPRINT").as_deref(),
+                &token,
+            )?));
+        }
+        Ok(Client::new(&self.socket))
+    }
 }
 
 #[derive(Subcommand)]
@@ -125,6 +168,12 @@ enum Command {
     /// Access tokens for the HTTPS API and the web UI
     #[command(subcommand)]
     Token(TokenCmd),
+    /// Roles: what a token may do, and in which parts of the config
+    #[command(subcommand)]
+    Role(RoleCmd),
+    /// Boxes on the network that `ox --remote <name>` can manage from here
+    #[command(subcommand)]
+    Remote(RemoteCmd),
     /// Show who the daemon thinks you are
     Whoami,
     /// Print the Netoxide table as the kernel holds it
@@ -224,8 +273,8 @@ enum TokenCmd {
     /// Create a token. Its secret is printed once and cannot be shown again
     Create {
         name: String,
-        /// viewer, auditor, operator or admin
-        #[arg(long, value_parser = ["viewer", "auditor", "operator", "admin"])]
+        /// A role from `ox role list`, such as viewer, operator or admin
+        #[arg(long)]
         role: String,
         /// Stop working after this many days
         #[arg(long)]
@@ -235,6 +284,49 @@ enum TokenCmd {
     List,
     /// Revoke a token
     Revoke { name: String },
+}
+
+#[derive(Subcommand)]
+enum RoleCmd {
+    /// List the roles, with what each may do
+    List,
+    /// Make a role. Every role can read the config and status
+    Create {
+        name: String,
+        /// What the role may do besides reading: read-audit, edit, approve,
+        /// commit, rollback, manage. Separate with commas
+        #[arg(long, value_delimiter = ',', required = true)]
+        can: Vec<String>,
+        /// Hold the role to changes in these parts of the config: firewall,
+        /// network, services, vpn. Separate with commas. Without this, any part
+        #[arg(long, value_delimiter = ',')]
+        sections: Option<Vec<String>>,
+    },
+    /// Delete a role made on this box
+    Delete { name: String },
+}
+
+#[derive(Subcommand)]
+enum RemoteCmd {
+    /// Save a box, after checking its certificate and your access token
+    Add {
+        /// What to call the box here
+        name: String,
+        /// Where its HTTPS listener is, such as https://192.0.2.1:8443
+        url: String,
+        /// The certificate fingerprint from `ox status` on the box. Without
+        /// this, the fingerprint is shown and you are asked whether it matches
+        #[arg(long)]
+        fingerprint: Option<String>,
+        /// A file holding the access token. Without this, the token is read
+        /// from OX_TOKEN or asked for
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+    },
+    /// List the saved boxes
+    List,
+    /// Forget a saved box
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -452,7 +544,7 @@ fn strings(v: &Value) -> Vec<String> {
 }
 
 fn daemon(cli: &Cli) -> Result<()> {
-    let oxd = Client::new(&cli.socket);
+    let oxd = cli.client()?;
     match &cli.command {
         Command::Status => {
             let s = oxd.json("GET", "/v1/status", None)?;
@@ -481,6 +573,13 @@ fn daemon(cli: &Cli) -> Result<()> {
             }
             for svc in s["services"].as_array().into_iter().flatten() {
                 out!("service     {} {}", text(&svc[0]), text(&svc[1]));
+            }
+            if s["https"].is_object() {
+                out!("https       {}", text(&s["https"]["listen"]));
+                out!(
+                    "            certificate {}",
+                    text(&s["https"]["fingerprint"])
+                );
             }
         }
         Command::Running => outp!("{}", oxd.get("/v1/running")?),
@@ -660,6 +759,9 @@ fn daemon(cli: &Cli) -> Result<()> {
                 out!("Token {name} with role {role}. This secret is shown once:\n");
                 out!("  {}", text(&v["token"]));
                 out!("\nUse it in the web UI, or send it as: Authorization: Bearer <token>");
+                out!(
+                    "To run ox from another machine: ox remote add <name> https://<this box>:<port>"
+                );
             }
             TokenCmd::List => {
                 let rows = oxd.json("GET", "/v1/tokens", None)?;
@@ -689,7 +791,54 @@ fn daemon(cli: &Cli) -> Result<()> {
         Command::Whoami => {
             let v = oxd.json("GET", "/v1/whoami", None)?;
             out!("{} ({})", text(&v["name"]), text(&v["role"]));
+            out!("may         {}", strings(&v["can"]).join(", "));
+            if v["sections"].is_array() {
+                out!("changes in  {} only", strings(&v["sections"]).join(", "));
+            }
         }
+        Command::Role(cmd) => match cmd {
+            RoleCmd::List => {
+                let rows = oxd.json("GET", "/v1/roles", None)?;
+                for r in rows.as_array().into_iter().flatten() {
+                    out!(
+                        "{:<16} {}{}{}",
+                        text(&r["name"]),
+                        strings(&r["can"]).join(", "),
+                        if r["sections"].is_array() {
+                            format!("; changes only in {}", strings(&r["sections"]).join(", "))
+                        } else {
+                            String::new()
+                        },
+                        if r["builtin"] == true {
+                            ""
+                        } else {
+                            "  (made here)"
+                        },
+                    );
+                }
+            }
+            RoleCmd::Create {
+                name,
+                can,
+                sections,
+            } => {
+                let r = oxd.json(
+                    "POST",
+                    "/v1/roles",
+                    Some(&json!({ "name": name, "can": can, "sections": sections })),
+                )?;
+                out!("made role {name}: may {}", strings(&r["can"]).join(", "));
+                if r["sections"].is_array() {
+                    out!("changes only in {}", strings(&r["sections"]).join(", "));
+                }
+                out!("Give it to someone with: ox token create <name> --role {name}");
+            }
+            RoleCmd::Delete { name } => {
+                oxd.send("DELETE", &format!("/v1/roles/{name}"), None)?;
+                out!("deleted role {name}");
+            }
+        },
+        Command::Remote(_) => unreachable!("handled before a daemon is chosen"),
         Command::Hygiene => {
             let rows = oxd.json("GET", "/v1/hygiene", None)?;
             let rows = rows.as_array().cloned().unwrap_or_default();
@@ -954,55 +1103,59 @@ fn import(backup: &Path, out: Option<&Path>, verify: Option<&Path>) -> Result<()
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let result = match &cli.command {
-        Command::Schema => serde_json::to_string_pretty(&Config::json_schema())
-            .map(|s| out!("{s}"))
-            .map_err(Into::into),
-        Command::File(cmd) => file(cmd),
-        Command::Init {
-            wan,
-            lan,
-            hostname,
-            out,
-            save,
-            no_services,
-            dns_upstream,
-            wan_dhcp,
-            gateway,
-        } => easy::init(
-            &easy::InitArgs {
-                wan: wan.as_deref(),
+    let run = || -> Result<()> {
+        match &cli.command {
+            Command::Schema => serde_json::to_string_pretty(&Config::json_schema())
+                .map(|s| out!("{s}"))
+                .map_err(Into::into),
+            Command::File(cmd) => file(cmd),
+            Command::Init {
+                wan,
                 lan,
-                hostname: hostname.as_deref(),
-                out: out.as_deref(),
-                save: save.as_deref(),
-                no_services: *no_services,
+                hostname,
+                out,
+                save,
+                no_services,
                 dns_upstream,
-                wan_dhcp: *wan_dhcp,
+                wan_dhcp,
                 gateway,
-            },
-            &Client::new(&cli.socket),
-        ),
-        Command::Forward {
-            name,
-            port,
-            to,
-            address,
-        } => easy::forward(&Client::new(&cli.socket), name, port, to, *address),
-        Command::Block { address, name } => {
-            easy::block(&Client::new(&cli.socket), address, name.as_deref())
+            } => easy::init(
+                &easy::InitArgs {
+                    wan: wan.as_deref(),
+                    lan,
+                    hostname: hostname.as_deref(),
+                    out: out.as_deref(),
+                    save: save.as_deref(),
+                    no_services: *no_services,
+                    dns_upstream,
+                    wan_dhcp: *wan_dhcp,
+                    gateway,
+                },
+                &cli.client()?,
+            ),
+            Command::Forward {
+                name,
+                port,
+                to,
+                address,
+            } => easy::forward(&cli.client()?, name, port, to, *address),
+            Command::Block { address, name } => {
+                easy::block(&cli.client()?, address, name.as_deref())
+            }
+            Command::Remote(cmd) => remote::run(cmd),
+            Command::Import {
+                backup,
+                out,
+                verify,
+            } => import(backup, out.as_deref(), verify.as_deref()),
+            _ => daemon(&cli),
         }
-        Command::Import {
-            backup,
-            out,
-            verify,
-        } => import(backup, out.as_deref(), verify.as_deref()),
-        _ => daemon(&cli),
     };
+    let result = run();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("ox: {e}");
+            eprintln!("ox: {}", plain(e.to_string()));
             ExitCode::FAILURE
         }
     }
@@ -1011,6 +1164,11 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_characters_are_not_printed() {
+        assert_eq!(plain("a\x1b[2Jb\r\n\tc\x07".into()), "a[2Jb\n\tc");
+    }
 
     #[test]
     fn windows_parse() {

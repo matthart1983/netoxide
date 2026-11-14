@@ -68,6 +68,26 @@ Open `https://<box>:8443/` and sign in with the token. The daemon makes its
 own certificate on first start, so the browser will warn. Give it a real one
 with `--tls-cert` and `--tls-key`.
 
+## From another machine
+
+With the listener on, `ox` on your own machine can manage the box. On the box:
+
+```sh
+sudo ox token create laptop --role operator --days 90
+sudo ox status        # the last lines show the certificate's fingerprint
+```
+
+On your machine:
+
+```sh
+ox remote add home https://<box>:8443     # shows the fingerprint and asks for the token
+ox --remote home status
+```
+
+Compare the fingerprint `ox remote add` shows with the one from the box before
+you answer yes. To give someone less than an operator, see the roles in the
+main README, for example `ox role create helpdesk --can edit,commit --sections vpn`.
+
 ## A VPN for your own devices
 
 ```sh

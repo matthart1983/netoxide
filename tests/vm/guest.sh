@@ -285,6 +285,28 @@ TOML
     check "https: no token, no entry" says 401 code https://192.168.50.1:8443/v1/status
     check "https: a viewer may not commit" says 403 code -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "{}" https://192.168.50.1:8443/v1/candidates/box/commit
     check "https: the outside cannot reach the listener" times_out srv curl -sk --max-time 3 https://203.0.113.10:8443/v1/status
+
+    # --- ox from another machine, and roles held to parts of the config ---
+    # The client on the inside network plays the administrator's laptop.
+    print=$(ox status | sed -n 's/^ *certificate //p')
+    rox() { cli env OX_REMOTES=$STATE/remotes.toml ox "$@"; }
+    # The same as text, for checks that run in their own shell.
+    ROX="ip netns exec cli env OX_REMOTES=$STATE/remotes.toml ox"
+    radd() { # radd <name> <url> <role>
+        ox token create "$1" --role "$3" | grep -o 'ox_[0-9a-f]*' >"/tmp/$1.token"
+        rox remote add "$1" "$2" --fingerprint "$print" --token-file "/tmp/$1.token"
+    }
+    check "remote: the box shows its certificate's fingerprint" bash -c "[ ${#print} -eq 71 ]"
+    refute "remote: a wrong fingerprint is refused" rox remote add bad https://192.168.50.1:8443 --fingerprint "sha256:$(printf 'ab%.0s' $(seq 32))" --token-file /dev/null
+    check "remote: the laptop saves the box" radd box https://192.168.50.1:8443 operator
+    check "remote: and again over IPv6" radd box6 'https://[2001:db8:50::1]:8443' network-admin
+    check "remote: status from the laptop" bash -c "$ROX --remote box status | grep -q '^running'"
+    check "remote: the running config is the same one" bash -c "$ROX -r box6 running | diff - <(ox running)"
+    check "remote: a change made from the laptop is applied on the box" bash -c "$ROX -r box running >/tmp/r.toml && $ROX -r box candidate save fromlaptop /tmp/r.toml && $ROX -r box commit fromlaptop --reason 'from the laptop' && ox history | head -n 3 | grep -q token:box"
+    refute "roles: a network admin may not change the firewall" rox -r box6 block 192.168.50.77
+    check "roles: and is told why" bash -c "$ROX -r box6 block 2001:db8:50::77 2>&1 | grep -q 'would also change firewall'"
+    check "roles: the operator may" rox -r box block 192.168.50.77
+    refute "remote: the outside cannot use it" srv env OX_URL=https://203.0.113.10:8443 OX_TOKEN="$(cat /tmp/box.token)" OX_FINGERPRINT="$print" timeout 15 ox status
     traffic_checks "after restarts"
 
     check "wan: the box asked to keep its address and got it" wait_for 80 bash -c '[ "$(journalctl -u oxd --no-pager | grep -c "eth2 has 203.0.113.10/24 from the network")" -ge 2 ]'
@@ -313,6 +335,9 @@ wait_for 10 bash -c '! ip -n cli -6 addr show dev eth1 | grep -q tentative'
 check "reboot: the laptop's daemon starts again" remote_up
 traffic_checks "after reboot"
 vpn_checks "after reboot"
+ROX="ip netns exec cli env OX_REMOTES=$STATE/remotes.toml ox"
+check "reboot: the laptop still trusts the box's certificate" bash -c "$ROX --remote box status | grep -q '^running'"
+check "reboot: over IPv6 too" bash -c "$ROX --remote box6 whoami | grep -q network-admin"
 check "reboot: the audit log still verifies" ox audit
 
 # The pretend laptop's daemon is not part of the install.

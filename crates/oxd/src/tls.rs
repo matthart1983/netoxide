@@ -9,12 +9,30 @@ use std::{fs, io::Write, os::unix::fs::OpenOptionsExt, path::Path};
 
 use axum_server::tls_rustls::RustlsConfig;
 
-/// Loads the TLS config and a few words about where the certificate is from.
+/// The TLS config, a few words about where the certificate is from, and the
+/// certificate's fingerprint.
+pub struct Loaded {
+    pub config: RustlsConfig,
+    pub note: String,
+    /// `sha256:` and the SHA-256 of the certificate, which is what
+    /// `ox remote add` shows on another machine before it trusts the box.
+    pub fingerprint: String,
+}
+
+/// The fingerprint of the first certificate in a PEM file.
+fn fingerprint(cert: &Path) -> Result<String, String> {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    let der =
+        CertificateDer::from_pem_file(cert).map_err(|e| format!("{}: {e}", cert.display()))?;
+    Ok(format!("sha256:{}", ox_store::sha256_hex(der.as_ref())))
+}
+
+/// Loads the certificate, making one first if none was given.
 pub async fn config(
     state_dir: &Path,
     cert: Option<&Path>,
     key: Option<&Path>,
-) -> Result<(RustlsConfig, String), String> {
+) -> Result<Loaded, String> {
     // rustls needs to be told which crypto library to use, once.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -69,5 +87,9 @@ pub async fn config(
     let config = RustlsConfig::from_pem_file(&cert, &key)
         .await
         .map_err(|e| format!("{} and {}: {e}", cert.display(), key.display()))?;
-    Ok((config, note))
+    Ok(Loaded {
+        config,
+        note,
+        fingerprint: fingerprint(&cert)?,
+    })
 }

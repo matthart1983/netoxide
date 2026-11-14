@@ -1,13 +1,17 @@
 [package]
 name = "ox-client"
-description = "A small HTTP client for the oxd Unix socket"
+description = "A small HTTP client for oxd: its Unix socket, or HTTPS from another machine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+rustls.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

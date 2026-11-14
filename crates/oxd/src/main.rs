@@ -12,6 +12,7 @@
 
 mod api;
 mod dhcp;
+mod limit;
 mod net;
 mod services;
 mod tls;
@@ -476,20 +477,40 @@ async fn serve(args: Args) -> Result<(), String> {
         return Err("--tls-cert and --tls-key go together".into());
     }
     if let Some(addr) = args.listen {
-        let (config, note) = tls::config(
+        let tls::Loaded {
+            config,
+            note,
+            fingerprint,
+        } = tls::config(
             &args.state_dir,
             args.tls_cert.as_deref(),
             args.tls_key.as_deref(),
         )
         .await?;
+        let _ = api::HTTPS.set(serde_json::json!({
+            "listen": addr.to_string(),
+            "fingerprint": fingerprint,
+        }));
         // No connect info here, so every request must carry a token.
         let app = api::router(shared.clone(), leases.clone(), args.state_dir.clone());
         eprintln!("oxd: HTTPS on {addr} ({note}); every request needs an access token");
+        eprintln!("oxd: certificate fingerprint {fingerprint}");
         tokio::spawn(async move {
-            if let Err(e) = axum_server::bind_rustls(addr, config)
-                .serve(app.into_make_service())
-                .await
-            {
+            // A caller has 10 seconds to finish the TLS handshake, which the
+            // library sets. This adds a cap on how many connections are open
+            // at once, and closes the ones that go quiet.
+            let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(config).acceptor(
+                limit::Limit::new(MAX_CONNECTIONS, MAX_PER_ADDRESS, idle_timeout()),
+            );
+            // The server library leaves both of these off. Without them a
+            // caller could hold a place for ever by sending a byte of a
+            // request now and then.
+            let patience = idle_timeout().min(std::time::Duration::from_secs(30));
+            let mut server = axum_server::bind(addr)
+                .acceptor(acceptor)
+                .first_request_timeout(patience);
+            server.http_builder().http1().header_read_timeout(patience);
+            if let Err(e) = server.serve(app.into_make_service()).await {
                 eprintln!("oxd: the HTTPS listener stopped: {e}");
             }
         });
@@ -525,6 +546,24 @@ async fn serve(args: Args) -> Result<(), String> {
     let _ = std::fs::remove_file(socket);
     eprintln!("oxd: stopped; the loaded ruleset stays in place");
     Ok(())
+}
+
+/// How many connections the HTTPS listener holds at once, and how many of
+/// them one address may have. A browser opens about six and `ox` one.
+const MAX_CONNECTIONS: usize = 256;
+const MAX_PER_ADDRESS: usize = 32;
+
+/// How long a connection to the HTTPS listener may go with no bytes either
+/// way before it is closed. The longest quiet stretch in normal use is a
+/// commit that restarts services while the caller waits for the answer.
+fn idle_timeout() -> std::time::Duration {
+    // Tests set this to see a quiet connection closed without waiting minutes.
+    let secs = std::env::var("OXD_IDLE_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|s| (1..=3600).contains(s))
+        .unwrap_or(120);
+    std::time::Duration::from_secs(secs)
 }
 
 fn main() -> ExitCode {

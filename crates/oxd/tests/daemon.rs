@@ -229,6 +229,10 @@ const HOME: &str = include_str!("../../../examples/home.toml");
 /// A daemon in a namespace that has the inside interface of the home
 /// example, so DNS and DHCP have somewhere to listen.
 fn start_home(dir: &Path, extra: &[&str]) -> Option<Daemon> {
+    start_home_env(dir, extra, &[])
+}
+
+fn start_home_env(dir: &Path, extra: &[&str], env: &[(&str, &str)]) -> Option<Daemon> {
     let _ = std::fs::remove_file(dir.join("oxd.sock"));
     // The setup needs a shell because it runs several `ip` commands inside
     // the new namespace before the daemon starts. This is test scaffolding.
@@ -246,6 +250,7 @@ fn start_home(dir: &Path, extra: &[&str]) -> Option<Daemon> {
         .arg(dir.join("oxd.sock"))
         .arg("--keep-service-privileges")
         .args(extra)
+        .envs(env.iter().copied())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
@@ -553,6 +558,74 @@ fn https(
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let (body, code) = text.rsplit_once('\n').unwrap_or(("", "0"));
     (code.trim().parse().unwrap_or(0), body.to_string())
+}
+
+/// The HTTPS listener holds a bounded number of connections, and closes
+/// the ones that say nothing.
+#[test]
+fn the_https_listener_caps_connections_and_drops_quiet_ones() {
+    if !(have("curl", "--version") && have("nsenter", "--version") && have("python3", "--version"))
+    {
+        skip("needs curl, python3 and nsenter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("oxd-limit-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let Some(d) = start_home_env(
+        &dir,
+        &["--listen", "[::]:8443", "--dry-run"],
+        &[("OXD_IDLE_SECS", "2")],
+    ) else {
+        skip("needs unshare(1) and unprivileged user namespaces");
+        return;
+    };
+    std::thread::sleep(Duration::from_millis(300));
+
+    // One address opens connections and says nothing on them. The 33rd is
+    // closed at once; the rest are closed when they have been quiet too long.
+    // Another address is still served while the first has used its share.
+    let script = r#"
+import socket, subprocess, sys, time
+def closed(c, wait):
+    c.settimeout(wait)
+    try:
+        return c.recv(1) == b""
+    except socket.timeout:
+        return False
+    except OSError:
+        return True
+held = [socket.create_connection(("127.0.0.1", 8443)) for _ in range(32)]
+time.sleep(0.3)
+assert not any(closed(c, 0.01) for c in held), "a connection within the cap was closed"
+extra = socket.create_connection(("127.0.0.1", 8443))
+assert closed(extra, 1), "the 33rd connection from one address stayed open"
+other = subprocess.run(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", "https://[::1]:8443/"],
+                       capture_output=True, text=True).stdout
+assert other == "200", "another address was not served: " + other
+time.sleep(2.5)
+assert all(closed(c, 0.5) for c in held), "quiet connections were left open"
+again = socket.create_connection(("127.0.0.1", 8443))
+assert not closed(again, 0.3), "the places did not come back"
+print("ok")
+"#;
+    let out = Command::new("nsenter")
+        .args(["--user", "--net", "--preserve-credentials", "-t"])
+        .arg(d.child.id().to_string())
+        .args(["python3", "-c", script])
+        .output()
+        .expect("python runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // The daemon is still serving after all of that.
+    assert_eq!(https(&d, "GET", "/", None, None).0, 200);
+    d.ok("GET", "/v1/status", "");
+
+    drop(d);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Tokens, roles and four-eyes approval over the HTTPS listener.
@@ -1029,10 +1102,16 @@ fn packets_cross_the_box_as_the_config_and_explain_say() {
 
     // Allowed: web and ping from inside to outside. The server has no route
     // back to 192.168.10.0/24, so an answer proves the source was rewritten.
-    assert_eq!(
-        lab.fetch(client, "http://203.0.113.9/").as_deref(),
-        Some("outside web")
-    );
+    // The links have only just come up and the test's web servers may still
+    // be starting on a busy machine, so the first fetch gets a few tries.
+    let mut first = None;
+    for _ in 0..5 {
+        first = lab.fetch(client, "http://203.0.113.9/");
+        if first.is_some() {
+            break;
+        }
+    }
+    assert_eq!(first.as_deref(), Some("outside web"));
     assert!(lab.ping(client, "203.0.113.9"));
     assert_eq!(lab.explain("203.0.113.9", "tcp", Some(80)), "ACCEPT");
     assert_eq!(lab.explain("203.0.113.9", "icmp", None), "ACCEPT");
