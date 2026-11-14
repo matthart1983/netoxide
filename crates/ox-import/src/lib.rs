@@ -585,7 +585,7 @@ format!(
             id: f.id.clone(),
             name: f.name.clone(),
             from,
-            address: f.address,
+            address: Some(f.address),
             service: PortSpec::Ports {
                 proto: f.proto,
                 first: f.first,

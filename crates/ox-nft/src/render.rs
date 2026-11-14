@@ -515,10 +515,24 @@ fn nat(out: &mut Out, rs: &Ruleset) {
         if from.is_empty() {
             continue;
         }
-        let (ip, family) = if f.address.is_ipv4() {
+        let (ip, family) = if f.to.is_ipv4() {
             ("ip", "ip")
         } else {
             ("ip6", "ip6")
+        };
+        let destination = match f.address {
+            Some(a) => vec![eq(payload(ip, "daddr"), json!(a.to_string()))],
+            // Any address the box itself has, whatever the network gave it.
+            None => vec![
+                eq(
+                    meta("nfproto"),
+                    json!(if f.to.is_ipv4() { "ipv4" } else { "ipv6" }),
+                ),
+                eq(
+                    json!({ "fib": { "result": "type", "flags": ["daddr"] } }),
+                    json!("local"),
+                ),
+            ],
         };
         let port = if f.first == f.last {
             json!(f.first)
@@ -532,13 +546,15 @@ fn nat(out: &mut Out, rs: &Ruleset) {
         out.rule(
             "prerouting",
             Some(&f.id),
-            vec![
-                eq(meta("iifname"), ifaces(&from)),
-                eq(payload(ip, "daddr"), json!(f.address.to_string())),
-                eq(payload(f.proto.as_str(), "dport"), port),
-                counter(),
-                json!({ "dnat": dnat }),
-            ],
+            [eq(meta("iifname"), ifaces(&from))]
+                .into_iter()
+                .chain(destination)
+                .chain([
+                    eq(payload(f.proto.as_str(), "dport"), port),
+                    counter(),
+                    json!({ "dnat": dnat }),
+                ])
+                .collect(),
         );
     }
 

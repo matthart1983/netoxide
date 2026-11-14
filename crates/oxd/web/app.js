@@ -303,7 +303,7 @@ function nat() {
       h('h2', null, 'Port forwards'),
       (n.forward || []).length
         ? table(['ID', 'Name', 'From', 'Outside', 'Inside', 'Filter rule', { label: 'Packets', num: true }],
-          n.forward.map((f) => [h('span', { class: 'id' }, f.id), f.name, f.from, f.address + ' ' + f.service,
+          n.forward.map((f) => [h('span', { class: 'id' }, f.id), f.name, f.from, (f.address || "the box's own address") + ' ' + f.service,
             f.to + (f.to_port ? ' port ' + f.to_port : ''), h('span', { class: 'id' }, f.rule), hits(f.id)]))
         : h('p', { class: 'dim' }, 'None. Add one under Changes.'),
       h('p', { class: 'dim' }, 'A forward only rewrites the destination. Its filter rule decides whether the traffic gets in.')),
@@ -388,7 +388,7 @@ const draftBlock = { address: '', name: '' };
 function saved(result) {
   state.candidate = result.candidate;
   state.form = null;
-  return result.done.join(' ') + ' Saved as candidate ' + result.candidate + '. Nothing is applied yet.';
+  return result.done.join('; ') + '. Saved as candidate ' + result.candidate + '. Nothing is applied yet.';
 }
 
 function forwardForm() {
@@ -407,7 +407,7 @@ function forwardForm() {
       field('Outside port', 'port', draftForward, { required: true, placeholder: 'tcp/443' }),
       field('Inside device address', 'to', draftForward, { required: true, placeholder: '192.168.10.20' }),
       field('Inside port, if different', 'to_port', draftForward, { inputmode: 'numeric', placeholder: 'same' }),
-      field('Outside address, if the box has several', 'address', draftForward, { placeholder: "the box's own" })),
+      field('Outside address, if the box has several', 'address', draftForward, { placeholder: "whichever the box has" })),
     h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save as candidate'),
       h('button', { type: 'button', onclick: () => { state.form = null; render(); } }, 'Cancel')));
 }

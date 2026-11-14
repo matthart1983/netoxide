@@ -390,7 +390,7 @@ impl Checker<'_> {
                     "to_port cannot be set when the service is a port range",
                 );
             }
-            if f.address.is_ipv4() != f.to.is_ipv4() {
+            if f.address.is_some_and(|a| a.is_ipv4() != f.to.is_ipv4()) {
                 self.add(&at, "address and to are different address families");
             }
             // The forward must name a real accept rule in a policy from the same zone.

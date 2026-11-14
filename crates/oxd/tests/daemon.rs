@@ -1077,6 +1077,32 @@ fn packets_cross_the_box_as_the_config_and_explain_say() {
         Some("outside web")
     );
 
+    // A forward with no outside address follows whatever address the box
+    // has, as on a line where the provider assigns it.
+    let floating = ROUTER.replace("address = \"203.0.113.10\"\n", "");
+    assert_ne!(floating, ROUTER);
+    lab.daemon.ok("PUT", "/v1/candidates/floating", &floating);
+    lab.daemon.ok(
+        "POST",
+        "/v1/candidates/floating/commit",
+        r#"{"reason":"test"}"#,
+    );
+    assert_eq!(
+        lab.fetch(server, "http://203.0.113.10:8080/").as_deref(),
+        Some("inside web")
+    );
+    let from_outside = json!({ "src": "203.0.113.9", "dst": "203.0.113.10", "proto": "tcp", "dport": 8080, "in": "eth0" });
+    assert_eq!(
+        lab.daemon
+            .ok("POST", "/v1/explain", &from_outside.to_string())["running"]["verdict"],
+        "ACCEPT"
+    );
+    lab.daemon.ok(
+        "POST",
+        "/v1/rollback",
+        r#"{"steps":1,"reason":"back to the example"}"#,
+    );
+
     // Renumbering the inside network takes the old address off the port,
     // because the daemon put it there. An address it did not put there stays.
     let box_ns = lab.daemon.child.id();

@@ -209,9 +209,12 @@ pub struct Forward {
     pub name: String,
     /// The zone the packet arrives from.
     pub from: String,
-    /// The address the packet is sent to, before translation.
-    #[schemars(with = "String")]
-    pub address: IpAddr,
+    /// The address the packet is sent to, before translation. Leave it out
+    /// to forward packets sent to any address the box itself has, which is
+    /// what to do when the provider assigns the box's address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub address: Option<IpAddr>,
     /// A TCP or UDP port or port range.
     pub service: PortSpec,
     /// The internal host that receives the packet.

@@ -584,6 +584,19 @@ async fn explain_packet(
         l4: body.proto.into(),
         dport: body.dport,
         iif: body.iif,
+        // What the machine has now, so an address the provider assigned
+        // counts as the box's own, as it does for the kernel.
+        box_addrs: nix::ifaddrs::getifaddrs()
+            .map(|all| {
+                all.filter_map(|a| {
+                    let s = a.address?;
+                    s.as_sockaddr_in()
+                        .map(|v4| std::net::IpAddr::V4(v4.ip()))
+                        .or_else(|| s.as_sockaddr_in6().map(|v6| std::net::IpAddr::V6(v6.ip())))
+                })
+                .collect()
+            })
+            .unwrap_or_default(),
     };
     let run = |text: &str| -> Api<ExplainView> {
         let (_, rs) = load(text)?;

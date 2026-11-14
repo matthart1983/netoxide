@@ -67,6 +67,7 @@ The research behind this is in [`docs/research/market-gap.md`](docs/research/mar
 | Access control | The local socket identifies the caller from the kernel. The HTTPS listener needs an access token with a role: viewer, auditor, operator or admin. Four-eyes approval can require a second person before a commit. |
 | Health | Prometheus metrics at `/metrics`, and a hygiene report of rules that never apply, add nothing, allow everything, or have seen no packets. |
 | Addresses and routes | On a commit the daemon puts the config's addresses on their interfaces, brings those links up, sets the default route through the `gateway` you name, and turns on packet forwarding, over netlink. It takes an address or route off again when a later config drops it or a commit fails, and only ever the ones it added itself. |
+| Port forwards that follow the address | A forward with no `address` applies to whatever address the box has, so it keeps working when the provider changes it. `ox forward` and the web form write that when the internet port has no fixed address. |
 | Internet-side address | With `dhcp_client = true` the box asks the provider's network for its IPv4 address and router, renews the lease, and asks for the same address after a restart. `ox init` sets this up when you say the provider assigns the address. |
 | IPv6 and own traffic | The box can announce its IPv6 network so devices configure themselves, and policies from `self` filter what the box itself sends. |
 | Audit log | Every candidate save, commit, confirm and revert is appended to a hash-chained log. Editing or deleting a line breaks the chain, and the log says which line. Entries cut off the end are noticed too. A damaged log never stops the firewall loading: it is repaired or set aside, and the damage becomes the next entry. |
@@ -591,7 +592,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 136 tests. Eight of them use the real kernel inside a private, rootless network namespace:
+There are 137 tests. Eight of them use the real kernel inside a private, rootless network namespace:
 
 - The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
 - The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.
@@ -617,7 +618,7 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 - **Access control is new and has had no outside audit.** Tokens, roles, four-eyes and the HTTPS listener are tested. One internal review pass found no way around them and eleven other defects, which are fixed except the three listed next. Nobody outside this project has reviewed any of it. There is no single sign-on (OIDC), and the roles are four fixed ones.
 - **Known and not fixed.** Token expiry and the undo timer use the wall clock, so a box whose clock jumps backwards extends both. The audit chain has no key, so someone who can write the state directory can rewrite the log and its head together; shipping the head off the box would close that. The HTTPS listener has no connection limit or header timeout of its own.
 - **An admin can get around four-eyes** by turning it off or making a second token. Both are in the audit log. Operators cannot.
-- **The web UI has been checked by hand in one browser.** Sign-in, overview, rules, changes and a commit with its timer were exercised in Chrome. The forms for forwarding, blocking, editing, explain and tokens were not; their endpoints are covered by tests.
+- **The web UI has been checked by hand in one browser.** Every screen and form was exercised in Chrome against a dry-run daemon: sign-in, overview, rules, NAT, a commit with its timer, forward a port, block a device, the config editor, explain against a candidate, and creating and revoking a token. There are no automated browser tests, and no other browser has been tried.
 - **Nothing is loaded before the first commit** unless you start `oxd --lockdown`, so by default the kernel's own defaults apply until then.
 - **DNS and DHCP are new.** They are tested end to end in a namespace: `dig` against the resolver over IPv4 and IPv6, and a small DHCP client that gets a pool address and a fixed address through the firewall. No real device has used them. There are no DNS blocklists, IPv6 is announce-only (no DHCPv6), and the daemon runs dnsmasq directly, not as a sandboxed systemd unit as the spec asks.
 - **dnsmasq is the only backend.** The spec names Unbound and Kea. The config does not name the program, so they can be added without changing configs.

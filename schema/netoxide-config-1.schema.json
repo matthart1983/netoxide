@@ -125,8 +125,11 @@
       "description": "A port forward. It only rewrites the destination. The packet still has to\npass the filter rule named in `rule`, so there is no hidden pass rule.",
       "properties": {
         "address": {
-          "description": "The address the packet is sent to, before translation.",
-          "type": "string"
+          "description": "The address the packet is sent to, before translation. Leave it out\nto forward packets sent to any address the box itself has, which is\nwhat to do when the provider assigns the box's address.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "from": {
           "description": "The zone the packet arrives from.",
@@ -165,7 +168,6 @@
         "id",
         "name",
         "from",
-        "address",
         "service",
         "to",
         "rule"

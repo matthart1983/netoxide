@@ -24,6 +24,9 @@ pub struct Packet {
     pub dport: Option<u16>,
     /// The interface the packet arrives on.
     pub iif: String,
+    /// Addresses the box has that the config does not list, such as one
+    /// its provider assigned. The daemon fills this in from the machine.
+    pub box_addrs: Vec<IpAddr>,
 }
 
 impl fmt::Display for Packet {
@@ -165,11 +168,12 @@ enum Route<'a> {
     None,
 }
 
-fn route<'a>(rs: &'a Ruleset, dst: IpAddr) -> Route<'a> {
-    if rs
-        .interfaces
-        .iter()
-        .any(|i| i.addrs.iter().any(|a| a.addr() == dst))
+fn route<'a>(rs: &'a Ruleset, dst: IpAddr, box_addrs: &[IpAddr]) -> Route<'a> {
+    if box_addrs.contains(&dst)
+        || rs
+            .interfaces
+            .iter()
+            .any(|i| i.addrs.iter().any(|a| a.addr() == dst))
     {
         return Route::Local;
     }
@@ -244,10 +248,31 @@ pub fn explain(rs: &Ruleset, p: &Packet) -> Result<Explanation, ExplainError> {
 
     // Destination NAT runs before routing, so everything after sees the new destination.
     let (mut dst, mut dport) = (p.dst, p.dport);
+    let dst_is_box = p.box_addrs.contains(&p.dst)
+        || rs
+            .interfaces
+            .iter()
+            .any(|i| i.addrs.iter().any(|a| a.addr() == p.dst));
+    if !dst_is_box
+        && let Some(f) = rs
+            .forwards
+            .iter()
+            .find(|f| f.matches_but_for_address(from_zone, p.dst, p.l4, p.dport))
+    {
+        t.step(
+            "forward",
+            format!("{} {} does not apply", f.id, f.name),
+            format!(
+                "it forwards packets sent to the box's own address, and the config does not give the box {}; \
+                 if the box got that address from the network, ask the daemon, which knows",
+                p.dst
+            ),
+        );
+    }
     if let Some(f) = rs
         .forwards
         .iter()
-        .find(|f| f.matches(from_zone, p.dst, p.l4, p.dport))
+        .find(|f| f.matches(from_zone, p.dst, p.l4, p.dport, dst_is_box))
     {
         dst = f.to;
         dport = f.to_port.or(p.dport);
@@ -262,7 +287,7 @@ pub fn explain(rs: &Ruleset, p: &Packet) -> Result<Explanation, ExplainError> {
         );
     }
 
-    let (to_zone, egress) = match route(rs, dst) {
+    let (to_zone, egress) = match route(rs, dst, &p.box_addrs) {
         Route::Local => {
             t.step(
                 "route",
@@ -401,6 +426,7 @@ mod tests {
             l4,
             dport,
             iif: iif.to_string(),
+            box_addrs: vec![],
         }
     }
 

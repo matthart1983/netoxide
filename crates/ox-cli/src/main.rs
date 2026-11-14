@@ -770,6 +770,7 @@ fn file(cmd: &FileCmd) -> Result<()> {
                 l4: packet.proto.into(),
                 dport: packet.dport,
                 iif: packet.iif.clone(),
+                box_addrs: vec![],
             };
             let (_, rs) = load(config)?;
             let running = explain(&rs, &packet)?;
