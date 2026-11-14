@@ -1,6 +1,6 @@
 # Netoxide
 
-Netoxide is an open-source firewall and router OS for Linux with a Rust control plane. It is meant for teams that run 10 to 300 firewalls across sites, mostly people moving off pfSense or OPNsense.
+Netoxide is an open-source firewall and router OS for Linux with a Rust control plane. It is meant for two groups: home-lab users who want a firewall that is easy to set up on one box, and teams that run 10 to 300 firewalls across sites, mostly people moving off pfSense or OPNsense. The aim is one product that is easy to start with and keeps the advanced features within reach.
 
 **Status: pre-alpha.** What exists today is a single-box firewall core. A daemon applies a typed config to the kernel through nftables, with commit, confirm, automatic revert, rollback and an audit log. There is a CLI and a pfSense importer. It has only been run inside network namespaces, never on a production box. Do not put it in front of a real network.
 
@@ -421,14 +421,16 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 
 ## Not built yet
 
-Roughly in the order planned:
+Roughly in the order planned. Ease of use on one box comes first:
 
-1. Editing rules and candidates from the TUI.
-2. API security: TLS, OIDC or token login, roles, four-eyes approval.
-3. Services rendered from the config: DNS with Unbound, DHCP with Kea, then WireGuard and IPsec.
-4. A locked-down default before the first commit, and rules for the box's own traffic.
-5. OPNsense import, and the pfSense importer tested on real backups.
-6. HA, the fleet controller, the web UI, and the OS image with signed A/B upgrades.
+1. A guided first-run setup (`ox init`) that writes a complete, safe config, and a locked-down default before the first commit.
+2. DHCP with Kea and DNS with Unbound, rendered from the config.
+3. Plain-language actions such as "forward a port" and "block a device", and rule editing in the TUI.
+4. A web UI.
+5. API security: TLS, OIDC or token login, roles, four-eyes approval.
+6. WireGuard, then IPsec.
+7. OPNsense import, and the pfSense importer tested on real backups.
+8. HA, the fleet controller, and the OS image with signed A/B upgrades.
 
 The spec dates a 1.0 at August 2028 for a team of six. That date is a plan, not a commitment.
 

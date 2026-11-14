@@ -68,7 +68,7 @@ Netoxide is the firewall for people who run many firewalls. The positioning line
 | 2 | EU organisations answering CRA and supply-chain questionnaires | OPNsense, Sophos, FortiGate | SBOM, declared support period, EU steward, self-hosted management |
 | 3 | Platform teams running branch and edge sites | VyOS, plain nftables, NixOS routers | GitOps workflow with a supported product behind it |
 
-Home labs get the same software free, and they are the test bed and the contributor pool. They are not the paying segment.
+Home labs are a first-class audience and get the same software free. A single box has to be easy to set up and run without reading this spec. Home-lab users are the test bed and the contributor pool, and they are the people who later bring the product to work, which is how pfSense and OPNsense grew. They are not the paying segment.
 
 Evidence for ring 1 is moderate. Both incumbents put their paid work into fleet management, a Netgate forum user evaluating Nexus for about 100 firewalls asked for finer RBAC ([Netgate forum](https://forum.netgate.com/post/1245184)), and a third-party SaaS sells OPNsense central management ([NetDefense](https://netdefense.io/opnsense-central-management)). We have no sizing. Phase 0 of the roadmap includes 15 interviews with fleet operators before the build starts.
 
@@ -99,6 +99,8 @@ Seven rules decide design arguments. When two conflict, the earlier one wins.
 5. **Verified before broad.** A feature ships when it has a test that runs on every release. Fewer features with proof beat nfSensei's feature count.
 6. **Self-hosted first.** The controller runs on the customer's hardware, air-gapped if they want. A hosted option is a convenience and never a requirement.
 7. **One licence, bound by governance.** No closed edition and no relicensing path.
+
+One more rule sits beside these seven. **Easy first, advanced within reach.** A home-lab user gets a working, safe box from a short guided setup with no config file to write. An operator of 200 boxes gets the full model. Both use the same config and the same tools, so the easy path writes ordinary config that the advanced path can read and change. Nothing a single box needs may depend on the controller, a login server or a fleet feature.
 
 Non-goals for 1.0.
 
@@ -201,6 +203,18 @@ One API does everything, and the web UI, the CLI and the fleet controller are cl
 - **CLI.** `ox` runs on the box or remotely. `ox diff`, `ox commit --confirm`, `ox rollback 3` and `ox explain` are the core commands.
 - **Web UI.** A single-page app served by `oxd`. Every form shows the config diff it will commit, and every page links to the same object in the API.
 - **Tokens.** API tokens carry scopes per config section and an expiry. No token inherits full admin rights by default.
+
+### First run on one box
+
+A single box must work as a home or small-office router within ten minutes of first boot.
+
+- **Guided setup.** `ox init`, and the same flow in the web UI, detects the interfaces, asks which one faces the internet, and writes a complete config. That config lets the inside network out, hides it behind the box's address, serves DHCP and DNS to it, allows management from inside only, and drops everything inbound.
+- **Plain-language actions.** "Forward a port", "block a device" and "add a guest network" are single actions that produce ordinary rules, shown before they are applied.
+- **Safe by default.** Before any config exists the box drops inbound traffic. Every change made remotely uses commit-confirm unless the user turns it off.
+- **No extra parts.** No controller, login server or licence step is needed on one box.
+- **The same model underneath.** The setup's output is the normal config file. A user who outgrows the guided actions edits that file, and nothing has to be migrated.
+
+DHCP and DNS move up in priority because of this. A box that cannot hand out addresses cannot replace a home router.
 
 ### As code
 

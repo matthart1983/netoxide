@@ -63,6 +63,16 @@ probe test must still pass with only the known "Pass association" difference.
 6. **Self-hosted first.** The controller runs on customer hardware, air-gapped if needed.
 7. **One licence, bound by governance.** No closed edition and no CLA.
 
+## Two audiences, one product
+
+Matt's design goal (14 Nov 2026): Netoxide has to appeal to home-lab users and to commercial fleets. It must be easy to use and still offer the advanced features.
+
+- **Easy first, advanced within reach.** A single box gets a working, safe setup from a short guided flow with no config file to write. A fleet operator gets the full model. Both use the same config and tools: the easy path writes ordinary config that the advanced path can read and change.
+- Nothing a single box needs may depend on the controller, a login server or a fleet feature.
+- When you add a feature, give it a sensible default and a one-step way to do the common case, then expose the full control. Do not add a second, simpler config format.
+- Error messages and UI text are written for someone who has not read the spec.
+- The research found home-lab users are the test bed and contributor pool, not the paying segment. Serve them anyway; they bring the product to work.
+
 ## Hard rules for code
 
 - `#![forbid(unsafe_code)]` in every first-party crate, except one small audited FFI crate. Each `unsafe` block there gets an audit note.
@@ -95,14 +105,16 @@ examples/         branch.toml, branch-candidate.toml, flows.jsonl, pfsense-confi
 tui/              netoxide-tui: live.rs + live_ui.rs (live mode), app.rs + ui.rs + data.rs (mock mode)
 ```
 
-Proposed next, not decided, roughly in this order:
+Proposed next, not decided, roughly in this order. The two-audience goal moved single-box ease of use ahead of fleet security:
 
-1. Rule and candidate editing in the live TUI. Today it reads, commits, confirms and reverts.
-2. API security: TLS listener, OIDC or token auth, the five roles, four-eyes approval. Today the socket's file permission is the only control.
-3. `ox-services`: Unbound, Kea, then WireGuard and strongSwan, each rendered from schema additions.
-4. Default lockdown before the first commit, and rules for traffic the box sends.
-5. OPNsense import, and testing the pfSense importer against real backups.
-6. HA, the fleet controller, the OS image. These are later phases in the spec.
+1. `ox init`: guided first-run setup that detects interfaces and writes a complete, safe config. Plus a locked-down default before the first commit, and rules for traffic the box sends.
+2. DHCP (Kea) and DNS (Unbound) rendered from the config. A box that cannot hand out addresses cannot replace a home router.
+3. Plain-language actions in `ox` and the TUI: forward a port, block a device, add a network. Each produces ordinary rules and shows them before applying. Includes rule and candidate editing in the live TUI.
+4. A web UI on the daemon's API. Home users expect one.
+5. API security: TLS listener, OIDC or token auth, the five roles, four-eyes approval. Today the socket's file permission is the only control.
+6. WireGuard, then IPsec.
+7. OPNsense import, and testing the pfSense importer against real backups.
+8. HA, the fleet controller, the OS image. These are later phases in the spec.
 
 Run before handing work back:
 
