@@ -36,6 +36,7 @@ Each area has an easy path and an advanced path over the same config.
 | Remote management | `ox --remote <name>` and the terminal UI manage a box from another machine over HTTPS. A box's own certificate is checked by a saved fingerprint, as SSH does with host keys. |
 | Health | Prometheus metrics at `/metrics`, and a hygiene report of rules that never apply, add nothing, allow everything, or have seen no packets. |
 | VLANs | An interface with `vlan = { parent = "eth1", id = 20 }` is created by the box as a tagged network on that port, and removed when the config drops it. An interface something else made is used and never removed. |
+| Backup and restore | `ox backup` saves the running config together with what is deliberately not in the config: the VPN private keys, the roles made on the box and the four-eyes setting. `ox restore` on another box puts those in place and saves the config as a candidate, so devices that already trust the old box's VPN key keep connecting. Access tokens are not carried over. |
 | Addresses and routes | On a commit the daemon puts the config's addresses on their interfaces, brings those links up, sets the default route through the `gateway` you name, and turns on packet forwarding, over netlink. It takes an address or route off again when a later config drops it or a commit fails, and only ever the ones it added itself. |
 | Port forwards that follow the address | A forward with no `address` applies to whatever address the box has, so it keeps working when the provider changes it. `ox forward` and the web form write that when the internet port has no fixed address. |
 | VPN | WireGuard tunnels, using the kernel's own implementation over netlink. A tunnel is an interface in a zone, so ordinary policies decide what crosses it. `ox vpn add laptop --endpoint home.example.net` sets a VPN up, adds the device and prints the config file for its WireGuard app. Two boxes can join their networks the same way. The box's private key never leaves its state directory. |
@@ -64,7 +65,7 @@ Each area has an easy path and an advanced path over the same config.
 - **The systemd unit and the install steps have run only in the test VM**, with SELinux off and virtual network cards.
 - **Long zone pairs lose per-rule counters.** A pair that needs more than 32 nftables rules is merged: neighbouring rules with the same action become one set lookup and share a counter, so the TUI shows no packet count for them. Rules that log, match ICMP or any service, or overlap a neighbour are not merged. A pair that is still over 32 after merging is refused.
 - **Explain knows only connected networks and the default route.** A destination behind a static or dynamic route shows "no route".
-- **The VPN is WireGuard only, and plain.** No IPsec or OpenVPN. A peer's `allowed` cannot be everything (`0.0.0.0/0`): sending all of the box's traffic through a tunnel needs policy routing, which is not built. A device can still send all of *its* traffic through the box if you add a policy from the VPN zone to the internet and an outbound NAT for it by hand. There are no preshared keys, and no QR code for phones: copy the config file over. The tunnel has been tested between two Netoxide daemons, not yet against the official WireGuard apps.
+- **The VPN is WireGuard only, and plain.** No IPsec or OpenVPN. A peer's `allowed` cannot be everything (`0.0.0.0/0`): sending all of the box's traffic through a tunnel needs policy routing, which is not built. A device can still send all of *its* traffic through the box if you add a policy from the VPN zone to the internet and an outbound NAT for it by hand. There are no preshared keys. A phone can scan the config as a QR code (`ox vpn add --qr`, or the web UI); the code was read back by a decoder library in the tests, not by a phone. The tunnel has been tested between two Netoxide daemons, not yet against the official WireGuard apps.
 - **Schema 1 has no routing protocols, traffic shaping, schedules or HA.**
 - **The importer reads pfSense only** and has not been tested on a real backup.
 - **Nothing has run on real hardware or under real traffic.** The furthest it has been is a virtual machine on one developer's computer.
@@ -76,7 +77,7 @@ Roughly in the order planned:
 1. Running it on real hardware, with SELinux enforcing, and a first deployment that is watched.
 2. Services as sandboxed systemd units, and Unbound and Kea as backends beside dnsmasq.
 3. More one-step actions such as "add a guest network", rule editing in the terminal UI, and live trace.
-4. IPsec, and for WireGuard: all traffic through a tunnel, preshared keys, a QR code.
+4. IPsec, and for WireGuard: all traffic through a tunnel, preshared keys.
 5. Single sign-on (OIDC), and roles held to single zones or interfaces.
 6. Multi-WAN, routing protocols, traffic shaping, IDS.
 7. OPNsense import, and the pfSense importer tested on real backups.

@@ -273,6 +273,43 @@ TOML
     check "vpn: a commit that does not touch the tunnel leaves it connected" bash -c 'ox running >/tmp/now.toml && ox candidate save again /tmp/now.toml && ox commit again --reason "no change" && ox vpn | grep laptop | grep -q connected'
     check "vpn: and traffic still flows right after it" says inside sfetch http://192.168.50.50/
 
+    # --- a VLAN the box makes, under the unit's sandbox ---
+    ox running >/tmp/vlan.toml
+    cat >>/tmp/vlan.toml <<'VLAN'
+
+[zones.guest]
+
+[interfaces."eth0.20"]
+zone = "guest"
+vlan = { parent = "eth0", id = 20 }
+addresses = ["192.168.60.1/24", "2001:db8:60::1/64"]
+
+[[policy]]
+from = "guest"
+to = "self"
+
+[[policy.rule]]
+id = "r-guest-ping"
+name = "Guests may ping the box"
+action = "accept"
+service = ["ping"]
+VLAN
+    ip -n cli link add link eth1 name eth1.20 type vlan id 20
+    ip -n cli addr add 192.168.60.50/24 dev eth1.20
+    ip -n cli -6 addr add 2001:db8:60::50/64 dev eth1.20 nodad
+    ip -n cli link set eth1.20 up
+    check "vlan: the config with a VLAN is accepted" bash -c 'ox candidate save vlan /tmp/vlan.toml && ox commit vlan --reason "guest VLAN"'
+    check "vlan: the box made the interface" bash -c 'ip -d link show eth0.20 | grep -q "id 20"'
+    check "vlan: a tagged client reaches the box" wait_for 5 cli ping -c 1 -W 1 192.168.60.1
+    check "vlan: and over IPv6" wait_for 8 cli ping -c 1 -W 1 2001:db8:60::1
+    check "vlan: the untagged network still works" cli ping -c 1 -W 2 192.168.50.1
+    check "vlan: going back removes it" bash -c 'ox rollback 1 --reason "no VLAN" && ! ip link show eth0.20'
+    ip -n cli link del eth1.20
+
+    # --- backup ---
+    check "backup: an admin takes one" ox backup --out $STATE/box.backup
+    check "backup: it is private and holds the VPN key" bash -c "[ \"\$(stat -c %a $STATE/box.backup)\" = 600 ] && grep -q '\"wg0\"' $STATE/box.backup"
+
     # --- HTTPS and tokens ---
     mkdir -p /etc/netoxide
     echo 'OXD_ARGS=--listen [::]:8443' >/etc/netoxide/oxd.env

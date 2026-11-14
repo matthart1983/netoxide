@@ -429,6 +429,10 @@ function vpnDevicePanel() {
     h('h2', null, 'Config for ' + d.name),
     h('p', null, 'Import this into the WireGuard app on the device. The device connects once the candidate is committed.'),
     h('pre', { class: 'secret' }, d.config),
+    d.qr ? h('div', null,
+      h('p', null, 'For a phone, scan this in the WireGuard app:'),
+      h('div', { class: 'qr', role: 'img', 'aria-label': 'QR code of the config for ' + d.name },
+        d.qr.map((row) => h('div', null, [...row].map((c) => h('span', { class: c === '1' ? 'on' : '' })))))) : null,
     h('p', { class: 'dim' }, d.made
       ? "This is the only copy of the device's private key. The box does not keep it."
       : "Put the device's own private key in place of the placeholder."),
@@ -487,7 +491,7 @@ function vpnForm() {
     const body = { name: draftVpn.name, endpoint: draftVpn.endpoint };
     if (draftVpn.public_key) body.public_key = draftVpn.public_key;
     act(() => call('POST', '/v1/actions/vpn-peer', body), (result) => {
-      state.vpnDevice = { name: draftVpn.name, config: result.client_config, made: result.key_made_here };
+      state.vpnDevice = { name: draftVpn.name, config: result.client_config, made: result.key_made_here, qr: result.qr };
       draftVpn.name = '';
       draftVpn.public_key = '';
       return saved(result);

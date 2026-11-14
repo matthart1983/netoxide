@@ -12,6 +12,10 @@ nix.workspace = true
 ox-explain.workspace = true
 ox-nft.workspace = true
 ox-schema.workspace = true
+qrcode = { version = "0.14", default-features = false }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rqrr = "0.11.0"

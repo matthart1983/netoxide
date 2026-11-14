@@ -52,6 +52,10 @@ Stopping the daemon by itself does not remove the rules: the kernel keeps the la
 
 Tokens are for the HTTPS listener only. On the box, anyone who can open the daemon's socket is an administrator, so `sudo ox token create <name> --role admin` makes a new one.
 
+## Moving to another machine
+
+`ox backup --out box.backup` on the old box, then on the new one `ox restore box.backup` and `ox commit restore --confirm 5m`. The backup carries the VPN keys, so phones and laptops keep connecting without new configs. It does not carry access tokens; make new ones. Take a backup before you need one, and keep it where only you can read it.
+
 ## Nothing above worked
 
 The state is in `/var/lib/netoxide`. Each commit's config is a TOML file under `commits/`. Copy the one you want somewhere safe, then reinstall by [dist/README.md](../dist/README.md) and load it with `ox candidate save` and `ox commit`.

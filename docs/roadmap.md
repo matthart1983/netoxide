@@ -35,10 +35,10 @@ Built in this order:
 1. VLAN interfaces. **Done.**
 2. Bridge interfaces.
 3. A VM image, with steps for Proxmox.
-4. Backup and restore, including the VPN keys.
+4. Backup and restore, including the VPN keys. **Done.**
 5. DNS blocklists.
 6. Dynamic DNS.
-7. A QR code for adding a phone to the VPN, and preshared keys.
+7. A QR code for adding a phone to the VPN. **Done.** Preshared keys.
 8. PPPoE and IPv6 prefix delegation.
 
 Ends when 25 people outside the project have run it for 30 days and said how it went, and the first outside security report has been handled in public.

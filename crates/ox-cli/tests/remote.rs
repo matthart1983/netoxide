@@ -570,8 +570,16 @@ fn ox_manages_a_box_from_another_machine() {
         "tablet",
         "--endpoint",
         "2001:db8::1",
+        "--qr",
     ]);
     assert!(good(&second).contains("[Interface]"), "{}", second.out);
+    // The same config drawn as a code for a phone to scan.
+    assert!(
+        second.out.contains("Scan from QR code") && second.out.contains('█'),
+        "{}",
+        second.out
+    );
+    assert!(!first.out.contains('█'), "no code unless asked for");
     good(&b.ox(&[
         "-r",
         "desk",
@@ -582,6 +590,55 @@ fn ox_manages_a_box_from_another_machine() {
     ]));
     let running = b.ox(&["-r", "six", "running"]);
     assert!(good(&running).contains("tablet") && running.out.contains("phone"));
+
+    // ── backup and restore ──────────────────────────────────────────────
+    // A backup holds private keys: only an admin may take one, and the file
+    // is private. A second box restored from it has the same VPN identity.
+    let file = dir.join("box.backup");
+    let file = file.to_str().unwrap();
+    refused(
+        &b.ox(&["-r", "home", "backup", "--out", file]),
+        "may not manage",
+    );
+    assert!(!Path::new(file).exists());
+    let took = b.local(&["backup", "--out", file]);
+    assert!(
+        good(&took).contains("the running config, 1 VPN key(s), 1 role(s)"),
+        "{}",
+        took.out
+    );
+    let mode = std::fs::metadata(file).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let public = good(&b.local(&["vpn", "--key", "wg0"])).trim().to_string();
+
+    let dir2 = dir.join("second");
+    std::fs::create_dir_all(&dir2).unwrap();
+    {
+        let Some(b2) = Box_::start(&dir2) else {
+            panic!("the second box did not start");
+        };
+        refused(&b2.local(&["restore", &b.file("junk", "{}")]), "format");
+        let restored = b2.local(&["restore", file]);
+        let text = good(&restored);
+        assert!(
+            text.contains("candidate restore") && text.contains("VPN key for wg0"),
+            "{text}"
+        );
+        assert!(text.contains("made the role helpdesk"), "{text}");
+        // Same key, so the devices' configs still match this box.
+        assert_eq!(good(&b2.local(&["vpn", "--key", "wg0"])).trim(), public);
+        // Nothing runs until the candidate is committed.
+        refused(&b2.local(&["running"]), "no commit yet");
+        good(&b2.local(&["commit", "restore"]));
+        assert_eq!(
+            good(&b2.local(&["running"])),
+            good(&b.local(&["running"])),
+            "the restored box runs the same config"
+        );
+        assert!(good(&b2.local(&["role", "list"])).contains("helpdesk"));
+        assert!(good(&b2.local(&["audit"])).contains("backup restored"));
+    }
+    assert!(good(&b.local(&["audit"])).contains("backup taken"));
 
     // A role stays while a token has it.
     refused(

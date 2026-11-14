@@ -26,7 +26,7 @@ decision. This file gives you what you need to start working.
 | Interfaces | `crates/oxd/src/net.rs` | On apply: add the config's addresses over netlink, bring links up, set default routes (`gateway`), enable forwarding. Remembers what it added (`managed.json`) and removes only that, when a config drops it or a commit fails. Missing interfaces are reported in status, not fatal |
 | DHCP client | `crates/oxd/src/dhcp.rs` | `dhcp_client = true` on the uplink: a tokio task per interface speaks DHCP in raw Ethernet frames on a packet socket, installs address and default route, renews, and re-requests its old address after a restart. The validator requires a visible accept rule for udp/68 |
 | WireGuard | `crates/ox-schema/src/vpn.rs`, `crates/oxd/src/wg.rs` | `[wireguard.<iface>]` with peers. The interface is made over rtnetlink and configured over the kernel's WireGuard generic-netlink family; no `wg` program. Private keys live in `<state>/wireguard/<iface>.key`, never in config, commits, audit log or API. Peers are updated in place so a commit does not reset sessions. Routes for peers' `allowed` networks are tracked in `managed.json`. Easy path: `add_vpn_peer` in `ox-setup`, `ox vpn add`, web form |
-| VM test | `tests/vm/` | Boots the host kernel in QEMU with a root disk built from the host's `/usr`, installs per `dist/README.md`, 129 checks under real systemd including a crash and a reboot. Not in CI |
+| VM test | `tests/vm/` | Boots the host kernel in QEMU with a root disk built from the host's `/usr`, installs per `dist/README.md`, 137 checks under real systemd including a crash and a reboot. Not in CI |
 | Access control | `crates/ox-store/src/auth.rs`, `crates/oxd/src/api.rs` | Socket peer = admin, named from the kernel. HTTPS = bearer token with a role. A role is a set of actions, optionally held to sections of the config (firewall, network, services, vpn); six are built in and more are made with `ox role create`. Four-eyes approval. Every handler takes a `Caller` and calls `caller.may(Action::…)` first, and every handler that changes the config also calls `caller.within(&touched)` |
 | Remote CLI | `crates/ox-client/` (`tls.rs`, `remotes.rs`), `crates/ox-cli/src/remote.rs` | `ox --remote <name>` and the TUI's `--remote` talk to the HTTPS listener. A self-signed box is pinned by certificate SHA-256 (shown by `ox status`); otherwise the machine's CA bundle decides. Tested end to end in `crates/ox-cli/tests/remote.rs` |
 | Listener limits | `crates/oxd/src/limit.rs` | 256 connections, 32 per IPv4 address or IPv6 /64, 30 s for a request's headers, closed after 120 s with no bytes (`OXD_IDLE_SECS` shortens it for tests) |
@@ -182,6 +182,11 @@ Rules for work on the API and the web UI:
 - Never trust a name the client sends. On the socket it comes from `SO_PEERCRED`; on HTTPS from the token.
 - In `app.js`, build elements with `h()` and pass daemon text as children. Never assign `innerHTML`. No inline script or style: the CSP forbids both.
 - To look at the web UI, run `oxd --dry-run --listen-http 127.0.0.1:8098` with a scratch state directory and open it in a browser. `--dry-run` loads nothing into the kernel.
+
+`crates/ox-cli/tests/remote.rs` runs the `oxd` binary that sits beside `ox` in
+`target/`. `cargo test -p ox-cli` does not rebuild it, so run `cargo build
+--workspace` first or use `cargo test --workspace`, or the test runs a stale
+daemon.
 
 Run before handing work back:
 

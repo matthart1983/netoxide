@@ -30,10 +30,12 @@ Daemon commands. All take `--socket <path>` or the `OX_SOCKET` variable. The def
 | `ox token create <name> --role <role> [--days N]` / `list` / `revoke <name>` | Access tokens for the HTTPS API and the web UI |
 | `ox role list` / `create <name> --can <actions> [--sections <sections>]` / `delete <name>` | Roles: what a token may do and in which parts of the config |
 | `ox remote add <name> <url>` / `list` / `remove <name>` | Boxes to manage from this machine with `ox --remote <name>` |
+| `ox backup --out <file>` | Save the running config, the VPN keys, the roles made here and the four-eyes setting. Admins only; the file holds private keys |
+| `ox restore <file>` | Put a backup's keys, roles and setting in place and save its config as the candidate `restore` |
 | `ox whoami` | Who the daemon thinks you are, and what your role allows |
 | `ox leases` | The addresses DHCP has handed out |
 | `ox vpn` | Each tunnel: this box's public key, and every peer with when it was last heard from and how much it sent |
-| `ox vpn add <name> --endpoint <host> [--public-key <key>]` | Add a phone or laptop to the VPN, setting the VPN up if there is none. Saves a candidate and prints the device's config |
+| `ox vpn add <name> --endpoint <host> [--public-key <key>] [--qr]` | Add a phone or laptop to the VPN, setting the VPN up if there is none. Saves a candidate and prints the device's config |
 | `ox vpn --key <interface>` | Print this box's public key for a tunnel, making the key if needed |
 | `ox kernel` | The Netoxide table as the kernel holds it |
 | `ox forward --name <text> --port tcp/443 --to <host>[:port] [--address <outside address>]` | Forward a port to an inside host; saved as a candidate |
@@ -95,6 +97,8 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `GET /v1/audit` | | All entries. Fails if the hash chain is broken |
 | `GET /v1/hygiene` | | Findings about rules in the running config |
 | `GET /metrics` | | Prometheus metrics |
+| `GET /v1/backup` | | The backup document. Needs `manage` |
+| `POST /v1/restore` | The backup document | What was put in place, and the candidate to commit. Needs `manage` |
 | `GET /v1/whoami` | | The caller's name and role, with the role's actions and sections |
 | `GET` / `POST /v1/roles`, `DELETE /v1/roles/{name}` | `{"name", "can": [...], "sections": [...]}` | Roles. Omit `sections` for no limit |
 | `GET /v1/running/json` | | The running config as JSON, with what it does in sentences |

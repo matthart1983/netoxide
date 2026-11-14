@@ -14,7 +14,8 @@ The first preview. A single-box firewall and router that passes its tests in net
 - **Audit log.** Hash-chained. A damaged log is repaired or set aside and never stops the firewall loading.
 - **Router functions.** Interface addresses and default routes over netlink, packet forwarding, an internet-side address by DHCP, IPv6 router announcements, DNS and DHCP through dnsmasq.
 - **VLANs.** An interface can be a tagged network on a port (`vlan = { parent, id }`). The box creates it and removes it.
-- **VPN.** WireGuard over the kernel's netlink interface, with `ox vpn add` to add a device in one step.
+- **Backup and restore.** `ox backup` and `ox restore` move a box to other hardware with its VPN keys, roles and settings.
+- **VPN.** WireGuard over the kernel's netlink interface, with `ox vpn add` to add a device in one step, and a QR code for phones.
 - **Explain and plan.** What happens to one packet and which rule decides; what a candidate changes and which observed flows would get a different verdict.
 - **Guided setup and one-step changes.** `ox init`, `ox forward`, `ox block`.
 - **Interfaces.** The `ox` command line tool, a terminal UI with six live screens, and a web UI served by the daemon over HTTPS.

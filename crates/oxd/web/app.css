@@ -174,3 +174,9 @@ ul.plain { margin: 0; padding-left: 18px; }
 ul.plain li { margin-bottom: 4px; }
 
 input[type="checkbox"] { width: auto; margin-right: 6px; }
+
+/* A QR code drawn from rows of squares. Always black on white, whatever the theme, so a camera can read it. */
+.qr { display: inline-block; background: #fff; line-height: 0; }
+.qr div { display: flex; }
+.qr span { width: 4px; height: 4px; }
+.qr span.on { background: #000; }
