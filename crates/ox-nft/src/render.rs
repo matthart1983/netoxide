@@ -211,7 +211,8 @@ fn base_chains(out: &mut Out) {
     for (name, kind, hook, prio, policy) in [
         ("input", "filter", "input", 0, "drop"),
         ("forward", "filter", "forward", 0, "drop"),
-        // Schema 1 has no rules for traffic the box itself sends.
+        // Traffic the box sends is allowed unless a policy from `self` to
+        // the zone it leaves by says otherwise.
         ("output", "filter", "output", 0, "accept"),
         ("prerouting", "nat", "prerouting", -100, "accept"),
         ("postrouting", "nat", "postrouting", 100, "accept"),
@@ -264,8 +265,14 @@ fn dispatch(out: &mut Out, rs: &Ruleset) {
 
     let mut to_self = vec![];
     let mut pairs = vec![];
+    let mut from_self = vec![];
     for chain in &rs.chains {
         let target = jump(&chain.name());
+        if chain.from == SELF_ZONE {
+            for oif in rs.zone_interfaces(&chain.to) {
+                from_self.push(json!([oif, target]));
+            }
+        }
         for iif in rs.zone_interfaces(&chain.from) {
             if chain.to == SELF_ZONE {
                 to_self.push(json!([iif, target]));
@@ -301,6 +308,47 @@ fn dispatch(out: &mut Out, rs: &Ruleset) {
                 "key": { "concat": [meta("iifname"), meta("oifname")] },
                 "data": "@zone_pairs"
             } })],
+        );
+    }
+    if !from_self.is_empty() {
+        // Answers to connections that were let in, and the box's own
+        // loopback and neighbour discovery, are never a policy choice.
+        out.rule(
+            "output",
+            None,
+            vec![eq(meta("oifname"), json!("lo")), verdict(Action::Accept)],
+        );
+        out.rule(
+            "output",
+            None,
+            vec![
+                ct_state(&["established", "related"]),
+                verdict(Action::Accept),
+            ],
+        );
+        out.rule(
+            "output",
+            Some("ipv6 neighbour discovery"),
+            vec![
+                eq(
+                    payload("icmpv6", "type"),
+                    json!({ "set": [
+                        "nd-neighbor-solicit", "nd-neighbor-advert",
+                        "nd-router-solicit", "nd-router-advert"
+                    ] }),
+                ),
+                verdict(Action::Accept),
+            ],
+        );
+        out.add(
+            "map",
+            json!({ "name": "out_zones", "type": "ifname", "map": "verdict", "elem": from_self }),
+        );
+        out.stats.verdict_maps += 1;
+        out.rule(
+            "output",
+            None,
+            vec![json!({ "vmap": { "key": meta("oifname"), "data": "@out_zones" } })],
         );
     }
     // A packet for a zone pair with no policy reaches here and meets the chain's drop policy.

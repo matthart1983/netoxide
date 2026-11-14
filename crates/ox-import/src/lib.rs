@@ -311,6 +311,7 @@ pub fn import_pfsense(xml: &str) -> Result<Imported, ImportError> {
     let mut config = Config {
         schema: SCHEMA_VERSION,
         hostname: model.hostname.clone(),
+        ipv6_autoconfig: vec![],
         zones: BTreeMap::new(),
         interfaces: BTreeMap::new(),
         addresses: BTreeMap::new(),

@@ -4,6 +4,8 @@
 //! established connection are accepted by connection tracking before any
 //! policy runs, so they have nothing to explain.
 //!
+//! Give `self` as the interface to ask about a packet the box itself sends.
+//!
 //! Routing is limited to what the config states: the box's own addresses,
 //! the networks on its interfaces, and the default route. Static and dynamic
 //! routes are not in schema 1, so a destination behind one shows "no route".
@@ -209,22 +211,35 @@ pub fn explain(rs: &Ruleset, p: &Packet) -> Result<Explanation, ExplainError> {
         L4::Icmpv6 if p.src.is_ipv4() => return Err(ExplainError::WrongIcmp),
         _ => {}
     }
-    let Some(ingress) = rs.interfaces.iter().find(|i| i.name == p.iif) else {
-        return Err(ExplainError::UnknownInterface {
-            name: p.iif.clone(),
-            known: rs.interfaces.iter().map(|i| i.name.clone()).collect(),
-        });
+    // `in self` asks about a packet the box itself sends.
+    let from_self = p.iif == SELF_ZONE;
+    let from_zone: &str = if from_self {
+        SELF_ZONE
+    } else {
+        match rs.interfaces.iter().find(|i| i.name == p.iif) {
+            Some(i) => &i.zone,
+            None => {
+                return Err(ExplainError::UnknownInterface {
+                    name: p.iif.clone(),
+                    known: rs.interfaces.iter().map(|i| i.name.clone()).collect(),
+                });
+            }
+        }
     };
 
     let mut t = Trace { steps: vec![] };
-    t.step("ingress", format!("{} → zone {}", p.iif, ingress.zone), "");
+    if from_self {
+        t.step("origin", "sent by the box itself", "");
+    } else {
+        t.step("ingress", format!("{} → zone {from_zone}", p.iif), "");
+    }
 
     // Destination NAT runs before routing, so everything after sees the new destination.
     let (mut dst, mut dport) = (p.dst, p.dport);
     if let Some(f) = rs
         .forwards
         .iter()
-        .find(|f| f.matches(&ingress.zone, p.dst, p.l4, p.dport))
+        .find(|f| f.matches(from_zone, p.dst, p.l4, p.dport))
     {
         dst = f.to;
         dport = f.to_port.or(p.dport);
@@ -264,10 +279,27 @@ pub fn explain(rs: &Ruleset, p: &Packet) -> Result<Explanation, ExplainError> {
         }
     };
 
-    let Some(chain) = rs.chain(&ingress.zone, to_zone) else {
+    if from_self && to_zone == SELF_ZONE {
+        t.step(
+            "verdict",
+            "local traffic",
+            "the box talking to itself is always allowed",
+        );
+        return Ok(t.end(Verdict::Accept, None));
+    }
+    let Some(chain) = rs.chain(from_zone, to_zone) else {
+        if from_self {
+            // Traffic the box sends is only filtered where a policy says so.
+            t.step(
+                "zone pair",
+                format!("self → {to_zone}"),
+                "no policy for traffic the box sends to this zone, so it is allowed",
+            );
+            return Ok(t.end(Verdict::Accept, None));
+        }
         t.step(
             "zone pair",
-            format!("{} → {to_zone}", ingress.zone),
+            format!("{from_zone} → {to_zone}"),
             "no policy for this pair, so the base chain drops the packet and logs it",
         );
         return Ok(t.end(Verdict::Drop, None));
@@ -326,7 +358,7 @@ pub fn explain(rs: &Ruleset, p: &Packet) -> Result<Explanation, ExplainError> {
         && let Some(o) = rs
             .outbound
             .iter()
-            .find(|o| o.matches(&ingress.zone, to_zone, p.src))
+            .find(|o| !from_self && o.matches(from_zone, to_zone, p.src))
     {
         let to = match o.translate {
             Translate::Masquerade => format!("the address of {egress}"),
@@ -502,6 +534,47 @@ mod tests {
             ),
         );
         assert_eq!(ping6.rule.unwrap().id, "r-0002");
+    }
+
+    /// Traffic the box sends is allowed until a policy from `self` says otherwise.
+    #[test]
+    fn the_boxs_own_traffic_is_filtered_only_where_a_policy_says() {
+        let out4 = packet("203.0.113.10", "198.51.100.9", L4::Tcp, Some(443), "self");
+        let out6 = packet(
+            "2001:db8:4a00::1",
+            "2001:db8:ffff::9",
+            L4::Tcp,
+            Some(443),
+            "self",
+        );
+        for p in [&out4, &out6] {
+            let e = run(BRANCH, p);
+            assert_eq!(e.verdict, Verdict::Accept);
+            assert!(
+                e.steps
+                    .last()
+                    .unwrap()
+                    .detail
+                    .contains("no policy for traffic the box sends")
+            );
+        }
+
+        let filtered = format!(
+            "{BRANCH}\n[[policy]]\nfrom = \"self\"\nto = \"wan\"\n\n[[policy.rule]]\nid = \"r-out-dns\"\nname = \"Box may resolve names\"\naction = \"accept\"\nservice = [\"dns\"]\n"
+        );
+        for p in [&out4, &out6] {
+            let e = run(&filtered, p);
+            assert_eq!(e.verdict, Verdict::Drop, "443 is not allowed out");
+            assert!(e.rule.is_none());
+        }
+        let dns = packet("203.0.113.10", "198.51.100.9", L4::Udp, Some(53), "self");
+        assert_eq!(run(&filtered, &dns).rule.unwrap().id, "r-out-dns");
+        // Only the wan side is filtered; the box may still reach the dmz.
+        let dmz = packet("10.30.0.1", "10.30.0.8", L4::Tcp, Some(22), "self");
+        assert_eq!(run(&filtered, &dmz).verdict, Verdict::Accept);
+        // The box talking to itself is never filtered.
+        let local = packet("10.20.0.1", "10.20.0.1", L4::Tcp, Some(22), "self");
+        assert_eq!(run(&filtered, &local).verdict, Verdict::Accept);
     }
 
     #[test]

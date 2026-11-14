@@ -3,6 +3,8 @@
 # writes, plus two local names and a fixed address for the NAS.
 schema = 1
 hostname = "homebox"
+# Devices on eth1 give themselves an IPv6 address from the network announced there.
+ipv6_autoconfig = ["eth1"]
 
 [zones.wan]
 description = "Internet"

@@ -49,6 +49,10 @@ pub struct Config {
     /// Schema version of this document. Must be 1.
     pub schema: u32,
     pub hostname: String,
+    /// Interfaces where the box announces its IPv6 network, so devices there
+    /// give themselves an address and learn the box as their router.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ipv6_autoconfig: Vec<String>,
     /// Zones group interfaces. Rules are written between zones.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub zones: BTreeMap<String, Zone>,

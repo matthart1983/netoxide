@@ -132,6 +132,7 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
     let mut config = Config {
         schema: SCHEMA_VERSION,
         hostname: a.hostname.clone(),
+        ipv6_autoconfig: vec![],
         zones: [
             (
                 "wan".to_string(),
@@ -267,6 +268,13 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
                 IpNet::V4(n) => Some(*n),
                 IpNet::V6(_) => None,
             });
+            if lan
+                .addrs
+                .iter()
+                .any(|n| n.addr().is_ipv6() && n.prefix_len() == 64)
+            {
+                config.ipv6_autoconfig.push(lan.name.clone());
+            }
             if let Some((first, last)) = own.and_then(pool) {
                 config.dhcp.insert(
                     lan.name.clone(),
@@ -393,6 +401,11 @@ pub fn describe(config: &Config) -> Vec<String> {
         if let Some(d) = &dns.domain {
             out.push(format!("local names end in .{d}"));
         }
+    }
+    for name in &config.ipv6_autoconfig {
+        out.push(format!(
+            "devices on {name} give themselves an IPv6 address from the network the box announces"
+        ));
     }
     for (name, p) in &config.dhcp {
         out.push(format!(

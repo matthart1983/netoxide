@@ -300,3 +300,32 @@ fn dns_settings_are_checked() {
         "{p:?}"
     );
 }
+
+#[test]
+fn filtering_the_boxs_own_traffic_must_not_break_its_services() {
+    let own = |service: &str, to: &str| {
+        format!(
+            "{HOME}\n[[policy]]\nfrom = \"self\"\nto = \"{to}\"\n\n[[policy.rule]]\nid = \"r-own\"\nname = \"own\"\naction = \"accept\"\nservice = [{service}]\n"
+        )
+    };
+    // The resolver forwards out by wan, so DNS must be allowed out there.
+    let p = problems(&own("\"tcp/443\"", "wan"));
+    assert!(
+        p.iter()
+            .any(|m| m.contains("self → wan does not accept DNS")),
+        "{p:?}"
+    );
+    assert_eq!(
+        problems(&own("\"dns\", \"tcp/443\"", "wan")),
+        Vec::<String>::new()
+    );
+    // DHCP replies leave by lan.
+    let p = problems(&own("\"dns\"", "lan"));
+    assert!(
+        p.iter().any(|m| m.contains("does not accept DHCP replies")),
+        "{p:?}"
+    );
+    assert_eq!(problems(&own("\"udp/68\"", "lan")), Vec::<String>::new());
+    let p = problems(&own("\"dns\"", "self"));
+    assert!(p.iter().any(|m| m.contains("takes no rules")), "{p:?}");
+}

@@ -347,6 +347,28 @@ fn a_chain_that_cannot_be_merged_enough_is_refused() {
 }
 
 #[test]
+fn a_policy_from_self_is_dispatched_by_the_interface_the_packet_leaves_by() {
+    let own = format!(
+        "{BRANCH}\n[[policy]]\nfrom = \"self\"\nto = \"wan\"\n\n[[policy.rule]]\nid = \"r-out\"\nname = \"out\"\naction = \"accept\"\nservice = [\"dns\"]\n"
+    );
+    let rs = compile(&Config::from_toml(&own).unwrap()).unwrap();
+    let text = render(&rs).0.to_string();
+    assert!(
+        text.contains("\"name\":\"out_zones\""),
+        "the output chain needs its own dispatch map"
+    );
+    assert!(
+        text.contains("[\"wan0\",{\"jump\":{\"target\":\"p_self__wan\"}}]"),
+        "{text}"
+    );
+    // Without such a policy the output chain stays untouched.
+    let plain = render(&compile(&Config::from_toml(BRANCH).unwrap()).unwrap())
+        .0
+        .to_string();
+    assert!(!plain.contains("out_zones"));
+}
+
+#[test]
 fn stats_count_what_was_rendered() {
     let rs = compile(&Config::from_toml(BRANCH).unwrap()).unwrap();
     let (json, stats) = render(&rs);
@@ -390,10 +412,15 @@ fn the_kernel_accepts_the_ruleset() {
         "source = [\"any\"]\ndestination = [\"10.30.3.0/24\"]\nservice = [\"tcp/8080\"]",
     ));
     let long = with_rules(&long);
+    // The fourth filters what the box itself sends to the internet.
+    let own = format!(
+        "{BRANCH}\n[[policy]]\nfrom = \"self\"\nto = \"wan\"\n\n[[policy.rule]]\nid = \"r-out\"\nname = \"out\"\naction = \"accept\"\nservice = [\"dns\", \"https\", \"ping\"]\n"
+    );
     for (name, toml) in [
         ("branch", BRANCH),
         ("candidate", CANDIDATE),
         ("merged", long.as_str()),
+        ("own-traffic", own.as_str()),
     ] {
         let rs = compile(&Config::from_toml(toml).unwrap()).unwrap();
         let (json, stats) = render(&rs);
