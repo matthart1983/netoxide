@@ -370,6 +370,7 @@ What the kernel gets, for the example config:
 - Established and related connections accepted first, invalid ones dropped.
 - One verdict-map lookup on the ingress and egress interface that jumps to the chain for the zone pair.
 - One chain per zone pair. Each config rule becomes one nftables rule per address family it covers, matching against named sets, with a counter and the rule ID as its comment.
+- A zone pair that would need more than 32 nftables rules is merged instead: neighbouring rules with the same action become one lookup in a set of (source, destination, protocol, port) entries. Neighbours only, so no rule moves past one with a different action.
 - A reload adds the table, deletes it and builds it again inside one transaction, so the swap is atomic.
 
 ## Design rules
@@ -401,7 +402,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 71 tests. Two of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. The other starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
+There are 76 tests. Two of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. The other starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
@@ -412,7 +413,7 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 - **The API has no security.** Whoever can open the socket file has full control. There is no TLS, login, role check or four-eyes approval, and the caller's name is taken from a header as given.
 - **Nothing is loaded before the first commit**, so the kernel's own defaults apply until then.
 - **The box's own outbound traffic is not filtered.** There are no rules for traffic the box sends.
-- **A zone pair may compile to at most 32 nftables rules.** The compiler refuses a longer one. It does not yet merge rules to fit.
+- **Long zone pairs lose per-rule counters.** A pair that needs more than 32 nftables rules is merged: neighbouring rules with the same action become one set lookup and share a counter, so the TUI shows no packet count for them. Rules that log, match ICMP or any service, or overlap a neighbour are not merged. A pair that is still over 32 after merging is refused.
 - **Explain knows only connected networks and the default route.** A destination behind a static or dynamic route shows "no route".
 - **Schema 1 has no VPN, DNS, DHCP, routing protocols, traffic shaping, schedules or HA.**
 - **The importer reads pfSense only** and has not been tested on a real backup.
@@ -424,11 +425,10 @@ Roughly in the order planned:
 
 1. Editing rules and candidates from the TUI.
 2. API security: TLS, OIDC or token login, roles, four-eyes approval.
-3. A rule merger, so long zone pairs compile.
-4. Services rendered from the config: DNS with Unbound, DHCP with Kea, then WireGuard and IPsec.
-5. A locked-down default before the first commit, and rules for the box's own traffic.
-6. OPNsense import, and the pfSense importer tested on real backups.
-7. HA, the fleet controller, the web UI, and the OS image with signed A/B upgrades.
+3. Services rendered from the config: DNS with Unbound, DHCP with Kea, then WireGuard and IPsec.
+4. A locked-down default before the first commit, and rules for the box's own traffic.
+5. OPNsense import, and the pfSense importer tested on real backups.
+6. HA, the fleet controller, the web UI, and the OS image with signed A/B upgrades.
 
 The spec dates a 1.0 at August 2028 for a team of six. That date is a plan, not a commitment.
 

@@ -2,8 +2,9 @@
 
 use std::{net::IpAddr, process::Command};
 
-use ox_nft::{AddrMatch, CompileError, L4, MAX_CHAIN, compile, render};
+use ox_nft::{AddrMatch, CompileError, Family, L4, MAX_CHAIN, Segment, compile, render};
 use ox_schema::Config;
+use ox_schema::Proto;
 
 const BRANCH: &str = include_str!("../../../examples/branch.toml");
 const CANDIDATE: &str = include_str!("../../../examples/branch-candidate.toml");
@@ -84,22 +85,265 @@ fn disabled_rules_are_left_out() {
     );
 }
 
+/// The example config with extra rules appended to the lan → dmz policy.
+fn with_rules(extra: &[String]) -> String {
+    BRANCH.replace(
+        "[[policy]]\nfrom = \"lan\"\nto = \"wan\"",
+        &format!(
+            "{}\n[[policy]]\nfrom = \"lan\"\nto = \"wan\"",
+            extra.join("\n")
+        ),
+    )
+}
+
+fn rule(id: &str, action: &str, rest: &str) -> String {
+    format!("[[policy.rule]]\nid = \"{id}\"\nname = \"{id}\"\naction = \"{action}\"\n{rest}\n")
+}
+
+/// Sixty accept rules, each for one host and port: far past the limit as
+/// separate kernel rules.
+fn sixty() -> Vec<String> {
+    (0..60)
+        .map(|i| {
+            rule(
+                &format!("x-{i}"),
+                "accept",
+                &format!(
+                    "destination = [\"10.30.1.{i}\"]\nservice = [\"tcp/{}\"]",
+                    2000 + i
+                ),
+            )
+        })
+        .collect()
+}
+
 #[test]
-fn a_chain_over_the_limit_is_refused() {
-    let mut toml = BRANCH.to_string();
-    for i in 0..=MAX_CHAIN {
-        toml = toml.replace(
-            "[[policy]]\nfrom = \"lan\"\nto = \"wan\"",
-            &format!(
-                "[[policy.rule]]\nid = \"x-{i}\"\nname = \"filler\"\naction = \"accept\"\nservice = [\"tcp/{}\"]\n\n[[policy]]\nfrom = \"lan\"\nto = \"wan\"",
-                1000 + i
-            ),
+fn a_short_chain_keeps_one_kernel_rule_per_config_rule() {
+    let rs = compile(&Config::from_toml(BRANCH).unwrap()).unwrap();
+    for chain in &rs.chains {
+        assert!(
+            chain
+                .layout()
+                .iter()
+                .all(|s| matches!(s, Segment::Single(_))),
+            "{}",
+            chain.name()
         );
     }
-    let err = compile(&Config::from_toml(&toml).unwrap()).unwrap_err();
+    assert_eq!(render(&rs).1.merged, 0);
+}
+
+#[test]
+fn a_long_chain_is_merged_instead_of_refused() {
+    let rs = compile(&Config::from_toml(&with_rules(&sixty())).unwrap()).unwrap();
+    let chain = rs.chain("lan", "dmz").unwrap();
+    assert_eq!(chain.rules.len(), 63);
+    assert!(
+        chain.nft_rules() <= MAX_CHAIN,
+        "{} kernel rules",
+        chain.nft_rules()
+    );
+    let runs: Vec<usize> = chain
+        .layout()
+        .iter()
+        .filter_map(|s| match s {
+            Segment::Run(r) => Some(r.len()),
+            Segment::Single(_) => None,
+        })
+        .collect();
+    // The three original rules and the sixty new ones all accept and none
+    // overlap, so they form one run.
+    assert_eq!(runs, [63]);
+    let (_, stats) = render(&rs);
+    assert_eq!(stats.merged, 63);
+    assert!(rs.summary().contains("63 rules merged"));
+}
+
+#[test]
+fn merging_never_moves_a_rule_past_one_with_another_action() {
+    let mut extra = sixty();
+    extra.insert(
+        30,
+        rule(
+            "stop",
+            "drop",
+            "destination = [\"10.30.1.0/24\"]\nservice = [\"tcp/2000-2100\"]",
+        ),
+    );
+    let rs = compile(&Config::from_toml(&with_rules(&extra)).unwrap()).unwrap();
+    let shape: Vec<String> = rs
+        .chain("lan", "dmz")
+        .unwrap()
+        .layout()
+        .iter()
+        .map(|s| match s {
+            Segment::Single(r) => r.id.clone(),
+            Segment::Run(r) => format!("{}..{}", r[0].id, r[r.len() - 1].id),
+        })
+        .collect();
+    assert_eq!(shape, ["r-0388..x-29", "stop", "x-30..x-59"]);
+}
+
+#[test]
+fn rules_that_cannot_share_a_set_stay_on_their_own() {
+    let mut extra = sixty();
+    // Same action as its neighbours, but it overlaps x-5, and nftables
+    // refuses overlapping set entries.
+    extra.insert(
+        6,
+        rule(
+            "wide",
+            "accept",
+            "destination = [\"10.30.1.0/24\"]\nservice = [\"tcp/2005\"]",
+        ),
+    );
+    extra.insert(
+        20,
+        rule(
+            "logged",
+            "accept",
+            "destination = [\"10.30.2.1\"]\nservice = [\"tcp/9\"]\nlog = true",
+        ),
+    );
+    extra.insert(
+        40,
+        rule(
+            "ping",
+            "accept",
+            "destination = [\"10.30.2.2\"]\nservice = [\"icmp\"]",
+        ),
+    );
+    let rs = compile(&Config::from_toml(&with_rules(&extra)).unwrap()).unwrap();
+    let layout = rs.chain("lan", "dmz").unwrap().layout();
+    let singles: Vec<&str> = layout
+        .iter()
+        .filter_map(|s| match s {
+            Segment::Single(r) => Some(r.id.as_str()),
+            Segment::Run(_) => None,
+        })
+        .collect();
+    assert_eq!(singles, ["logged", "ping"]);
+    // "wide" starts a new run, so it is tried after x-5 and before x-6, as written.
+    let starts: Vec<&str> = layout
+        .iter()
+        .filter_map(|s| match s {
+            Segment::Run(r) => Some(r[0].id.as_str()),
+            Segment::Single(_) => None,
+        })
+        .collect();
+    assert_eq!(starts, ["r-0388", "wide", "x-19", "x-38"]);
+}
+
+/// Walks the merged layout the way the kernel does and compares the verdict
+/// with the plain first-match walk over the config rules.
+#[test]
+fn the_merged_layout_gives_the_same_verdicts() {
+    let mut extra = sixty();
+    extra.insert(
+        30,
+        rule(
+            "stop",
+            "drop",
+            "destination = [\"10.30.1.0/24\"]\nservice = [\"tcp/2000-2100\"]",
+        ),
+    );
+    extra.insert(
+        6,
+        rule(
+            "wide",
+            "accept",
+            "destination = [\"10.30.1.0/24\"]\nservice = [\"tcp/2005\"]",
+        ),
+    );
+    extra.push(rule(
+        "six",
+        "accept",
+        "destination = [\"2001:db8:4a00:2::50\"]\nservice = [\"udp/5000-5010\"]",
+    ));
+    let rs = compile(&Config::from_toml(&with_rules(&extra)).unwrap()).unwrap();
+    let chain = rs.chain("lan", "dmz").unwrap();
+    assert!(chain.layout().iter().any(|s| matches!(s, Segment::Run(_))));
+
+    let mut checked = 0;
+    let dsts: Vec<IpAddr> = (0..70)
+        .map(|i| ip(&format!("10.30.1.{i}")))
+        .chain([
+            ip("10.30.0.8"),
+            ip("2001:db8:4a00:2::50"),
+            ip("2001:db8:4a00:2::8"),
+        ])
+        .collect();
+    for dst in &dsts {
+        let src = if dst.is_ipv4() {
+            ip("10.20.4.17")
+        } else {
+            ip("2001:db8:4a00:1:4::17")
+        };
+        for (l4, port) in [
+            (L4::Tcp, 2005),
+            (L4::Tcp, 2031),
+            (L4::Tcp, 2060),
+            (L4::Tcp, 445),
+            (L4::Udp, 5005),
+            (L4::Tcp, 1),
+        ] {
+            let plain = chain
+                .rules
+                .iter()
+                .find(|r| r.matches(src, *dst, l4, Some(port)))
+                .map(|r| r.action);
+            let merged = chain.layout().iter().find_map(|s| match s {
+                Segment::Single(r) => r.matches(src, *dst, l4, Some(port)).then_some(r.action),
+                Segment::Run(rules) => {
+                    let family = if dst.is_ipv4() {
+                        Family::V4
+                    } else {
+                        Family::V6
+                    };
+                    let proto = if l4 == L4::Tcp {
+                        Proto::Tcp
+                    } else {
+                        Proto::Udp
+                    };
+                    rules
+                        .iter()
+                        .flat_map(|r| r.tuples(family))
+                        .any(|t| {
+                            t.src.contains(&src)
+                                && t.dst.contains(dst)
+                                && t.proto == proto
+                                && (t.first..=t.last).contains(&port)
+                        })
+                        .then_some(rules[0].action)
+                }
+            });
+            assert_eq!(plain, merged, "{src} → {dst} {l4:?}/{port}");
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 73 * 6);
+}
+
+#[test]
+fn a_chain_that_cannot_be_merged_enough_is_refused() {
+    // Alternating actions leave no two neighbours to merge.
+    let extra: Vec<String> = (0..40)
+        .map(|i| {
+            rule(
+                &format!("a-{i}"),
+                if i % 2 == 0 { "accept" } else { "drop" },
+                &format!(
+                    "destination = [\"10.30.1.{i}\"]\nservice = [\"tcp/{}\"]",
+                    2000 + i
+                ),
+            )
+        })
+        .collect();
+    let err = compile(&Config::from_toml(&with_rules(&extra)).unwrap()).unwrap_err();
     assert!(
         matches!(err, CompileError::ChainTooLong { ref from, ref to, .. } if from == "lan" && to == "dmz")
     );
+    assert!(err.to_string().contains("after merging"));
 }
 
 #[test]
@@ -133,7 +377,24 @@ fn the_kernel_accepts_the_ruleset() {
             return;
         }
     }
-    for (name, toml) in [("branch", BRANCH), ("candidate", CANDIDATE)] {
+    // The third config is long enough to be merged into shared set lookups.
+    let mut long = sixty();
+    long.push(rule(
+        "six",
+        "accept",
+        "destination = [\"2001:db8:4a00:2::50\"]\nservice = [\"udp/5000-5010\"]",
+    ));
+    long.push(rule(
+        "anysrc",
+        "accept",
+        "source = [\"any\"]\ndestination = [\"10.30.3.0/24\"]\nservice = [\"tcp/8080\"]",
+    ));
+    let long = with_rules(&long);
+    for (name, toml) in [
+        ("branch", BRANCH),
+        ("candidate", CANDIDATE),
+        ("merged", long.as_str()),
+    ] {
         let rs = compile(&Config::from_toml(toml).unwrap()).unwrap();
         let (json, stats) = render(&rs);
         let load = |tag: &str, doc: &serde_json::Value, echo: bool| {

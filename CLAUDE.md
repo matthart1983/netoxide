@@ -68,7 +68,7 @@ probe test must still pass with only the known "Pass association" difference.
 - `#![forbid(unsafe_code)]` in every first-party crate, except one small audited FFI crate. Each `unsafe` block there gets an audit note.
 - Never call `std::process::Command` with shell strings from `oxd` or its libraries. Supervised services run as systemd units.
 - Every dependency change passes `cargo-deny` and `cargo-vet`. `deny.toml` is in place and `cargo deny check` passes. `cargo-vet` is not set up yet.
-- The firewall ruleset swaps in one nftables transaction. The rule compiler emits sets, maps and verdict maps, never a linear chain longer than 32 rules. Today the compiler refuses a zone pair that would exceed 32. It does not yet merge rules to fit.
+- The firewall ruleset swaps in one nftables transaction. The rule compiler emits sets, maps and verdict maps, never a linear chain longer than 32 rules. A zone pair over 32 is merged (`Chain::layout` in `ox-nft`): neighbouring rules with the same action share one concatenated-set lookup. Only neighbours merge, so first-match order holds, and nftables refuses overlapping set entries, so an overlapping rule starts a new run. Merged rules share a counter. A pair still over 32 is refused.
 - Every rule, NAT and VPN test runs for both IPv4 and IPv6.
 - Make no throughput or performance claim in code, docs or UI until the Phase 0 benchmark rig publishes numbers.
 - Licence decision is pending: AGPL-3.0-or-later for `oxd`, CLI, UI and controller, Apache-2.0 for client libraries, schema and Terraform provider. Don't add licence headers until that is decided.
@@ -99,11 +99,10 @@ Proposed next, not decided, roughly in this order:
 
 1. Rule and candidate editing in the live TUI. Today it reads, commits, confirms and reverts.
 2. API security: TLS listener, OIDC or token auth, the five roles, four-eyes approval. Today the socket's file permission is the only control.
-3. A rule merger so a zone pair over 32 nftables rules compiles instead of being refused.
-4. `ox-services`: Unbound, Kea, then WireGuard and strongSwan, each rendered from schema additions.
-5. Default lockdown before the first commit, and rules for traffic the box sends.
-6. OPNsense import, and testing the pfSense importer against real backups.
-7. HA, the fleet controller, the OS image. These are later phases in the spec.
+3. `ox-services`: Unbound, Kea, then WireGuard and strongSwan, each rendered from schema additions.
+4. Default lockdown before the first commit, and rules for traffic the box sends.
+5. OPNsense import, and testing the pfSense importer against real backups.
+6. HA, the fleet controller, the OS image. These are later phases in the spec.
 
 Run before handing work back:
 
