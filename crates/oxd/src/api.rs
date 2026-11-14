@@ -190,7 +190,7 @@ async fn whoami(caller: Caller) -> Response {
 
 async fn status(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     caller.may(Action::Read)?;
-    let mut e = s.lock().unwrap();
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
     let mut v = serde_json::to_value(e.status(now())?).expect("status is plain JSON");
     v["four_eyes"] = json!(e.settings()?.four_eyes);
     Ok(Json(v).into_response())
@@ -229,7 +229,7 @@ fn act(
     candidate: &str,
     change: impl FnOnce(&mut Config) -> Result<Vec<String>, String>,
 ) -> Api<Response> {
-    let mut e = s.lock().unwrap();
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
     let text = e.running_config()?.ok_or_else(|| {
         invalid(
             "there is no commit yet; set the box up and commit a first config before changing it",
@@ -302,18 +302,18 @@ async fn action_block(
 
 async fn commits(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     caller.may(Action::Read)?;
-    Ok(Json(s.lock().unwrap().history()?).into_response())
+    Ok(Json(s.lock().unwrap_or_else(|e| e.into_inner()).history()?).into_response())
 }
 
 async fn commit(State(s): State<Shared>, caller: Caller, Path(id): Path<u64>) -> Api<Response> {
     caller.may(Action::Read)?;
-    let e = s.lock().unwrap();
+    let e = s.lock().unwrap_or_else(|e| e.into_inner());
     Ok(Json(json!({ "commit": e.commit(id)?, "config": e.commit_config(id)? })).into_response())
 }
 
 async fn candidates(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     caller.may(Action::Read)?;
-    Ok(Json(s.lock().unwrap().candidates()?).into_response())
+    Ok(Json(s.lock().unwrap_or_else(|e| e.into_inner()).candidates()?).into_response())
 }
 
 async fn candidate(
@@ -322,7 +322,9 @@ async fn candidate(
     Path(name): Path<String>,
 ) -> Api<String> {
     caller.may(Action::Read)?;
-    Ok(s.lock().unwrap().candidate(&name)?)
+    Ok(s.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .candidate(&name)?)
 }
 
 async fn candidate_meta(
@@ -331,7 +333,12 @@ async fn candidate_meta(
     Path(name): Path<String>,
 ) -> Api<Response> {
     caller.may(Action::Read)?;
-    Ok(Json(s.lock().unwrap().candidate_meta(&name)?).into_response())
+    Ok(Json(
+        s.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .candidate_meta(&name)?,
+    )
+    .into_response())
 }
 
 async fn put_candidate(
@@ -341,7 +348,9 @@ async fn put_candidate(
     body: String,
 ) -> Api<Response> {
     let who = caller.may(Action::Edit)?;
-    s.lock().unwrap().put_candidate(&name, &body, who, now())?;
+    s.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .put_candidate(&name, &body, who, now())?;
     Ok(Json(json!({ "saved": name })).into_response())
 }
 
@@ -351,7 +360,9 @@ async fn delete_candidate(
     Path(name): Path<String>,
 ) -> Api<Response> {
     let who = caller.may(Action::Edit)?;
-    s.lock().unwrap().delete_candidate(&name, who, now())?;
+    s.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .delete_candidate(&name, who, now())?;
     Ok(Json(json!({ "deleted": name })).into_response())
 }
 
@@ -361,7 +372,12 @@ async fn approve(
     Path(name): Path<String>,
 ) -> Api<Response> {
     let who = caller.may(Action::Approve)?;
-    Ok(Json(s.lock().unwrap().approve(&name, who, now())?).into_response())
+    Ok(Json(
+        s.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .approve(&name, who, now())?,
+    )
+    .into_response())
 }
 
 /// Checks a config without storing it. The body is the config text.
@@ -396,7 +412,7 @@ async fn plan(
 ) -> Api<Response> {
     caller.may(Action::Read)?;
     let (candidate_text, running_text) = {
-        let e = s.lock().unwrap();
+        let e = s.lock().unwrap_or_else(|e| e.into_inner());
         (e.candidate(&name)?, e.running_config()?)
     };
     let (new, new_rs) = load(&candidate_text)?;
@@ -462,12 +478,22 @@ async fn commit_candidate(
 
 async fn confirm(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     let who = caller.may(Action::Commit)?;
-    Ok(Json(s.lock().unwrap().confirm(who, now())?).into_response())
+    Ok(Json(
+        s.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .confirm(who, now())?,
+    )
+    .into_response())
 }
 
 async fn revert(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     let who = caller.may(Action::Commit)?;
-    Ok(Json(s.lock().unwrap().revert(who, false, now())?).into_response())
+    Ok(Json(
+        s.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .revert(who, false, now())?,
+    )
+    .into_response())
 }
 
 async fn rollback(
@@ -477,7 +503,7 @@ async fn rollback(
 ) -> Api<Response> {
     let who = caller.may(Action::Rollback)?;
     check_window(&body)?;
-    let c = s.lock().unwrap().rollback(
+    let c = s.lock().unwrap_or_else(|e| e.into_inner()).rollback(
         body.steps.unwrap_or(1),
         who,
         &body.reason,
@@ -543,7 +569,7 @@ async fn explain_packet(
 ) -> Api<Response> {
     caller.may(Action::Read)?;
     let (running_text, candidate_text) = {
-        let e = s.lock().unwrap();
+        let e = s.lock().unwrap_or_else(|e| e.into_inner());
         (
             e.running_config()?,
             body.candidate
@@ -558,6 +584,19 @@ async fn explain_packet(
         l4: body.proto.into(),
         dport: body.dport,
         iif: body.iif,
+        // What the machine has now, so an address the provider assigned
+        // counts as the box's own, as it does for the kernel.
+        box_addrs: nix::ifaddrs::getifaddrs()
+            .map(|all| {
+                all.filter_map(|a| {
+                    let s = a.address?;
+                    s.as_sockaddr_in()
+                        .map(|v4| std::net::IpAddr::V4(v4.ip()))
+                        .or_else(|| s.as_sockaddr_in6().map(|v6| std::net::IpAddr::V6(v6.ip())))
+                })
+                .collect()
+            })
+            .unwrap_or_default(),
     };
     let run = |text: &str| -> Api<ExplainView> {
         let (_, rs) = load(text)?;
@@ -622,7 +661,7 @@ fn kernel_hits(dump: &serde_json::Value) -> std::collections::BTreeMap<String, (
 async fn hygiene(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     caller.may(Action::Read)?;
     let (text, dump) = {
-        let mut e = s.lock().unwrap();
+        let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
         (e.running_config()?, e.applier().dump().ok())
     };
     let Some(text) = text else {
@@ -658,11 +697,11 @@ async fn hygiene(State(s): State<Shared>, caller: Caller) -> Api<Response> {
 async fn metrics(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     caller.may(Action::Read)?;
     let (status, dump, audit_len) = {
-        let mut e = s.lock().unwrap();
+        let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
         (
             e.status(now())?,
             e.applier().dump().ok(),
-            e.audit().map(|a| a.len()).ok(),
+            Some(e.audit_len()),
         )
     };
     let mut out = String::new();
@@ -717,7 +756,7 @@ async fn metrics(State(s): State<Shared>, caller: Caller) -> Api<Response> {
             "netoxide_audit_entries",
             "Entries in the audit log.",
             "counter",
-            one(n as u64),
+            one(n),
         );
     }
     let hits = dump.as_ref().map(kernel_hits).unwrap_or_default();
@@ -779,7 +818,7 @@ async fn kernel(State(s): State<Shared>, caller: Caller) -> Api<Response> {
 
 async fn settings(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     caller.may(Action::Read)?;
-    Ok(Json(s.lock().unwrap().settings()?).into_response())
+    Ok(Json(s.lock().unwrap_or_else(|e| e.into_inner()).settings()?).into_response())
 }
 
 #[derive(Deserialize)]
@@ -851,7 +890,9 @@ async fn revoke_token(
     Path(name): Path<String>,
 ) -> Api<Response> {
     let who = caller.may(Action::Manage)?;
-    s.lock().unwrap().revoke_token(&name, who, now())?;
+    s.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .revoke_token(&name, who, now())?;
     Ok(Json(json!({ "revoked": name })).into_response())
 }
 
@@ -864,7 +905,7 @@ pub fn security_headers() -> HeaderMap {
         ("referrer-policy", "no-referrer"),
         (
             "content-security-policy",
-            "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'",
+            "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         ),
     ] {
         h.insert(k, v.parse().expect("static header"));

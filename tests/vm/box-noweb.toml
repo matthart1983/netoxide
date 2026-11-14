@@ -1,0 +1,107 @@
+# box.toml with web access taken away, to test the undo timer. The box under test in the VM: eth0 is the inside network, eth2 the outside.
+schema = 1
+hostname = "vmbox"
+ipv6_autoconfig = ["eth0"]
+
+[zones.wan]
+[zones.lan]
+
+# The outside port asks the network for its IPv4 address, as behind a
+# provider's modem, and has a fixed IPv6 address and router.
+[interfaces.eth2]
+zone = "wan"
+addresses = ["2001:db8:113::10/64"]
+default_route = true
+dhcp_client = true
+gateway = ["2001:db8:113::2"]
+
+[interfaces.eth0]
+zone = "lan"
+addresses = ["192.168.50.1/24", "2001:db8:50::1/64"]
+
+[services]
+web = ["tcp/80"]
+ping = ["icmp", "icmpv6"]
+dns = ["udp/53", "tcp/53"]
+dhcp = ["udp/67"]
+admin = ["tcp/8443"]
+dhcp-client = ["udp/68"]
+
+[[policy]]
+from = "lan"
+to = "wan"
+
+[[policy.rule]]
+id = "r-web"
+name = "Inside may only ping"
+action = "accept"
+service = ["ping"]
+
+[[policy]]
+from = "lan"
+to = "self"
+
+[[policy.rule]]
+id = "r-box"
+name = "Inside may ping and manage the box and use its DNS and DHCP"
+action = "accept"
+service = ["ping", "dns", "dhcp", "admin"]
+
+[[policy]]
+from = "wan"
+to = "self"
+
+[[policy.rule]]
+id = "r-dhcp-client"
+name = "The provider's answer to the box asking for its address"
+action = "accept"
+service = ["dhcp-client"]
+
+[[policy]]
+from = "wan"
+to = "lan"
+
+[[policy.rule]]
+id = "r-fwd-web"
+name = "Forwarded web server"
+action = "accept"
+destination = ["192.168.50.50"]
+service = ["web"]
+
+[[nat.forward]]
+id = "n-fwd-web"
+name = "Web server inside"
+from = "wan"
+# No address: whichever one the provider gives the box.
+service = "tcp/8080"
+to = "192.168.50.50"
+to_port = 80
+rule = "r-fwd-web"
+
+[[nat.outbound]]
+id = "n-out"
+name = "Hide the inside network"
+from = "lan"
+to = "wan"
+source = ["192.168.50.0/24"]
+translate = "masquerade"
+
+[dns]
+zones = ["lan"]
+upstream = ["203.0.113.2"]
+domain = "home.arpa"
+# The pretend upstream in the test signs nothing.
+dnssec = false
+
+[[dns.host]]
+name = "printer"
+address = "192.168.50.7"
+
+[dhcp.eth0]
+first = "192.168.50.100"
+last = "192.168.50.199"
+
+[[dhcp.eth0.static]]
+mac = "52:54:00:00:00:02"
+address = "192.168.50.50"
+name = "client"

@@ -11,9 +11,11 @@ description = "Internet"
 [zones.lan]
 description = "Inside network"
 
+# The box asks the provider's network for its IPv4 address and router.
 [interfaces.eth0]
 zone = "wan"
 default_route = true
+dhcp_client = true
 
 [interfaces.eth1]
 zone = "lan"
@@ -28,6 +30,7 @@ ping = ["icmp", "icmpv6"]
 dns = ["udp/53", "tcp/53"]
 dhcp = ["udp/67"]
 dhcpv6-client = ["udp/546"]
+dhcp-client = ["udp/68"]
 
 [[policy]]
 from = "lan"
@@ -64,6 +67,12 @@ name = "IPv6 address assignment from the provider"
 action = "accept"
 source = ["fe80::/10"]
 service = ["dhcpv6-client"]
+
+[[policy.rule]]
+id = "r-dhcp-client"
+name = "IPv4 address assignment from the provider"
+action = "accept"
+service = ["dhcp-client"]
 
 [[nat.outbound]]
 id = "n-inside-out"

@@ -137,7 +137,10 @@ impl Dnsmasq {
             self.path("dnsmasq.conf").display()
         ))
         .arg(format!("--dhcp-leasefile={}", self.lease_file().display()))
-        .arg(format!("--pid-file={}", self.path("dnsmasq.pid").display()))
+        // The daemon writes the pid file itself, below. dnsmasq would hand
+        // its own to the dnsmasq user, which needs the right to change file
+        // owners, and the daemon runs without it.
+        .arg("--pid-file=")
         .arg("--log-facility=-")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -161,6 +164,7 @@ impl Dnsmasq {
                 "dnsmasq stopped right after starting ({status}): {last}"
             ));
         }
+        let _ = fs::write(self.path("dnsmasq.pid"), child.id().to_string());
         self.child = Some(child);
         Ok(())
     }

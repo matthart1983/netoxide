@@ -16,6 +16,27 @@ pub struct Detected {
     pub addrs: Vec<IpNet>,
     /// True when a default route leaves by this interface.
     pub default_route: bool,
+    /// The IPv4 router that default route goes through, if it has one.
+    pub gateway: Option<std::net::Ipv4Addr>,
+}
+
+/// The IPv4 default route's router for each interface, from /proc/net/route.
+fn default_gateways(v4: &str) -> BTreeMap<String, std::net::Ipv4Addr> {
+    let mut out = BTreeMap::new();
+    for line in v4.lines().skip(1) {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() > 3
+            && f[1] == "00000000"
+            && let Ok(raw) = u32::from_str_radix(f[2], 16)
+            && raw != 0
+        {
+            // The file holds the address in network byte order, printed as
+            // a host-order number.
+            out.entry(f[0].to_string())
+                .or_insert_with(|| std::net::Ipv4Addr::from(raw.to_ne_bytes()));
+        }
+    }
+    out
 }
 
 /// Interfaces with a default route, from the kernel's route tables.
@@ -56,6 +77,8 @@ pub fn detect() -> io::Result<Vec<Detected>> {
         &std::fs::read_to_string("/proc/net/route").unwrap_or_default(),
         &std::fs::read_to_string("/proc/net/ipv6_route").unwrap_or_default(),
     );
+    let gateways =
+        default_gateways(&std::fs::read_to_string("/proc/net/route").unwrap_or_default());
     let mut found: BTreeMap<String, Detected> = BTreeMap::new();
     for ifa in getifaddrs().map_err(io::Error::from)? {
         if ifa.flags.contains(InterfaceFlags::IFF_LOOPBACK) {
@@ -68,6 +91,7 @@ pub fn detect() -> io::Result<Vec<Detected>> {
                 up: false,
                 addrs: vec![],
                 default_route: routes.contains(&ifa.interface_name),
+                gateway: gateways.get(&ifa.interface_name).copied(),
             });
         entry.up |= ifa
             .flags
@@ -109,6 +133,11 @@ mod tests {
                   00000000000000000000000000000000 00 00000000000000000000000000000000 00 00000000000000000000000000000000 ffffffff 00000001 00000000 00200200 lo\n";
         assert_eq!(default_routes(v4, v6), ["wan0", "wan6"]);
         assert!(default_routes("", "").is_empty());
+        assert_eq!(
+            default_gateways(v4).get("wan0"),
+            Some(&"192.168.0.1".parse().unwrap())
+        );
+        assert!(!default_gateways(v4).contains_key("lan0"));
     }
 
     #[test]

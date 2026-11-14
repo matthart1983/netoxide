@@ -143,6 +143,13 @@ enum Command {
         /// Resolvers to forward DNS to (default 1.1.1.1 and 9.9.9.9). Repeat for more
         #[arg(long)]
         dns_upstream: Vec<IpAddr>,
+        /// The provider assigns the address on the internet port (DHCP)
+        #[arg(long, conflicts_with = "gateway")]
+        wan_dhcp: bool,
+        /// The provider's router, for an internet port with a fixed address.
+        /// Repeat to give one for IPv4 and one for IPv6
+        #[arg(long)]
+        gateway: Vec<IpAddr>,
     },
     /// Forward a port from the internet to a host inside. Saved as a candidate
     Forward {
@@ -763,6 +770,7 @@ fn file(cmd: &FileCmd) -> Result<()> {
                 l4: packet.proto.into(),
                 dport: packet.dport,
                 iif: packet.iif.clone(),
+                box_addrs: vec![],
             };
             let (_, rs) = load(config)?;
             let running = explain(&rs, &packet)?;
@@ -839,6 +847,8 @@ fn main() -> ExitCode {
             save,
             no_services,
             dns_upstream,
+            wan_dhcp,
+            gateway,
         } => easy::init(
             &easy::InitArgs {
                 wan: wan.as_deref(),
@@ -848,6 +858,8 @@ fn main() -> ExitCode {
                 save: save.as_deref(),
                 no_services: *no_services,
                 dns_upstream,
+                wan_dhcp: *wan_dhcp,
+                gateway,
             },
             &Client::new(&cli.socket),
         ),

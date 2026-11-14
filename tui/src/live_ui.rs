@@ -445,7 +445,12 @@ fn draw_nat(f: &mut Frame, app: &mut LiveApp, area: Rect) {
                 Cell::from(Span::styled(n.id.clone(), Style::new().fg(DIM))),
                 Cell::from(n.name.clone()),
                 Cell::from(n.from.clone()),
-                Cell::from(format!("{} {}", n.address, n.service)),
+                Cell::from(format!(
+                    "{} {}",
+                    n.address
+                        .map_or("the box's address".to_string(), |a| a.to_string()),
+                    n.service
+                )),
                 Cell::from(match n.to_port {
                     Some(p) => format!("{} port {p}", n.to),
                     None => n.to.to_string(),

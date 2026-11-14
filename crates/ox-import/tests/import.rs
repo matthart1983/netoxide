@@ -14,6 +14,7 @@ fn packet(src: &str, dst: &str, l4: L4, dport: Option<u16>, iif: &str) -> Packet
         l4,
         dport,
         iif: iif.to_string(),
+        box_addrs: vec![],
     }
 }
 

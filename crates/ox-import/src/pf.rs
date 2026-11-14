@@ -964,6 +964,7 @@ pub fn probes(model: &Model) -> Vec<Packet> {
             l4,
             dport,
             iif: iif.to_string(),
+            box_addrs: vec![],
         };
         if !out.contains(&p) {
             out.push(p);

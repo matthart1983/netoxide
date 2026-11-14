@@ -37,6 +37,11 @@ pub struct Answers {
     pub lans: Vec<Port>,
     /// Hand out addresses and answer DNS for the inside network.
     pub serve: Option<Serve>,
+    /// The provider assigns the box's IPv4 address on the internet port
+    /// (DHCP). Any IPv4 address in `wan` is then left out of the config.
+    pub wan_dhcp: bool,
+    /// The provider's routers, for an internet port with fixed addresses.
+    pub gateway: Vec<IpAddr>,
 }
 
 /// How the box serves DNS and DHCP to the inside network.
@@ -128,7 +133,20 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
         zone: zone.into(),
         addresses: p.addrs.iter().map(|n| IfaceAddr(*n)).collect(),
         default_route,
+        gateway: vec![],
+        dhcp_client: false,
     };
+    let mut wan = iface(&a.wan, "wan", true);
+    if a.wan_dhcp {
+        wan.addresses.retain(|n| !n.0.addr().is_ipv4());
+        wan.dhcp_client = true;
+    }
+    wan.gateway = a
+        .gateway
+        .iter()
+        .copied()
+        .filter(|g| !(a.wan_dhcp && g.is_ipv4()))
+        .collect();
     let mut config = Config {
         schema: SCHEMA_VERSION,
         hostname: a.hostname.clone(),
@@ -148,7 +166,7 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
             ),
         ]
         .into(),
-        interfaces: [(a.wan.name.clone(), iface(&a.wan, "wan", true))].into(),
+        interfaces: [(a.wan.name.clone(), wan)].into(),
         addresses: Default::default(),
         services: [
             ("ssh", vec!["tcp/22"]),
@@ -222,6 +240,21 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
             )],
         },
     ];
+    if a.wan_dhcp {
+        config.services.insert(
+            "dhcp-client".into(),
+            vec!["udp/68".parse().expect("built-in")],
+        );
+        // The answer to the box's own request. It comes from whatever
+        // address the provider's server has, so the source is open.
+        config.policies[2].rules.push(rule(
+            "r-dhcp-client",
+            "IPv4 address assignment from the provider",
+            vec![AddrRef::Any],
+            &["dhcp-client"],
+            "starter config: the provider's answer to the box asking for its address",
+        ));
+    }
     // Private IPv4 addresses are not routable on the internet, so hide them.
     let v4: Vec<AddrRef> = inside
         .iter()
@@ -319,6 +352,14 @@ pub fn describe(config: &Config) -> Vec<String> {
                 .join(", ")
         };
         out.push(format!("{name} is in zone {} ({addrs})", i.zone));
+        if i.dhcp_client {
+            out.push(format!(
+                "{name}: the box asks the network there for its IPv4 address and router"
+            ));
+        }
+        for g in &i.gateway {
+            out.push(format!("{name}: the default route goes through {g}"));
+        }
     }
     for p in &config.policies {
         let to = if p.to == SELF_ZONE {
@@ -359,7 +400,8 @@ pub fn describe(config: &Config) -> Vec<String> {
     for f in &config.nat.forward {
         out.push(format!(
             "{} {} from {} is forwarded to {}{} ({})",
-            f.address,
+            f.address
+                .map_or("the box's own address,".to_string(), |a| a.to_string()),
             f.service,
             f.from,
             f.to,
@@ -520,21 +562,15 @@ pub fn add_forward(config: &mut Config, req: &ForwardRequest) -> Result<Vec<Stri
         .or_else(|| config.interfaces.iter().find(|(_, i)| i.default_route))
         .ok_or("no interface carries the default route, so there is no outside to forward from")?;
     let from = wan.zone.clone();
-    let address = match req.address {
-        Some(a) => a,
-        None => wan
-            .addresses
+    // With no fixed address on the outside port, the forward follows
+    // whatever address the provider gives the box.
+    let address = req.address.or_else(|| {
+        wan.addresses
             .iter()
             .map(|a| a.0.addr())
             .find(|a| a.is_ipv4() == v4)
-            .ok_or_else(|| {
-                format!(
-                    "{wan_name} has no fixed {} address in the config; say which outside address to forward with --address",
-                    if v4 { "IPv4" } else { "IPv6" }
-                )
-            })?,
-    };
-    if address.is_ipv4() != v4 {
+    });
+    if address.is_some_and(|a| a.is_ipv4() != v4) {
         return Err(
             "the outside address and the inside host must both be IPv4 or both be IPv6".into(),
         );
@@ -599,14 +635,22 @@ pub fn add_forward(config: &mut Config, req: &ForwardRequest) -> Result<Vec<Stri
     check(&next)?;
 
     // Prove it: a packet from outside must now be accepted by the new rule.
-    // If an earlier rule decides first, move the new one to the top.
+    // If an earlier rule decides first, move the new one to the top. With
+    // no fixed outside address, a documentation address stands in for the
+    // one the provider will assign.
+    let probe_dst: IpAddr = address.unwrap_or(if v4 {
+        "192.0.2.1".parse().expect("valid")
+    } else {
+        "2001:db8::1".parse().expect("valid")
+    });
+    let outside = address.map_or("the box's own address,".to_string(), |a| a.to_string());
     let probe = Packet {
         src: if v4 {
             "198.51.100.7".parse().expect("valid")
         } else {
             "2001:db8:ffff::7".parse().expect("valid")
         },
-        dst: address,
+        dst: probe_dst,
         l4: if proto == Proto::Tcp {
             L4::Tcp
         } else {
@@ -614,6 +658,7 @@ pub fn add_forward(config: &mut Config, req: &ForwardRequest) -> Result<Vec<Stri
         },
         dport: Some(first),
         iif: wan_name.clone(),
+        box_addrs: vec![probe_dst],
     };
     let decided_by = |c: &Config| -> Result<(Verdict, Option<String>), String> {
         let rs = compile(c).map_err(|e| e.to_string())?;
@@ -637,7 +682,7 @@ pub fn add_forward(config: &mut Config, req: &ForwardRequest) -> Result<Vec<Stri
     *config = next;
     let mut out = vec![
         format!(
-            "{address} {} from {from} is forwarded to {}{} ({nat_id})",
+            "{outside} {} from {from} is forwarded to {}{} ({nat_id})",
             req.service,
             req.to,
             req.to_port
@@ -652,7 +697,7 @@ pub fn add_forward(config: &mut Config, req: &ForwardRequest) -> Result<Vec<Stri
         ));
     }
     out.push(format!(
-        "checked: a packet from outside to {address} {} is accepted by {rule_id}",
+        "checked: a packet from outside to {outside} {} is accepted by {rule_id}",
         req.service
     ));
     Ok(out)
@@ -729,6 +774,8 @@ mod tests {
             wan: port("eth0", &["203.0.113.10/24", "2001:db8:1::10/64"]),
             lans: vec![port("eth1", &["192.168.10.1/24", "2001:db8:2::1/64"])],
             serve: None,
+            wan_dhcp: false,
+            gateway: vec![],
         })
         .unwrap()
     }
@@ -748,6 +795,7 @@ mod tests {
             l4,
             dport,
             iif: iif.into(),
+            box_addrs: vec![],
         };
         let e = explain(&rs, &p).unwrap();
         (e.verdict, e.rule.map(|r| r.id))
@@ -852,6 +900,8 @@ mod tests {
             wan: port("eth0", &["2001:db8:1::10/64"]),
             lans: vec![port("eth1", &["2001:db8:2::1/64"])],
             serve: None,
+            wan_dhcp: false,
+            gateway: vec![],
         })
         .unwrap();
         assert!(v6.nat.outbound.is_empty());
@@ -867,6 +917,8 @@ mod tests {
                 port("eth2", &["192.168.20.1/24"]),
             ],
             serve: None,
+            wan_dhcp: false,
+            gateway: vec![],
         })
         .unwrap();
         assert_eq!(c.zone_interfaces("lan"), ["eth1", "eth2"]);
@@ -879,6 +931,8 @@ mod tests {
             wan: port("eth0", &[]),
             lans: vec![port("eth1", &["192.168.10.1/24", "2001:db8:2::1/64"])],
             serve: Some(Serve::default()),
+            wan_dhcp: false,
+            gateway: vec![],
         })
         .unwrap()
     }
@@ -976,6 +1030,8 @@ mod tests {
                 wan: port("eth0", &[]),
                 lans: vec![port("eth1", &[net])],
                 serve: Some(Serve::default()),
+                wan_dhcp: false,
+                gateway: vec![],
             });
             assert!(c.is_ok(), "{net}: {c:?}");
         }
@@ -988,6 +1044,8 @@ mod tests {
             wan: port("eth0", &[]),
             lans: vec![],
             serve: None,
+            wan_dhcp: false,
+            gateway: vec![],
         };
         assert!(starter(&a).unwrap_err().contains("at least one port"));
         a.lans = vec![port("eth0", &["192.168.1.1/24"])];
@@ -1106,6 +1164,52 @@ mod tests {
             assert!(err.contains(needle), "{err}");
             assert_eq!(c, before);
         }
+    }
+
+    #[test]
+    fn a_forward_works_when_the_provider_assigns_the_outside_address() {
+        // `served` has no fixed address on its internet port.
+        let mut c = served();
+        let done = add_forward(
+            &mut c,
+            &ForwardRequest {
+                name: "Web".into(),
+                service: "tcp/443".parse().unwrap(),
+                to: "192.168.10.20".parse().unwrap(),
+                to_port: None,
+                address: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.nat.forward[0].address, None);
+        assert!(
+            done[0].starts_with("the box's own address, tcp/443 from wan"),
+            "{done:?}"
+        );
+        assert!(done.last().unwrap().starts_with("checked:"), "{done:?}");
+
+        // Whatever address the box turns out to have, the forward applies
+        // to it and to nothing else.
+        let rs = compile(&c).unwrap();
+        let to = |dst: &str, mine: bool| {
+            let dst: IpAddr = dst.parse().unwrap();
+            let p = Packet {
+                src: "198.51.100.7".parse().unwrap(),
+                dst,
+                l4: L4::Tcp,
+                dport: Some(443),
+                iif: "eth0".into(),
+                box_addrs: if mine { vec![dst] } else { vec![] },
+            };
+            explain(&rs, &p).unwrap()
+        };
+        assert_eq!(to("100.64.3.9", true).verdict, Verdict::Accept);
+        let other = to("100.64.3.9", false);
+        assert_eq!(other.verdict, Verdict::Drop);
+        assert!(
+            other.to_string().contains("does not apply"),
+            "the explanation says why the forward was not used: {other}"
+        );
     }
 
     #[test]

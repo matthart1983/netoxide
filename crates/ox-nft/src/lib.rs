@@ -429,7 +429,9 @@ pub struct Dnat {
     pub id: String,
     pub name: String,
     pub from: String,
-    pub address: IpAddr,
+    /// The address the packet was sent to. `None` means any address the
+    /// box itself has, of the same family as `to`.
+    pub address: Option<IpAddr>,
     pub proto: Proto,
     pub first: u16,
     pub last: u16,
@@ -439,15 +441,47 @@ pub struct Dnat {
 }
 
 impl Dnat {
-    pub fn matches(&self, zone: &str, dst: IpAddr, l4: L4, dport: Option<u16>) -> bool {
+    /// `dst_is_box` says whether the destination is one of the box's own
+    /// addresses, which the kernel knows and a config alone may not.
+    pub fn matches(
+        &self,
+        zone: &str,
+        dst: IpAddr,
+        l4: L4,
+        dport: Option<u16>,
+        dst_is_box: bool,
+    ) -> bool {
+        self.from == zone && self.address_matches(dst, dst_is_box) && self.rest_matches(l4, dport)
+    }
+
+    fn address_matches(&self, dst: IpAddr, dst_is_box: bool) -> bool {
+        match self.address {
+            Some(a) => a == dst,
+            None => dst_is_box && dst.is_ipv4() == self.to.is_ipv4(),
+        }
+    }
+
+    /// True when only the destination address stands between this packet
+    /// and the forward.
+    pub fn matches_but_for_address(
+        &self,
+        zone: &str,
+        dst: IpAddr,
+        l4: L4,
+        dport: Option<u16>,
+    ) -> bool {
+        self.from == zone
+            && self.address.is_none()
+            && dst.is_ipv4() == self.to.is_ipv4()
+            && self.rest_matches(l4, dport)
+    }
+
+    fn rest_matches(&self, l4: L4, dport: Option<u16>) -> bool {
         let proto_ok = matches!(
             (self.proto, l4),
             (Proto::Tcp, L4::Tcp) | (Proto::Udp, L4::Udp)
         );
-        self.from == zone
-            && self.address == dst
-            && proto_ok
-            && dport.is_some_and(|d| (self.first..=self.last).contains(&d))
+        proto_ok && dport.is_some_and(|d| (self.first..=self.last).contains(&d))
     }
 }
 

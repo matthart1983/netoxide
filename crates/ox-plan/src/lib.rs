@@ -130,7 +130,8 @@ fn forward_summary(f: &Forward) -> String {
     format!(
         "from {} {} {} to {}{}, filter rule {}",
         f.from,
-        f.address,
+        f.address
+            .map_or("the box's own address".to_string(), |a| a.to_string()),
         f.service,
         f.to,
         f.to_port.map(|p| format!(":{p}")).unwrap_or_default(),
@@ -344,6 +345,7 @@ impl Flow {
             l4: self.proto.into(),
             dport: self.dport,
             iif: self.iif.clone(),
+            box_addrs: vec![],
         }
     }
 }
