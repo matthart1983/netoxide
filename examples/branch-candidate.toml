@@ -1,0 +1,163 @@
+# A branch firewall: staff LAN, a DMZ with file and web servers, guests, one WAN.
+# The candidate block-legacy-smb: branch.toml plus rule r-0412, with SMB taken out of r-0388.
+schema = 1
+hostname = "syd-br-014-a"
+
+[zones.lan]
+description = "Staff network"
+[zones.dmz]
+description = "Servers"
+[zones.guest]
+description = "Guest Wi-Fi"
+[zones.wan]
+description = "Internet"
+
+[interfaces.wan0]
+zone = "wan"
+addresses = ["203.0.113.10/32", "2001:db8:4a00::1/64"]
+default_route = true
+
+[interfaces."lan0.20"]
+zone = "lan"
+addresses = ["10.20.0.1/16", "2001:db8:4a00:1::1/64"]
+
+[interfaces."lan0.30"]
+zone = "dmz"
+addresses = ["10.30.0.1/24", "2001:db8:4a00:2::1/64"]
+
+[interfaces."lan0.50"]
+zone = "guest"
+addresses = ["10.50.0.1/22"]
+
+[addresses]
+finance-pcs = ["10.20.4.0/24", "2001:db8:4a00:1:4::/80"]
+finance-file-servers = ["10.30.0.8", "10.30.0.9", "2001:db8:4a00:2::8", "2001:db8:4a00:2::9"]
+staff = ["10.20.0.0/16", "2001:db8:4a00:1::/64"]
+intranet = ["10.30.0.20", "2001:db8:4a00:2::20"]
+backup-agents = ["10.20.9.0/28"]
+nas = ["10.30.0.40"]
+it-admins = ["10.20.1.0/26", "2001:db8:4a00:1:1::/80"]
+web = ["10.30.0.10", "2001:db8:4a00:2::10"]
+
+[services]
+smb = ["tcp/445", "tcp/139"]
+netbios = ["udp/137-138"]
+https = ["tcp/443"]
+http = ["tcp/80"]
+ssh = ["tcp/22"]
+dns = ["udp/53", "tcp/53"]
+ping = ["icmp", "icmpv6"]
+
+[[policy]]
+from = "lan"
+to = "dmz"
+
+[[policy.rule]]
+id = "r-0412"
+name = "Drop SMB and NetBIOS"
+action = "drop"
+service = ["smb", "netbios"]
+log = true
+reason = "Retire SMBv1 shares, CHG-2207"
+
+[[policy.rule]]
+id = "r-0388"
+name = "Finance to file servers"
+action = "accept"
+source = ["@finance-pcs"]
+destination = ["@finance-file-servers"]
+service = ["https"]
+reason = "Open file share for finance, CHG-1984"
+
+[[policy.rule]]
+id = "r-0301"
+name = "Staff to intranet"
+action = "accept"
+source = ["@staff"]
+destination = ["@intranet"]
+service = ["http", "https"]
+
+[[policy.rule]]
+id = "r-0277"
+name = "Backups to NAS"
+action = "accept"
+source = ["@backup-agents"]
+destination = ["@nas"]
+service = ["tcp/873"]
+
+[[policy]]
+from = "lan"
+to = "wan"
+
+[[policy.rule]]
+id = "r-0100"
+name = "Staff to the internet"
+action = "accept"
+source = ["@staff"]
+service = ["http", "https", "dns", "ping"]
+
+[[policy]]
+from = "guest"
+to = "wan"
+
+[[policy.rule]]
+id = "r-0600"
+name = "Guests to the web"
+action = "accept"
+service = ["http", "https", "dns"]
+
+[[policy]]
+from = "wan"
+to = "dmz"
+
+[[policy.rule]]
+id = "r-0200"
+name = "Public web"
+action = "accept"
+destination = ["@web"]
+service = ["https"]
+log = true
+
+[[policy]]
+from = "lan"
+to = "self"
+
+[[policy.rule]]
+id = "r-0001"
+name = "Admins manage the box"
+action = "accept"
+source = ["@it-admins"]
+service = ["ssh", "https"]
+log = true
+
+[[policy.rule]]
+id = "r-0002"
+name = "Staff can ping and resolve"
+action = "accept"
+source = ["@staff"]
+service = ["ping", "dns"]
+
+[[nat.forward]]
+id = "n-0010"
+name = "Public web"
+from = "wan"
+address = "203.0.113.10"
+service = "tcp/443"
+to = "10.30.0.10"
+rule = "r-0200"
+
+[[nat.outbound]]
+id = "n-0100"
+name = "Staff and guests to the internet"
+from = "lan"
+to = "wan"
+source = ["10.20.0.0/16"]
+translate = "masquerade"
+
+[[nat.outbound]]
+id = "n-0101"
+name = "Guests to the internet"
+from = "guest"
+to = "wan"
+source = ["10.50.0.0/22"]
+translate = "masquerade"

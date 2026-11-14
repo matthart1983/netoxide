@@ -1,0 +1,335 @@
+{
+  "$defs": {
+    "Action": {
+      "oneOf": [
+        {
+          "enum": [
+            "accept"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "drop",
+          "description": "Discard silently.",
+          "type": "string"
+        },
+        {
+          "const": "reject",
+          "description": "Discard and tell the sender.",
+          "type": "string"
+        }
+      ]
+    },
+    "AddrRef": {
+      "description": "\"any\", \"@group-name\", a network in CIDR form, or a single address",
+      "type": "string"
+    },
+    "Forward": {
+      "additionalProperties": false,
+      "description": "A port forward. It only rewrites the destination. The packet still has to\npass the filter rule named in `rule`, so there is no hidden pass rule.",
+      "properties": {
+        "address": {
+          "description": "The address the packet is sent to, before translation.",
+          "type": "string"
+        },
+        "from": {
+          "description": "The zone the packet arrives from.",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "rule": {
+          "description": "ID of the accept rule that lets the translated packet through.",
+          "type": "string"
+        },
+        "service": {
+          "$ref": "#/$defs/PortSpec",
+          "description": "A TCP or UDP port or port range."
+        },
+        "to": {
+          "description": "The internal host that receives the packet.",
+          "type": "string"
+        },
+        "to_port": {
+          "description": "The port on the internal host. Defaults to the original port.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "from",
+        "address",
+        "service",
+        "to",
+        "rule"
+      ],
+      "type": "object"
+    },
+    "IfaceAddr": {
+      "description": "An interface address with its prefix length, such as 10.20.0.1/16",
+      "type": "string"
+    },
+    "Interface": {
+      "additionalProperties": false,
+      "properties": {
+        "addresses": {
+          "default": [],
+          "description": "Addresses of the box on this interface, each with its prefix length,\nsuch as `10.20.0.1/16`.",
+          "items": {
+            "$ref": "#/$defs/IfaceAddr"
+          },
+          "type": "array"
+        },
+        "default_route": {
+          "description": "True when the default route leaves by this interface.",
+          "type": "boolean"
+        },
+        "zone": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "zone"
+      ],
+      "type": "object"
+    },
+    "Nat": {
+      "additionalProperties": false,
+      "properties": {
+        "forward": {
+          "description": "Port forwards: destination NAT to an internal host.",
+          "items": {
+            "$ref": "#/$defs/Forward"
+          },
+          "type": "array"
+        },
+        "outbound": {
+          "description": "Source NAT for traffic leaving by a zone.",
+          "items": {
+            "$ref": "#/$defs/Outbound"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Net": {
+      "description": "An IPv4 or IPv6 network in CIDR form, or a single address",
+      "type": "string"
+    },
+    "Outbound": {
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "items": {
+            "$ref": "#/$defs/AddrRef"
+          },
+          "type": "array"
+        },
+        "to": {
+          "type": "string"
+        },
+        "translate": {
+          "$ref": "#/$defs/Translate"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "from",
+        "to",
+        "translate"
+      ],
+      "type": "object"
+    },
+    "Policy": {
+      "additionalProperties": false,
+      "description": "The rules for traffic from one zone to another.",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "log_default": {
+          "description": "Log packets that match no rule and are dropped. On by default.",
+          "type": "boolean"
+        },
+        "rule": {
+          "items": {
+            "$ref": "#/$defs/Rule"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "A zone name, or `self` for traffic addressed to the box.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "PortSpec": {
+      "description": "\"tcp/443\", \"udp/137-138\", \"icmp\" or \"icmpv6\"",
+      "type": "string"
+    },
+    "Rule": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "destination": {
+          "items": {
+            "$ref": "#/$defs/AddrRef"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "description": "A disabled rule stays in the config and is left out of the ruleset.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Stable ID, unique in the config. It appears in logs and in `ox explain`.",
+          "type": "string"
+        },
+        "log": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the rule exists, such as a change ticket.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "service": {
+          "items": {
+            "$ref": "#/$defs/ServiceRef"
+          },
+          "type": "array"
+        },
+        "source": {
+          "items": {
+            "$ref": "#/$defs/AddrRef"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "action"
+      ],
+      "type": "object"
+    },
+    "ServiceRef": {
+      "description": "\"any\", a name from the services table, or a port such as \"tcp/443\"",
+      "type": "string"
+    },
+    "Translate": {
+      "description": "\"masquerade\" or a source address",
+      "type": "string"
+    },
+    "Zone": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The whole config for one box.",
+  "properties": {
+    "addresses": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/$defs/Net"
+        },
+        "type": "array"
+      },
+      "description": "Named address groups, used in rules as `@name`.",
+      "type": "object"
+    },
+    "hostname": {
+      "type": "string"
+    },
+    "interfaces": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Interface"
+      },
+      "description": "Interfaces by kernel name, such as `lan0.20`.",
+      "type": "object"
+    },
+    "nat": {
+      "$ref": "#/$defs/Nat"
+    },
+    "policy": {
+      "description": "One entry per zone pair. Rules in a pair are tried in order.",
+      "items": {
+        "$ref": "#/$defs/Policy"
+      },
+      "type": "array"
+    },
+    "schema": {
+      "description": "Schema version of this document. Must be 1.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "services": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/$defs/PortSpec"
+        },
+        "type": "array"
+      },
+      "description": "Named services, used in rules by name.",
+      "type": "object"
+    },
+    "zones": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Zone"
+      },
+      "description": "Zones group interfaces. Rules are written between zones.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "hostname"
+  ],
+  "title": "Config",
+  "type": "object"
+}

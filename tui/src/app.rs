@@ -17,10 +17,11 @@ pub enum Screen {
     Explain,
     Audit,
     Fleet,
+    Import,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 10] = [
+    pub const ALL: [Screen; 11] = [
         Screen::Policy,
         Screen::Nat,
         Screen::Vpn,
@@ -31,6 +32,7 @@ impl Screen {
         Screen::Explain,
         Screen::Audit,
         Screen::Fleet,
+        Screen::Import,
     ];
 
     pub fn title(self) -> &'static str {
@@ -45,12 +47,14 @@ impl Screen {
             Screen::Explain => "Explain",
             Screen::Audit => "Admin/Audit",
             Screen::Fleet => "Fleet",
+            Screen::Import => "Import",
         }
     }
 
     pub fn key(self) -> char {
         match self {
             Screen::Fleet => '0',
+            Screen::Import => 'i',
             s => char::from_digit(
                 Screen::ALL.iter().position(|x| *x == s).unwrap() as u32 + 1,
                 10,
@@ -132,6 +136,29 @@ impl App {
             commit_window: 300,
             commit: CommitPhase::Review,
             explain_candidate: false,
+        }
+    }
+
+    /// True while the candidate's rules are what the box is running:
+    /// during the confirm window and after the commit is confirmed.
+    pub fn applied(&self) -> bool {
+        matches!(
+            self.commit,
+            CommitPhase::Pending { .. } | CommitPhase::Confirmed
+        )
+    }
+
+    /// True while there is still a candidate that could be committed.
+    pub fn has_candidate(&self) -> bool {
+        !matches!(self.commit, CommitPhase::Confirmed)
+    }
+
+    /// The commit the box is running right now.
+    pub fn running_commit(&self) -> &'static str {
+        if self.applied() {
+            data::NEXT_COMMIT
+        } else {
+            data::BASE_COMMIT
         }
     }
 
@@ -246,7 +273,7 @@ impl App {
                 self.screen =
                     Screen::ALL[(self.screen.index() + Screen::ALL.len() - 1) % Screen::ALL.len()]
             }
-            KeyCode::Char(c @ '0'..='9') => {
+            KeyCode::Char(c) if Screen::ALL.iter().any(|s| s.key() == c) => {
                 if let Some(s) = Screen::ALL.into_iter().find(|s| s.key() == c) {
                     self.screen = s;
                 }
@@ -277,9 +304,10 @@ impl App {
                 self.ha_confirming = true;
             }
             (Screen::Changes, KeyCode::Char('c')) => {
+                // A confirmed commit leaves no candidate, so there is nothing to commit again.
                 if matches!(
                     self.commit,
-                    CommitPhase::Review | CommitPhase::Reverted { .. } | CommitPhase::Confirmed
+                    CommitPhase::Review | CommitPhase::Reverted { .. }
                 ) {
                     self.commit = CommitPhase::Pending {
                         deadline: Instant::now() + Duration::from_secs(self.commit_window),
@@ -295,8 +323,9 @@ impl App {
                     };
                 }
             }
-            (Screen::Explain, KeyCode::Char('m')) => {
-                self.explain_candidate = !self.explain_candidate
+            // The toggle only means something while a candidate is waiting, unapplied.
+            (Screen::Explain, KeyCode::Char('m')) if !self.applied() => {
+                self.explain_candidate = !self.explain_candidate;
             }
             _ => {}
         }

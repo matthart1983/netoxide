@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "tui"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+ox-schema = { path = "crates/ox-schema" }
+ox-nft = { path = "crates/ox-nft" }
+ox-explain = { path = "crates/ox-explain" }
+ox-plan = { path = "crates/ox-plan" }
+ox-libnft = { path = "crates/ox-libnft" }
+ox-store = { path = "crates/ox-store" }
+ox-import = { path = "crates/ox-import" }
+roxmltree = "0.21"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+sha2 = "0.11"
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+ipnet = { version = "2.12", features = ["serde"] }
+schemars = "1.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "1.2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

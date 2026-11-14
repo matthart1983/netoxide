@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{
         Block, BorderType, Cell, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table,
         Tabs, Wrap,
@@ -61,8 +61,10 @@ fn mmss(secs: u64) -> String {
     format!("{:02}:{:02}", secs / 60, secs % 60)
 }
 
-pub const MIN_W: u16 = 110;
-pub const MIN_H: u16 = 30;
+// The smallest terminal where no screen clips a value. Policy and Changes
+// also reflow below this, but the wide tables (VPN, IPS, Interfaces) do not.
+pub const MIN_W: u16 = 132;
+pub const MIN_H: u16 = 34;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let a = f.area();
@@ -100,6 +102,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Screen::Explain => draw_explain(f, app, body),
         Screen::Audit => draw_audit(f, app, body),
         Screen::Fleet => draw_fleet(f, app, body),
+        Screen::Import => draw_import(f, body),
     }
     draw_footer(f, app, foot);
 
@@ -124,29 +127,43 @@ fn draw_top(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" ● active", Style::new().fg(OK)),
         Span::styled("  │  ", Style::new().fg(DIM)),
         Span::raw("running "),
-        Span::styled("#2479", Style::new().bold()),
-        Span::styled("  │  ", Style::new().fg(DIM)),
+        Span::styled(app.running_commit(), Style::new().bold()),
     ];
+    if matches!(app.commit, CommitPhase::Pending { .. }) {
+        spans.push(Span::styled(" unconfirmed", Style::new().fg(WARN)));
+    }
+    spans.push(Span::styled("  │  ", Style::new().fg(DIM)));
     match app.commit {
         CommitPhase::Pending { .. } => {
             let left = app.commit_remaining().unwrap_or(0);
             spans.push(Span::styled(
-                format!(
-                    " applied · reverts in {} · y confirm · r revert ",
-                    mmss(left)
-                ),
+                format!(" reverts in {} · y confirm · r revert ", mmss(left)),
                 Style::new().fg(Color::Black).bg(WARN).bold(),
             ));
         }
-        CommitPhase::Confirmed => spans.push(Span::styled("committed #2482", Style::new().fg(OK))),
+        CommitPhase::Confirmed => spans.push(Span::styled("no candidate", Style::new().fg(DIM))),
         _ => {
             spans.push(Span::raw("candidate "));
             spans.push(Span::styled("block-legacy-smb", Style::new().fg(WARN)));
-            spans.push(Span::styled(" (approved)", Style::new().fg(DIM)));
         }
     }
-    spans.push(Span::styled("  │  ", Style::new().fg(DIM)));
-    spans.push(Span::styled("support to 30 Nov 2026", Style::new().fg(DIM)));
+    // The support date is the least urgent item, so it goes first when the bar is full.
+    let support = "  │  support to 30 Nov 2026";
+    let approved = " (approved)";
+    let reviewing = matches!(
+        app.commit,
+        CommitPhase::Review | CommitPhase::Reverted { .. }
+    );
+    let mut used: usize = spans.iter().map(Span::width).sum();
+    let width = area.width as usize;
+    if reviewing && used + approved.len() + support.chars().count() <= width {
+        spans.push(Span::styled(approved, Style::new().fg(DIM)));
+        used += approved.len();
+    }
+    if used + support.chars().count() <= width {
+        spans.push(Span::styled("  │  ", Style::new().fg(DIM)));
+        spans.push(Span::styled("support to 30 Nov 2026", Style::new().fg(DIM)));
+    }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -163,7 +180,8 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     let tabs = Tabs::new(titles)
         .select(app.screen.index())
         .highlight_style(Style::new().fg(ACCENT).bold().underlined())
-        .divider(Span::styled("│", Style::new().fg(DIM)))
+        // No divider: eleven tabs with dividers don't fit in 110 columns.
+        .divider("")
         .padding(" ", " ");
     f.render_widget(tabs, area);
 }
@@ -178,14 +196,17 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         Screen::Ha => &[("f", "fail over")],
         Screen::Changes => match app.commit {
             CommitPhase::Pending { .. } => &[("y", "confirm commit"), ("r", "revert now")],
+            CommitPhase::Confirmed => &[],
             _ => &[("c", "commit with confirm"), ("w", "confirm window")],
         },
+        Screen::Explain if app.applied() => &[],
         Screen::Explain => &[("m", "running ↔ candidate")],
+        Screen::Import => &[],
     };
     let mut spans = vec![Span::raw(" ")];
     for (k, v) in screen_keys.iter().chain(
         [
-            ("1-0", "screens"),
+            ("1-0 i", "screens"),
             ("tab", "next"),
             ("?", "help"),
             ("q", "quit"),
@@ -206,7 +227,7 @@ fn draw_help(f: &mut Frame) {
     f.render_widget(Clear, area);
     let lines = vec![
         Line::from("Navigation".bold()),
-        kv("1 … 9, 0", "jump to a screen (0 = fleet)"),
+        kv("1 … 9, 0, i", "jump to a screen (0 fleet, i import)"),
         kv("tab / shift-tab", "next / previous screen"),
         kv("↑↓ or j k", "move the selection"),
         kv("←→ or h l", "zone pair (policy), NAT type (nat)"),
@@ -260,111 +281,179 @@ fn draw_policy(f: &mut Frame, app: &mut App, area: Rect) {
     let mut ls = ListState::default();
     ls.select(Some(app.pair_idx));
     let list = List::new(items)
-        .block(
-            panel("zone pairs")
-                .title_bottom(Span::styled(" 412 rules · 14 pairs ", Style::new().fg(DIM))),
-        )
+        .block(panel("zone pairs").title_bottom(Span::styled(
+            format!(
+                " {} rules · {} pairs ",
+                app.pairs.iter().map(|p| p.total).sum::<u32>(),
+                app.pairs.len()
+            ),
+            Style::new().fg(DIM),
+        )))
         .highlight_style(Style::new().fg(ACCENT).bold())
         .highlight_symbol("▸ ");
     f.render_stateful_widget(list, left, &mut ls);
 
     let pair = &app.pairs[app.pair_idx];
-    let table_h = pair.rules.len() as u16 + 4;
-    let [tbl, detail, _] = Layout::vertical([
-        Constraint::Length(table_h),
-        Constraint::Length(8),
-        Constraint::Min(0),
-    ])
-    .areas(right);
+    // The rule list takes the spare height; the detail panel stays at the bottom.
+    let [tbl, detail] = Layout::vertical([Constraint::Min(6), Constraint::Length(7)]).areas(right);
+    // A candidate rule is marked until its commit is confirmed.
+    let (has_candidate, applied) = (app.has_candidate(), app.applied());
+    let marked = |r: &data::Rule| r.pending && has_candidate;
+    let (legend, legend_color) = match app.commit {
+        CommitPhase::Pending { .. } => (" ◆ applied, waiting for confirm ", WARN),
+        CommitPhase::Confirmed => ("", DIM),
+        _ => (" ◆ in candidate, not applied ", WARN),
+    };
+    let shown = if pair.rules.len() as u32 == pair.total {
+        format!("{} rules", pair.total)
+    } else {
+        format!("showing {} of {} rules", pair.rules.len(), pair.total)
+    };
 
-    let mut rows: Vec<Row> = pair
-        .rules
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let mut name = vec![];
-            if r.pending {
-                name.push(Span::styled("◆ ", Style::new().fg(WARN).bold()));
-            }
-            name.push(Span::raw(r.name));
-            let hy = if r.hygiene.is_empty() {
-                Cell::from("")
-            } else {
-                Cell::from(Span::styled(r.hygiene, Style::new().fg(WARN)))
-            };
+    // Under 110 columns the source, destination and service columns would be
+    // cut to a few characters, so each rule takes two lines instead.
+    let narrow = right.width < 112;
+    if narrow {
+        let mut rows: Vec<Row> = pair
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let mut name = vec![Span::styled(format!("{} ", r.id), Style::new().fg(DIM))];
+                if marked(r) {
+                    name.push(Span::styled("◆ ", Style::new().fg(WARN).bold()));
+                }
+                name.push(Span::raw(r.name));
+                let what = Line::from(Span::styled(
+                    format!("  {} → {} · {}", r.src, r.dst, r.svc),
+                    Style::new().fg(DIM),
+                ));
+                Row::new(vec![
+                    Cell::from(Span::styled(format!("{}", i + 1), Style::new().fg(DIM))),
+                    Cell::from(Text::from(vec![Line::from(name), what])),
+                    action_cell(r.action),
+                    Cell::from(Line::from(r.hits).alignment(Alignment::Right)),
+                    Cell::from(Span::styled(r.hygiene, Style::new().fg(WARN))),
+                ])
+                .height(2)
+            })
+            .collect();
+        rows.push(
             Row::new(vec![
-                Cell::from(Span::styled(format!("{}", i + 1), Style::new().fg(DIM))),
-                Cell::from(Span::styled(r.id, Style::new().fg(DIM))),
-                Cell::from(Line::from(name)),
-                Cell::from(r.src),
-                Cell::from(r.dst),
-                Cell::from(r.svc),
-                action_cell(r.action),
-                Cell::from(Line::from(r.hits).alignment(Alignment::Right)),
-                hy,
+                Cell::from("—"),
+                Cell::from("default for this pair: any → any · any"),
+                action_cell(Action::Drop),
+                Cell::from(Line::from(pair.default_hits).alignment(Alignment::Right)),
+                Cell::from("logged"),
             ])
-        })
-        .collect();
-    rows.push(
-        Row::new(vec![
-            Cell::from("—"),
-            Cell::from(""),
-            Cell::from("default for this pair"),
-            Cell::from("any"),
-            Cell::from("any"),
-            Cell::from("any"),
-            action_cell(Action::Drop),
-            Cell::from(Line::from(pair.default_hits).alignment(Alignment::Right)),
-            Cell::from("logged"),
-        ])
-        .style(Style::new().fg(DIM)),
-    );
-
-    let widths = [
-        Constraint::Length(2),
-        Constraint::Length(6),
-        Constraint::Fill(2),
-        Constraint::Fill(1),
-        Constraint::Fill(1),
-        Constraint::Fill(1),
-        Constraint::Length(6),
-        Constraint::Length(8),
-        Constraint::Length(19),
-    ];
-    let table = Table::new(rows, widths)
-        .header(header(&[
-            "#",
-            "id",
-            "rule",
-            "source",
-            "destination",
-            "service",
-            "action",
-            "hits 30d",
-            "hygiene",
-        ]))
+            .style(Style::new().fg(DIM)),
+        );
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(2),
+                Constraint::Fill(1),
+                Constraint::Length(6),
+                Constraint::Length(8),
+                Constraint::Length(19),
+            ],
+        )
+        .header(header(&["#", "rule", "action", "hits 30d", "hygiene"]))
         .block(
-            panel(format!(
-                "{} · {} of {} rules · first match wins",
-                pair.label,
-                pair.rules.len(),
-                pair.total
-            ))
-            .title_bottom(Span::styled(
-                " ◆ in candidate, not applied ",
-                Style::new().fg(WARN),
-            )),
+            panel(format!("{} · {shown} · first match wins", pair.label))
+                .title_bottom(Span::styled(legend, Style::new().fg(legend_color))),
         )
         .row_highlight_style(sel_style())
         .highlight_symbol("▸")
         .column_spacing(1);
-    // The default row is display-only; keep the selection on real rules.
-    if let Some(i) = app.rule_state.selected()
-        && i >= pair.rules.len()
-    {
-        app.rule_state.select(Some(0));
+        if let Some(i) = app.rule_state.selected()
+            && i >= pair.rules.len()
+        {
+            app.rule_state.select(Some(0));
+        }
+        f.render_stateful_widget(table, tbl, &mut app.rule_state);
+    } else {
+        let mut rows: Vec<Row> = pair
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let mut name = vec![];
+                if marked(r) {
+                    name.push(Span::styled("◆ ", Style::new().fg(WARN).bold()));
+                }
+                name.push(Span::raw(r.name));
+                let hy = if r.hygiene.is_empty() {
+                    Cell::from("")
+                } else {
+                    Cell::from(Span::styled(r.hygiene, Style::new().fg(WARN)))
+                };
+                Row::new(vec![
+                    Cell::from(Span::styled(format!("{}", i + 1), Style::new().fg(DIM))),
+                    Cell::from(Span::styled(r.id, Style::new().fg(DIM))),
+                    Cell::from(Line::from(name)),
+                    Cell::from(r.src),
+                    Cell::from(r.dst),
+                    Cell::from(r.svc),
+                    action_cell(r.action),
+                    Cell::from(Line::from(r.hits).alignment(Alignment::Right)),
+                    hy,
+                ])
+            })
+            .collect();
+        rows.push(
+            Row::new(vec![
+                Cell::from("—"),
+                Cell::from(""),
+                Cell::from("default for this pair"),
+                Cell::from("any"),
+                Cell::from("any"),
+                Cell::from("any"),
+                action_cell(Action::Drop),
+                Cell::from(Line::from(pair.default_hits).alignment(Alignment::Right)),
+                Cell::from("logged"),
+            ])
+            .style(Style::new().fg(DIM)),
+        );
+
+        let widths = [
+            Constraint::Length(2),
+            Constraint::Length(6),
+            Constraint::Fill(2),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+            Constraint::Length(6),
+            Constraint::Length(8),
+            Constraint::Length(19),
+        ];
+        let table = Table::new(rows, widths)
+            .header(header(&[
+                "#",
+                "id",
+                "rule",
+                "source",
+                "destination",
+                "service",
+                "action",
+                "hits 30d",
+                "hygiene",
+            ]))
+            .block(
+                panel(format!("{} · {shown} · first match wins", pair.label))
+                    .title_bottom(Span::styled(legend, Style::new().fg(legend_color))),
+            )
+            .row_highlight_style(sel_style())
+            .highlight_symbol("▸")
+            .column_spacing(1);
+        // The default row is display-only; keep the selection on real rules.
+        if let Some(i) = app.rule_state.selected()
+            && i >= pair.rules.len()
+        {
+            app.rule_state.select(Some(0));
+        }
+        f.render_stateful_widget(table, tbl, &mut app.rule_state);
     }
-    f.render_stateful_widget(table, tbl, &mut app.rule_state);
 
     let r = &pair.rules[app.rule_state.selected().unwrap_or(0)];
     let mut lines = vec![
@@ -384,10 +473,14 @@ fn draw_policy(f: &mut Frame, app: &mut App, area: Rect) {
             },
         ),
     ];
-    if r.pending {
+    if marked(r) {
         lines.push(kv(
             "state",
-            "in candidate block-legacy-smb, not applied (7 to review)",
+            if applied {
+                "applied from candidate block-legacy-smb, waiting for confirm"
+            } else {
+                "in candidate block-legacy-smb, not applied"
+            },
         ));
     } else if !r.hygiene.is_empty() {
         lines.push(Line::from(vec![
@@ -864,7 +957,7 @@ fn draw_ha(f: &mut Frame, app: &mut App, area: Rect) {
                 badge,
             ]),
             kv("VRRP priority", prio),
-            kv("running config", "#2479"),
+            kv("running config", app.running_commit()),
             kv("version", "1.0.4, slot B"),
             kv("conntrack", ct),
             kv("uptime", "41 days"),
@@ -883,13 +976,16 @@ fn draw_ha(f: &mut Frame, app: &mut App, area: Rect) {
     let sync_lines = vec![
         Line::from(vec![
             Span::styled("state sync   ", Style::new().fg(DIM)),
-            Span::raw("conntrackd over igc3, mutual TLS · lag 120 ms, 23 entries behind  "),
+            Span::raw("conntrackd over igc3, encrypted link · lag 120 ms, 23 entries behind  "),
             Span::styled("authenticated", Style::new().fg(OK)),
         ]),
         Line::from(vec![
             Span::styled("config sync  ", Style::new().fg(DIM)),
             Span::raw("one transaction to both nodes; backup failure rolls back primary  "),
-            Span::styled("both on #2479", Style::new().fg(OK)),
+            Span::styled(
+                format!("both on {}", app.running_commit()),
+                Style::new().fg(OK),
+            ),
         ]),
     ];
     f.render_widget(Paragraph::new(sync_lines).block(panel("sync")), sync);
@@ -900,10 +996,7 @@ fn draw_ha(f: &mut Frame, app: &mut App, area: Rect) {
             let res = if *pass {
                 Span::styled("pass", Style::new().fg(OK).bold())
             } else {
-                Span::styled(
-                    "miss: sync lag during IPS reload",
-                    Style::new().fg(BAD).bold(),
-                )
+                Span::styled("miss: sync lag in IPS reload", Style::new().fg(BAD).bold())
             };
             Row::new(vec![
                 Cell::from(*d),
@@ -924,7 +1017,7 @@ fn draw_ha(f: &mut Frame, app: &mut App, area: Rect) {
                 Constraint::Length(13),
                 Constraint::Length(7),
                 Constraint::Length(10),
-                Constraint::Fill(1),
+                Constraint::Length(28),
             ],
         )
         .header(header(&[
@@ -989,21 +1082,32 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect) {
         CommitPhase::Review => (String::new(), DIM),
         CommitPhase::Pending { .. } => (
             format!(
-                "Applied. Reverts in {} unless you confirm (y). Revert replays #2479 through the reconciler, no reboot.",
-                mmss(app.commit_remaining().unwrap_or(0))
+                "Applied as {}. Reverts in {} unless you confirm (y). Revert replays {} through the reconciler, no reboot.",
+                data::NEXT_COMMIT,
+                mmss(app.commit_remaining().unwrap_or(0)),
+                data::BASE_COMMIT
             ),
             WARN,
         ),
         CommitPhase::Confirmed => (
-            "Committed as #2482. Running config updated on both HA nodes.".into(),
+            format!(
+                "Committed as {}. Both HA nodes run it and the candidate is closed.",
+                data::NEXT_COMMIT
+            ),
             OK,
         ),
         CommitPhase::Reverted { auto: true } => (
-            "Not confirmed in time. Reverted to #2479 in 0.4 s. The candidate is kept.".into(),
+            format!(
+                "Not confirmed in time. Reverted to {} in 0.4 s. The candidate is kept.",
+                data::BASE_COMMIT
+            ),
             BAD,
         ),
         CommitPhase::Reverted { auto: false } => (
-            "Reverted to #2479 in 0.4 s. The candidate is kept.".into(),
+            format!(
+                "Reverted to {} in 0.4 s. The candidate is kept.",
+                data::BASE_COMMIT
+            ),
             Color::White,
         ),
     };
@@ -1030,7 +1134,12 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     f.render_widget(
         Paragraph::new(lines).block(
-            panel("candidate block-legacy-smb · gateway.toml · +9 −1").title_bottom(Span::styled(
+            panel(if app.has_candidate() {
+                "candidate block-legacy-smb · gateway.toml · +9 −1".to_string()
+            } else {
+                format!("commit {} · gateway.toml · +9 −1", data::NEXT_COMMIT)
+            })
+            .title_bottom(Span::styled(
                 " by j.nguyen · reason: Retire SMBv1 shares, CHG-2207 ",
                 Style::new().fg(DIM),
             )),
@@ -1038,9 +1147,18 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect) {
         diff,
     );
 
+    // Below 64 columns a flow and its note don't fit on one line, so the note
+    // moves to its own line and the panel grows to hold it.
+    let impact_inner = right.width.saturating_sub(2) as usize;
+    let stacked = impact_inner < 64;
+    let impact_h = if stacked {
+        4 + 2 * data::IMPACT.len() as u16
+    } else {
+        3 + data::IMPACT.len() as u16
+    };
     let [plan, impact, approve] = Layout::vertical([
         Constraint::Length(6),
-        Constraint::Length(7),
+        Constraint::Length(impact_h),
         Constraint::Min(6),
     ])
     .areas(right);
@@ -1055,15 +1173,39 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect) {
         plan,
     );
 
+    let impact_verb = if app.has_candidate() && !app.applied() {
+        "would have blocked"
+    } else {
+        "blocks"
+    };
     let mut il = vec![Line::from(Span::styled(
-        "would have blocked 3 active services (flow logs, last 24 h)",
+        format!("{impact_verb} {} active services", data::IMPACT.len()),
         Style::new().fg(WARN).bold(),
     ))];
+    if stacked {
+        il.push(Line::from(Span::styled(
+            "from flow logs, last 24 h",
+            Style::new().fg(DIM),
+        )));
+    } else {
+        il[0].push_span(Span::styled(
+            " (flow logs, last 24 h)",
+            Style::new().fg(WARN).bold(),
+        ));
+    }
     for (flow, seen) in data::IMPACT {
-        il.push(Line::from(vec![
-            Span::raw(format!("{flow:<32}")),
-            Span::styled(*seen, Style::new().fg(DIM)),
-        ]));
+        if stacked {
+            il.push(Line::from(*flow));
+            il.push(Line::from(Span::styled(
+                format!("  {seen}"),
+                Style::new().fg(DIM),
+            )));
+        } else {
+            il.push(Line::from(vec![
+                Span::raw(format!("{flow:<32}")),
+                Span::styled(*seen, Style::new().fg(DIM)),
+            ]));
+        }
     }
     f.render_widget(Paragraph::new(il).block(panel("change impact")), impact);
 
@@ -1077,10 +1219,16 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(""),
         kv("confirm window", window.clone()),
         Line::from(Span::styled(
-            format!(
-                "$ ox commit block-legacy-smb --confirm {}m",
-                app.commit_window / 60
-            ),
+            match app.commit {
+                CommitPhase::Pending { .. } => "$ ox commit --confirmed".to_string(),
+                CommitPhase::Confirmed => {
+                    format!("$ ox rollback 1    # back to {}", data::BASE_COMMIT)
+                }
+                _ => format!(
+                    "$ ox commit block-legacy-smb --confirm {}m",
+                    app.commit_window / 60
+                ),
+            },
             Style::new().fg(ACCENT),
         )),
     ];
@@ -1093,10 +1241,14 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect) {
 // ───────────────────────────── Explain ─────────────────────────────
 
 fn draw_explain(f: &mut Frame, app: &mut App, area: Rect) {
-    let cand = app.explain_candidate;
+    // Once the candidate is applied, its rules are the running config.
+    let applied = app.applied();
+    let toggled = app.explain_candidate && !applied;
+    let cand = toggled || applied;
+    let running_label = format!("running {}", app.running_commit());
     let [q, main] = Layout::vertical([Constraint::Length(5), Constraint::Min(0)]).areas(area);
 
-    let mode = |on: bool, s: &'static str| {
+    let mode = |on: bool, s: &str| {
         if on {
             Span::styled(
                 format!(" {s} "),
@@ -1122,10 +1274,23 @@ fn draw_explain(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(""),
         Line::from(vec![
             Span::styled("evaluate against  ", Style::new().fg(DIM)),
-            mode(!cand, "running #2479"),
+            mode(!toggled, &running_label),
             Span::raw(" "),
-            mode(cand, "candidate block-legacy-smb"),
-            Span::styled("   (m to switch)", Style::new().fg(DIM)),
+            if applied {
+                Span::styled(
+                    match app.commit {
+                        CommitPhase::Pending { .. } => " unconfirmed, no separate candidate ",
+                        _ => " no candidate ",
+                    },
+                    Style::new().fg(DIM),
+                )
+            } else {
+                mode(toggled, "candidate block-legacy-smb")
+            },
+            Span::styled(
+                if applied { "" } else { "   (m to switch)" },
+                Style::new().fg(DIM),
+            ),
         ]),
     ];
     f.render_widget(
@@ -1201,7 +1366,14 @@ fn draw_explain(f: &mut Frame, app: &mut App, area: Rect) {
     let [origin, cli] = Layout::vertical([Constraint::Length(8), Constraint::Min(5)]).areas(right);
     let ol = if cand {
         vec![
-            kv("commit", "candidate block-legacy-smb (not applied)"),
+            kv(
+                "commit",
+                match app.commit {
+                    CommitPhase::Pending { .. } => format!("{} (unconfirmed)", data::NEXT_COMMIT),
+                    CommitPhase::Confirmed => data::NEXT_COMMIT.to_string(),
+                    _ => "candidate block-legacy-smb (not applied)".to_string(),
+                },
+            ),
             kv("author", "j.nguyen"),
             kv("when", "today 10:52"),
             kv("reason", "Retire SMBv1 shares, CHG-2207"),
@@ -1230,7 +1402,7 @@ fn draw_explain(f: &mut Frame, app: &mut App, area: Rect) {
             Style::new().fg(ACCENT),
         )),
     ];
-    if cand {
+    if toggled {
         c[1] = Line::from(Span::styled(
             "    --proto tcp --dport 445 --in lan0.20 \\",
             Style::new().fg(ACCENT),
@@ -1258,7 +1430,7 @@ fn draw_explain(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_audit(f: &mut Frame, app: &mut App, area: Rect) {
     let [top, log] = Layout::vertical([Constraint::Length(10), Constraint::Min(6)]).areas(area);
     let [admins, right] =
-        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(top);
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(59)]).areas(top);
 
     let arows: Vec<Row> = data::ADMINS
         .iter()
@@ -1309,7 +1481,7 @@ fn draw_audit(f: &mut Frame, app: &mut App, area: Rect) {
         Table::new(
             trows,
             [
-                Constraint::Length(13),
+                Constraint::Length(12),
                 Constraint::Fill(1),
                 Constraint::Length(9),
                 Constraint::Length(11),
@@ -1368,17 +1540,14 @@ fn draw_fleet(f: &mut Frame, app: &mut App, area: Rect) {
     let s = Line::from(vec![
         Span::styled("firewalls ", Style::new().fg(DIM)),
         Span::styled("184", Style::new().bold()),
-        Span::styled(
-            " (92 pairs)   policy matches template ",
-            Style::new().fg(DIM),
-        ),
+        Span::styled(" in 92 pairs  on template ", Style::new().fg(DIM)),
         Span::styled("181", Style::new().bold()),
         Span::styled(" · 3 drift", Style::new().fg(WARN)),
-        Span::styled("   awaiting approval ", Style::new().fg(DIM)),
+        Span::styled("  approvals ", Style::new().fg(DIM)),
         Span::styled("2", Style::new().bold()),
-        Span::styled("   site VPN down ", Style::new().fg(DIM)),
+        Span::styled("  VPN down ", Style::new().fg(DIM)),
         Span::styled("1/214", Style::new().fg(BAD).bold()),
-        Span::styled("   support ends ≤30 d ", Style::new().fg(DIM)),
+        Span::styled("  support ends ≤30 d ", Style::new().fg(DIM)),
         Span::styled("14", Style::new().bold()),
     ]);
     f.render_widget(
@@ -1459,14 +1628,14 @@ fn draw_fleet(f: &mut Frame, app: &mut App, area: Rect) {
     let t = Table::new(
         rows,
         [
-            Constraint::Length(12),
+            Constraint::Length(11),
             Constraint::Fill(1),
-            Constraint::Length(15),
-            Constraint::Length(22),
+            Constraint::Length(14),
+            Constraint::Length(21),
+            Constraint::Length(8),
             Constraint::Length(9),
-            Constraint::Length(10),
-            Constraint::Length(9),
-            Constraint::Length(13),
+            Constraint::Length(8),
+            Constraint::Length(11),
         ],
     )
     .header(header(&[
@@ -1477,10 +1646,107 @@ fn draw_fleet(f: &mut Frame, app: &mut App, area: Rect) {
         "HA",
         "version",
         "site VPN",
-        "support until",
+        "support to",
     ]))
     .block(panel("firewalls"))
     .row_highlight_style(sel_style())
     .highlight_symbol("▸");
     f.render_stateful_widget(t, tbl, &mut app.fleet_state);
+}
+
+// ───────────────────────────── Import report ─────────────────────────────
+
+fn draw_import(f: &mut Frame, area: Rect) {
+    let pairs_h = |n: usize| 2 * n as u16 + 2;
+    let [sum, changed, unsup, verify] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(pairs_h(data::IMPORT_CHANGED.len())),
+        Constraint::Length(pairs_h(data::IMPORT_UNSUPPORTED.len())),
+        Constraint::Min(5),
+    ])
+    .areas(area);
+
+    let mut s = vec![];
+    for (i, (n, label)) in data::IMPORT_TOTALS.iter().enumerate() {
+        if i > 0 {
+            s.push(Span::styled("  ·  ", Style::new().fg(DIM)));
+        }
+        let color = [OK, WARN, BAD][i.min(2)];
+        s.push(Span::styled(*n, Style::new().fg(color).bold()));
+        s.push(Span::raw(format!(" {label}")));
+    }
+    f.render_widget(
+        Paragraph::new(Line::from(s)).block(
+            panel(format!(
+                "import report · {} · {} · 1,284 items",
+                data::IMPORT_FILE,
+                data::IMPORT_SOURCE
+            ))
+            .title_bottom(Span::styled(
+                " the importer never guesses; anything inexact is listed below ",
+                Style::new().fg(DIM),
+            )),
+        ),
+        sum,
+    );
+
+    // Each entry takes two lines, so long text stays readable in a narrow terminal.
+    let pairs = |rows: &[(&'static str, &'static str)], lead: &'static str, color: Color| {
+        rows.iter()
+            .flat_map(|(a, b)| {
+                [
+                    Line::from(Span::styled(*a, Style::new().bold())),
+                    Line::from(vec![
+                        Span::styled(lead, Style::new().fg(color)),
+                        Span::styled(*b, Style::new().fg(DIM)),
+                    ]),
+                ]
+            })
+            .collect::<Vec<Line>>()
+    };
+    f.render_widget(
+        Paragraph::new(pairs(data::IMPORT_CHANGED, "  → ", WARN))
+            .block(panel("changed · 41 · works, but differs (first 4)")),
+        changed,
+    );
+    f.render_widget(
+        Paragraph::new(pairs(data::IMPORT_UNSUPPORTED, "  manual step: ", BAD))
+            .block(panel("unsupported · 12 · manual step needed (first 4)")),
+        unsup,
+    );
+
+    let mut v = vec![];
+    for (flow, old, now, why) in data::IMPORT_DIFFS {
+        let verdict = |s: &'static str| {
+            Span::styled(
+                format!("{s:<5}"),
+                Style::new().fg(if s == "pass" { OK } else { BAD }).bold(),
+            )
+        };
+        v.push(Line::from(vec![
+            Span::raw(format!("{flow:<40}")),
+            Span::styled("pfSense ", Style::new().fg(DIM)),
+            verdict(old),
+            Span::styled(" Netoxide ", Style::new().fg(DIM)),
+            verdict(now),
+        ]));
+        v.push(Line::from(Span::styled(
+            format!("  {why}"),
+            Style::new().fg(DIM),
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(v).block(
+            panel("verify · 3 of 12,402 replayed flows get a different verdict").title_bottom(
+                Span::styled(
+                    format!(
+                        " $ ox import {} --verify fw-par-02-week.pcap ",
+                        data::IMPORT_FILE
+                    ),
+                    Style::new().fg(ACCENT),
+                ),
+            ),
+        ),
+        verify,
+    );
 }

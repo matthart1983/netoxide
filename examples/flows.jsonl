@@ -1,0 +1,9 @@
+# Flows seen on syd-br-014-a in the last 24 h, for `ox plan --flows`.
+{"src":"10.20.4.17","dst":"10.30.0.8","proto":"tcp","dport":445,"in":"lan0.20","count":1204,"label":"finance-pc pool"}
+{"src":"10.20.4.33","dst":"10.30.0.9","proto":"tcp","dport":139,"in":"lan0.20","count":88,"label":"scanner-02"}
+{"src":"10.20.4.40","dst":"10.30.0.8","proto":"udp","dport":137,"in":"lan0.20","count":412,"label":"legacy-erp"}
+{"src":"2001:db8:4a00:1:4::17","dst":"2001:db8:4a00:2::8","proto":"tcp","dport":445,"in":"lan0.20","count":96,"label":"finance-pc pool, IPv6"}
+{"src":"10.20.4.17","dst":"10.30.0.8","proto":"tcp","dport":443,"in":"lan0.20","count":5310,"label":"finance web app"}
+{"src":"10.20.7.7","dst":"10.30.0.20","proto":"tcp","dport":443,"in":"lan0.20","count":88410,"label":"intranet"}
+{"src":"198.51.100.7","dst":"203.0.113.10","proto":"tcp","dport":443,"in":"wan0","count":512880,"label":"public web"}
+{"src":"10.20.3.3","dst":"198.51.100.9","proto":"tcp","dport":443,"in":"lan0.20","count":20411,"label":"staff browsing"}
