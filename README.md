@@ -2,7 +2,7 @@
 
 Netoxide is an open-source firewall and router OS for Linux with a Rust control plane. It is meant for two groups: home-lab users who want a firewall that is easy to set up on one box, and teams that run 10 to 300 firewalls across sites, mostly people moving off pfSense or OPNsense. The aim is one product that is easy to start with and keeps the advanced features within reach.
 
-**Status: pre-alpha.** What exists today is a single-box firewall core. A daemon applies a typed config to the kernel through nftables, with commit, confirm, automatic revert, rollback and an audit log. There is a CLI and a pfSense importer. It has only been run inside network namespaces, never on a production box. Do not put it in front of a real network.
+**Status: pre-alpha.** What exists today is a single-box firewall and router: a daemon that applies a typed config to the kernel through nftables, with commit, confirm, automatic revert, rollback and an audit log, plus DNS, DHCP, a web UI, a terminal UI, a CLI and a pfSense importer. It has been tested inside network namespaces against the real kernel. It has never run on real hardware or in front of a real network, and it has had no security audit. Do not put it in front of a network you care about.
 
 - [Who it is for](#who-it-is-for)
 - [What works today](#what-works-today)
@@ -11,6 +11,8 @@ Netoxide is an open-source firewall and router OS for Linux with a Rust control 
 - [The config](#the-config)
 - [How a change reaches the kernel](#how-a-change-reaches-the-kernel)
 - [The terminal UI](#the-terminal-ui)
+- [The web UI](#the-web-ui)
+- [Access and roles](#access-and-roles)
 - [Explain a packet](#explain-a-packet)
 - [Import from pfSense](#import-from-pfsense)
 - [Command reference](#command-reference)
@@ -19,6 +21,7 @@ Netoxide is an open-source firewall and router OS for Linux with a Rust control 
 - [Design rules](#design-rules)
 - [Tests](#tests)
 - [Limits today](#limits-today)
+- [Install](#install)
 - [Not built yet](#not-built-yet)
 - [Documents](#documents)
 - [Licence and name](#licence-and-name)
@@ -36,12 +39,12 @@ The design rule is "easy first, advanced within reach". Each area has an easy pa
 | --- | --- | --- |
 | Setup | `ox init` asks which port faces the internet and writes a complete starter config. **Works today** | Write the config file. **Works today** |
 | Rules | `ox forward` and `ox block` do it in one step and show the result first. **Work today.** "Add a guest network" is planned | Zone-pair rules, address groups, services, NAT. **Works today** |
-| Changes | Apply, with automatic undo if you lock yourself out. **Works today** | Named candidates, plan with flow impact, rollback. **Works today.** Four-eyes approval is planned |
+| Changes | Apply, with automatic undo if you lock yourself out. **Works today** | Named candidates, plan with flow impact, rollback, four-eyes approval. **Work today** |
 | Understanding | Press `x` on a rule in the terminal UI to see what it does to a packet. **Works today** | `ox explain` for any packet, against running and candidate. **Works today.** Live trace is planned |
-| Interface | Terminal UI: view, commit, confirm, undo. **Works today.** Web UI is planned | CLI and HTTP API. **Work today.** Terraform provider is planned |
+| Interface | Web UI and terminal UI. **Work today** | CLI and HTTP API with tokens and roles. **Work today.** Terraform provider is planned |
 | Scale | One box with no extra parts. **Works today** | Fleet controller, templates, staged rollouts. **Planned** |
 
-**If you run a home lab, be aware of where this is today.** The pieces of a home router are here: firewall, NAT, DNS and DHCP from a guided setup. None of it has run on real hardware or served a real DHCP client yet, there is no IPv6 address handout, and there is no web UI. Treat it as something to try in a lab, not to put in front of your home network. See [Not built yet](#not-built-yet).
+**If you run a home lab, be aware of where this is today.** The pieces of a home router are here: firewall, NAT, DNS, DHCP and a web UI, from a guided setup. None of it has run on real hardware yet, and there is no installer or OS image, so you install it by hand on an existing Linux machine ([`dist/README.md`](dist/README.md)). Treat it as something to try on a spare machine or VM with console access, not to put in front of your home network.
 
 ## Why
 
@@ -60,6 +63,10 @@ The research behind this is in [`docs/research/market-gap.md`](docs/research/mar
 | Rollback and history | The last 100 commits are kept with author, time, reason and the SHA-256 of the config. Rollback is a new commit with an old config. |
 | DNS and DHCP | The box answers DNS for its inside networks, with DNSSEC checking and local names, and hands out IPv4 addresses with fixed addresses per device. They are applied and reverted together with the firewall rules. Served by dnsmasq, which the daemon starts and restarts. |
 | Lockdown | With `oxd --lockdown`, a box with no config drops inbound and forwarded traffic until the first commit. |
+| Web UI | The daemon serves a browser interface over HTTPS: what the box does in plain sentences, rules with packet counts, NAT, network and leases, changes with plan, approve and commit with an undo timer, explain, audit, and settings. Forward a port, block a device or edit the config from it. |
+| Access control | The local socket identifies the caller from the kernel. The HTTPS listener needs an access token with a role: viewer, auditor, operator or admin. Four-eyes approval can require a second person before a commit. |
+| Health | Prometheus metrics at `/metrics`, and a hygiene report of rules that never apply, add nothing, allow everything, or have seen no packets. |
+| IPv6 and own traffic | The box can announce its IPv6 network so devices configure themselves, and policies from `self` filter what the box itself sends. |
 | Audit log | Every candidate save, commit, confirm and revert is appended to a hash-chained log. Editing or deleting a line breaks the chain, and the log says which line. |
 | Plan | Lists what a candidate changes, and replays observed flows through both configs to show which would get a different verdict. |
 | Explain | Says what happens to one packet and which rule decides: port forward, route, zone pair, rule, source NAT. Works for the running config and for a candidate that is not applied. |
@@ -318,6 +325,48 @@ It needs a terminal of at least 132×34. Everything on screen comes from the dae
 
 The TUI cannot edit rules or save candidates yet. Write the config in a file and use `ox candidate save`. Run it without `--socket` to see the eleven designed screens with sample data.
 
+## The web UI
+
+Start the daemon with an HTTPS listener and make a token:
+
+```sh
+oxd --listen 0.0.0.0:8443 ...
+ox token create laptop --role operator --days 90
+```
+
+Open `https://<box>:8443/` and sign in with the token. The daemon makes its own certificate on first start, so the browser warns until you give it a real one with `--tls-cert` and `--tls-key`.
+
+| View | What it shows |
+| --- | --- |
+| Overview | The running commit, services, and what the box does in plain sentences |
+| Rules | Every zone pair with its rules, packet counts and hygiene notes |
+| NAT | Port forwards and outbound NAT |
+| Network | Interfaces, DNS, address pools and the addresses handed out |
+| Changes | Candidates with their plan; forward a port, block a device, or edit the whole config with a check before saving; approve and commit with an undo timer |
+| Explain | A packet you describe, judged by the running config and a candidate side by side |
+| Audit | The audit log, newest first |
+| Settings | Four-eyes approval and access tokens, for admins |
+
+A commit waiting to be kept shows a countdown with Keep and Undo on every view. The page is three static files compiled into the daemon, with no build step and nothing loaded from elsewhere.
+
+## Access and roles
+
+| Way in | Who you are | What you may do |
+| --- | --- | --- |
+| The Unix socket | The user that owns your process, as the kernel reports it | Everything. Whoever can open the socket file is an admin |
+| The HTTPS listener | The access token you send | What the token's role allows |
+
+| Role | May |
+| --- | --- |
+| viewer | Read the config, candidates, plans, status and metrics |
+| auditor | The same, plus the audit log |
+| operator | The same, plus save candidates, approve, commit, confirm and revert |
+| admin | Everything, including rollback, tokens and settings |
+
+Only the SHA-256 of a token's secret is stored, so the secret is shown once when you create it. Tokens can expire and be revoked.
+
+With `ox four-eyes on`, a commit needs approval from someone other than the person who last saved the candidate. Saving it again drops the approval. Every one of these actions is in the audit log with the name of who did it.
+
 ## Explain a packet
 
 ```sh
@@ -388,6 +437,11 @@ Daemon commands. All take `--socket <path>` or the `OX_SOCKET` variable. The def
 | `ox show <id>` | One commit and its config |
 | `ox explain --src --dst --proto --dport --in [--candidate <name>]` | What happens to one packet |
 | `ox audit` | The audit log, with the chain verified |
+| `ox hygiene` | Rules that never apply, add nothing, allow everything or have seen no packets |
+| `ox approve <candidate>` | Approve a candidate someone else saved |
+| `ox four-eyes on\|off` | Require a second person's approval before a commit |
+| `ox token create <name> --role <role> [--days N]` / `list` / `revoke <name>` | Access tokens for the HTTPS API and the web UI |
+| `ox whoami` | Who the daemon thinks you are |
 | `ox leases` | The addresses DHCP has handed out |
 | `ox kernel` | The Netoxide table as the kernel holds it |
 | `ox forward --name <text> --port tcp/443 --to <host>[:port] [--address <outside address>]` | Forward a port to an inside host; saved as a candidate |
@@ -400,6 +454,7 @@ Commands that need no daemon:
 | `ox file validate <file>` | Check a config and report every problem |
 | `ox file compile <file> [--stats]` | Print the nftables ruleset as libnftables JSON |
 | `ox file diff <running> <candidate>` | List what differs |
+| `ox file hygiene <file>` | Rules in a file that never apply, add nothing or allow everything |
 | `ox file plan <running> <candidate> [--flows <file>]` | Plan from two files |
 | `ox file explain <file> --src ... [--candidate <file>]` | Explain from files |
 | `ox import <config.xml> [--out <file>] [--verify <flows>]` | Translate a pfSense backup |
@@ -417,6 +472,9 @@ The confirm window is between 10 seconds and 1 hour. Only one commit can be pend
 | `--dry-run` | Keep state and serve the API, but load nothing and start no services |
 | `--lockdown` | Until the first commit, drop inbound and forwarded traffic. This cuts a remote session to the machine |
 | `--dnsmasq <path>` | The dnsmasq program to run. Default `dnsmasq` |
+| `--listen <addr:port>` | Also serve the API and the web UI over HTTPS. Every request needs an access token |
+| `--tls-cert <file>`, `--tls-key <file>` | The certificate for `--listen`. Without them the daemon makes a self-signed one and keeps it in the state directory |
+| `--listen-http <127.0.0.1:port>` | The same without TLS, on a loopback address only, for a TLS proxy on the same machine |
 | `--keep-service-privileges` | Do not switch services to an unprivileged user. Needed inside a user namespace |
 
 Stopping `oxd` leaves the loaded ruleset in place, so the box keeps forwarding. It does stop dnsmasq, so DNS and DHCP stop with it.
@@ -443,9 +501,19 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `POST /v1/explain` | `{"src", "dst", "proto", "dport", "in", "candidate"}` | Verdict, steps and text for running and candidate |
 | `GET /v1/leases` | | Addresses DHCP has handed out |
 | `GET /v1/audit` | | All entries. Fails if the hash chain is broken |
+| `GET /v1/hygiene` | | Findings about rules in the running config |
+| `GET /metrics` | | Prometheus metrics |
+| `GET /v1/whoami` | | The caller's name and role |
+| `GET /v1/running/json` | | The running config as JSON, with what it does in sentences |
+| `POST /v1/check` | TOML | Validates a config without storing it |
+| `POST /v1/actions/forward`, `/v1/actions/block` | JSON | One-step actions; each saves a candidate |
+| `GET /v1/candidates/{name}/meta` | | Author and approval of a candidate |
+| `POST /v1/candidates/{name}/approve` | | Four-eyes approval |
+| `GET` / `PUT /v1/settings` | `{"four_eyes": true}` | The four-eyes setting |
+| `GET` / `POST /v1/tokens`, `DELETE /v1/tokens/{name}` | `{"name", "role", "ttl_secs"}` | Access tokens. The secret is returned once |
 | `GET /v1/kernel` | | The table as the kernel lists it |
 
-The caller's name is read from the `x-ox-user` header and recorded as given. See [Limits today](#limits-today).
+On the Unix socket the caller is whoever owns the calling process, as the kernel reports it, and is an admin. On the HTTPS listener every request carries `Authorization: Bearer <token>`, and the token's role decides what it may do: 401 without a valid token, 403 when the role does not allow the action. See [Access and roles](#access-and-roles).
 
 ## How it is built
 
@@ -521,19 +589,33 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 112 tests. Four of them use the real kernel inside a private, rootless network namespace. One loads the compiled ruleset and checks that the kernel stored every rule. One starts the daemon and takes it through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending. One commits the home example and queries the resolver with `dig` over IPv4 and IPv6, changes a record with a confirm window, and checks the old answer returns when the window lapses. One checks that a service that cannot start refuses the commit and leaves the kernel unchanged. They need `unshare`, `libnftables.so.1` and unprivileged user namespaces, and skip themselves with a note when those are missing. They never touch the host's ruleset.
+There are 123 tests. Seven of them use the real kernel inside a private, rootless network namespace:
+
+- The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
+- The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.
+- The home example's resolver is queried with `dig` over IPv4 and IPv6, a record is changed with a confirm window, and the old answer returns when the window lapses.
+- A small DHCP client on the far end of a virtual cable gets an address from the pool and a fixed address through the firewall, and stops being answered when the rule is removed.
+- A service that cannot start refuses the commit and leaves the kernel unchanged.
+- The HTTPS listener is called with curl: tokens, roles, four-eyes approval and revocation.
+- The web UI's endpoints and the page's security headers are checked.
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
 The TUI tests compare every mock screen with `tui/snapshots.txt` and every live screen, drawn against a test fixture, with `tui/snapshots-live.txt`.
 
+## Install
+
+[`dist/README.md`](dist/README.md) has the steps for a Linux machine with systemd: build, install the unit, first start, the web UI, lockdown, monitoring and removal. They have been written out and not yet run on a real system.
+
 ## Limits today
 
-- **The API has no security.** Whoever can open the socket file has full control. There is no TLS, login, role check or four-eyes approval, and the caller's name is taken from a header as given.
+- **Access control is new and unaudited.** Tokens, roles, four-eyes and the HTTPS listener are tested, but nobody outside this project has reviewed them. There is no single sign-on (OIDC), and the roles are four fixed ones.
+- **The web UI has been checked by hand in one browser.** Sign-in, overview, rules, changes and a commit with its timer were exercised in Chrome. The forms for forwarding, blocking, editing, explain and tokens were not; their endpoints are covered by tests.
 - **Nothing is loaded before the first commit** unless you start `oxd --lockdown`, so by default the kernel's own defaults apply until then.
-- **DNS and DHCP are new and lightly tested.** DNS answers are tested against a real dnsmasq in a namespace. The DHCP config passes dnsmasq's own check and dnsmasq binds its socket, but no real client has asked it for an address. There is no IPv6 address handout (router advertisements or DHCPv6), no DNS blocklists, and the daemon runs dnsmasq directly, not as a systemd unit with a sandbox as the spec asks.
+- **DNS and DHCP are new.** They are tested end to end in a namespace: `dig` against the resolver over IPv4 and IPv6, and a small DHCP client that gets a pool address and a fixed address through the firewall. No real device has used them. There are no DNS blocklists, IPv6 is announce-only (no DHCPv6), and the daemon runs dnsmasq directly, not as a sandboxed systemd unit as the spec asks.
 - **dnsmasq is the only backend.** The spec names Unbound and Kea. The config does not name the program, so they can be added without changing configs.
-- **The box's own outbound traffic is not filtered.** There are no rules for traffic the box sends.
+- **The box's own traffic is allowed out unless you filter it.** Write a policy from `self` to a zone to filter what the box sends there.
+- **The systemd unit and the install steps in `dist/` have not been run on a real system.** The unit passes `systemd-analyze verify` and nothing more.
 - **Long zone pairs lose per-rule counters.** A pair that needs more than 32 nftables rules is merged: neighbouring rules with the same action become one set lookup and share a counter, so the TUI shows no packet count for them. Rules that log, match ICMP or any service, or overlap a neighbour are not merged. A pair that is still over 32 after merging is refused.
 - **Explain knows only connected networks and the default route.** A destination behind a static or dynamic route shows "no route".
 - **Schema 1 has no VPN, routing protocols, traffic shaping, schedules or HA.**
@@ -542,16 +624,17 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 
 ## Not built yet
 
-Roughly in the order planned. Ease of use on one box comes first:
+Roughly in the order planned:
 
-1. Rules for traffic the box itself sends, IPv6 address handout, and DHCP tested with real clients.
-2. Services as sandboxed systemd units, and Unbound and Kea as backends.
-3. More one-step actions such as "add a guest network", and rule editing in the TUI.
-4. A web UI.
-5. API security: TLS, OIDC or token login, roles, four-eyes approval.
-6. WireGuard, then IPsec.
+1. Running it on real hardware: the systemd unit, the install steps, link state, and a first deployment that is watched.
+2. Services as sandboxed systemd units, and Unbound and Kea as backends beside dnsmasq.
+3. More one-step actions such as "add a guest network", rule editing in the terminal UI, and live trace.
+4. WireGuard, then IPsec.
+5. Single sign-on (OIDC), finer roles, and remote use of `ox` over HTTPS.
+6. Multi-WAN, routing protocols, traffic shaping, IDS.
 7. OPNsense import, and the pfSense importer tested on real backups.
-8. HA, the fleet controller, and the OS image with signed A/B upgrades.
+8. HA, the fleet controller, a Terraform provider, and the OS image with signed A/B upgrades.
+9. An independent security audit before any 1.0.
 
 The spec dates a 1.0 at August 2028 for a team of six. That date is a plan, not a commitment.
 

@@ -164,6 +164,28 @@ fn commit_confirm_revert_and_rollback_against_the_kernel() {
     assert_eq!(d.running(), 3);
     assert!(d.kernel_has("r-0412"));
 
+    // Metrics and hygiene read the kernel's counters for the running rules.
+    let (status, metrics) = d.call("GET", "/metrics", "");
+    assert_eq!(status, 200);
+    for want in [
+        "netoxide_running_commit 3",
+        "netoxide_commit_pending 0",
+        "netoxide_rule_packets_total{rule=\"r-0412\"} 0",
+        "netoxide_rule_packets_total{rule=\"default lan-dmz\"} 0",
+        "# TYPE netoxide_rule_bytes_total counter",
+    ] {
+        assert!(metrics.contains(want), "missing `{want}` in:\n{metrics}");
+    }
+    let hygiene = d.ok("GET", "/v1/hygiene", "");
+    assert!(
+        hygiene
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["rule"] == "r-0412" && f["kind"] == "no packets"),
+        "nothing has passed through the namespace, so every rule is unused: {hygiene}"
+    );
+
     // Roll back one commit with a long window, then kill the daemon inside it.
     let rollback = r#"{"steps":1,"confirm_secs":600,"reason":"test"}"#;
     d.ok("POST", "/v1/rollback", rollback);

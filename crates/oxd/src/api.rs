@@ -133,6 +133,8 @@ pub fn router(shared: Shared, lease_file: PathBuf) -> Router {
         .route("/v1/rollback", post(rollback))
         .route("/v1/explain", post(explain_packet))
         .route("/v1/audit", get(audit))
+        .route("/v1/hygiene", get(hygiene))
+        .route("/metrics", get(metrics))
         .route("/v1/kernel", get(kernel))
         .route("/v1/settings", get(settings).put(put_settings))
         .route("/v1/tokens", get(tokens).post(create_token))
@@ -591,6 +593,176 @@ async fn audit(State(s): State<Shared>, caller: Caller) -> Api<Response> {
         .audit()
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "verified": true, "entries": entries })).into_response())
+}
+
+/// Packets counted per rule ID, summed over the kernel rules a config rule became.
+fn kernel_hits(dump: &serde_json::Value) -> std::collections::BTreeMap<String, (u64, u64)> {
+    let mut out = std::collections::BTreeMap::new();
+    for item in dump["nftables"].as_array().into_iter().flatten() {
+        let rule = &item["rule"];
+        let Some(id) = rule["comment"].as_str() else {
+            continue;
+        };
+        for e in rule["expr"].as_array().into_iter().flatten() {
+            if let (Some(p), Some(b)) = (
+                e["counter"]["packets"].as_u64(),
+                e["counter"]["bytes"].as_u64(),
+            ) {
+                let entry = out.entry(id.to_string()).or_insert((0, 0));
+                entry.0 += p;
+                entry.1 += b;
+            }
+        }
+    }
+    out
+}
+
+/// Rules in the running config that never apply, add nothing, allow
+/// everything, or have seen no packets since the ruleset was loaded.
+async fn hygiene(State(s): State<Shared>, caller: Caller) -> Api<Response> {
+    caller.may(Action::Read)?;
+    let (text, dump) = {
+        let mut e = s.lock().unwrap();
+        (e.running_config()?, e.applier().dump().ok())
+    };
+    let Some(text) = text else {
+        return Ok(Json(json!([])).into_response());
+    };
+    let (_, rs) = load(&text)?;
+    let mut rows: Vec<_> = ox_nft::hygiene(&rs)
+        .into_iter()
+        .map(|f| json!({ "from": f.from, "to": f.to, "rule": f.rule, "kind": f.kind.as_str(), "detail": f.detail }))
+        .collect();
+    // Counters only exist when rules are really in the kernel.
+    let hits = dump.as_ref().map(kernel_hits).unwrap_or_default();
+    if !hits.is_empty() {
+        let flagged: Vec<String> = rows
+            .iter()
+            .map(|r| r["rule"].as_str().unwrap_or("").to_string())
+            .collect();
+        for chain in &rs.chains {
+            for rule in &chain.rules {
+                if hits.get(&rule.id).is_some_and(|h| h.0 == 0) && !flagged.contains(&rule.id) {
+                    rows.push(json!({
+                        "from": chain.from, "to": chain.to, "rule": rule.id, "kind": "no packets",
+                        "detail": "no packet has matched this rule since the ruleset was last loaded",
+                    }));
+                }
+            }
+        }
+    }
+    Ok(Json(rows).into_response())
+}
+
+/// Counters in the Prometheus text format.
+async fn metrics(State(s): State<Shared>, caller: Caller) -> Api<Response> {
+    caller.may(Action::Read)?;
+    let (status, dump, audit_len) = {
+        let mut e = s.lock().unwrap();
+        (
+            e.status(now())?,
+            e.applier().dump().ok(),
+            e.audit().map(|a| a.len()).ok(),
+        )
+    };
+    let mut out = String::new();
+    let mut metric = |name: &str, help: &str, kind: &str, lines: Vec<(String, u64)>| {
+        out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} {kind}\n"));
+        for (labels, value) in lines {
+            out.push_str(&format!("{name}{labels} {value}\n"));
+        }
+    };
+    let one = |v: u64| vec![(String::new(), v)];
+    metric(
+        "netoxide_running_commit",
+        "ID of the commit the box is running, 0 before the first commit.",
+        "gauge",
+        one(status.running.as_ref().map_or(0, |c| c.id)),
+    );
+    metric(
+        "netoxide_commit_pending",
+        "1 while a commit is waiting to be confirmed.",
+        "gauge",
+        one(u64::from(status.reverts_in.is_some())),
+    );
+    metric(
+        "netoxide_commit_reverts_in_seconds",
+        "Seconds until the pending commit reverts, 0 when none is pending.",
+        "gauge",
+        one(status.reverts_in.unwrap_or(0)),
+    );
+    metric(
+        "netoxide_candidates",
+        "Candidates stored on the box.",
+        "gauge",
+        one(status.candidates.len() as u64),
+    );
+    metric(
+        "netoxide_service_up",
+        "1 when a service the config asks for is running.",
+        "gauge",
+        status
+            .services
+            .iter()
+            .map(|(name, state)| {
+                (
+                    format!("{{service=\"{name}\"}}"),
+                    u64::from(state == "running"),
+                )
+            })
+            .collect(),
+    );
+    if let Some(n) = audit_len {
+        metric(
+            "netoxide_audit_entries",
+            "Entries in the audit log.",
+            "counter",
+            one(n as u64),
+        );
+    }
+    let hits = dump.as_ref().map(kernel_hits).unwrap_or_default();
+    // Rule IDs are lowercase letters, digits and hyphens, plus "default a-b",
+    // so they need no escaping as label values.
+    let label = |id: &String| format!("{{rule=\"{id}\"}}");
+    metric(
+        "netoxide_rule_packets_total",
+        "Packets matched per rule since the ruleset was last loaded.",
+        "counter",
+        hits.iter().map(|(id, h)| (label(id), h.0)).collect(),
+    );
+    metric(
+        "netoxide_rule_bytes_total",
+        "Bytes matched per rule since the ruleset was last loaded.",
+        "counter",
+        hits.iter().map(|(id, h)| (label(id), h.1)).collect(),
+    );
+    for (file, name, help) in [
+        (
+            "nf_conntrack_count",
+            "netoxide_conntrack_entries",
+            "Connections the kernel is tracking.",
+        ),
+        (
+            "nf_conntrack_max",
+            "netoxide_conntrack_max",
+            "The most connections the kernel will track.",
+        ),
+    ] {
+        if let Some(v) = std::fs::read_to_string(format!("/proc/sys/net/netfilter/{file}"))
+            .ok()
+            .and_then(|t| t.trim().parse::<u64>().ok())
+        {
+            metric(name, help, "gauge", one(v));
+        }
+    }
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        out,
+    )
+        .into_response())
 }
 
 /// The Netoxide table as the kernel holds it now.

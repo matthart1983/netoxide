@@ -471,3 +471,51 @@ fn the_kernel_accepts_the_ruleset() {
         load("twice", &serde_json::json!({ "nftables": twice }), false);
     }
 }
+
+#[test]
+fn hygiene_finds_dead_and_redundant_rules_in_both_families() {
+    use ox_nft::{FindingKind, hygiene};
+    // The example config is clean.
+    let clean = compile(&Config::from_toml(BRANCH).unwrap()).unwrap();
+    assert!(hygiene(&clean).is_empty(), "{:?}", hygiene(&clean));
+
+    let extra = [
+        // Covered by r-0301 (staff to intranet, http and https), same action.
+        rule(
+            "dup",
+            "accept",
+            "source = [\"10.20.7.0/24\", \"2001:db8:4a00:1:7::/80\"]\ndestination = [\"@intranet\"]\nservice = [\"https\"]",
+        ),
+        // Covered by r-0388 with the other action: it can never apply.
+        rule(
+            "dead",
+            "drop",
+            "source = [\"10.20.4.17\"]\ndestination = [\"10.30.0.8\"]\nservice = [\"tcp/445\"]",
+        ),
+        // Not covered: a wider source than any earlier rule.
+        rule(
+            "fine",
+            "accept",
+            "source = [\"10.0.0.0/8\"]\ndestination = [\"@intranet\"]\nservice = [\"https\"]",
+        ),
+        rule("open", "accept", ""),
+        rule("after", "drop", "service = [\"tcp/23\"]"),
+    ];
+    let rs = compile(&Config::from_toml(&with_rules(&extra)).unwrap()).unwrap();
+    let found: Vec<(String, FindingKind)> =
+        hygiene(&rs).into_iter().map(|f| (f.rule, f.kind)).collect();
+    assert_eq!(
+        found,
+        [
+            ("dup".to_string(), FindingKind::Redundant),
+            ("dead".to_string(), FindingKind::Shadowed),
+            ("open".to_string(), FindingKind::AllowsEverything),
+            ("after".to_string(), FindingKind::Shadowed),
+        ]
+    );
+    let detail = &hygiene(&rs)[1].detail;
+    assert!(
+        detail.contains("r-0388") && detail.contains("never applies"),
+        "{detail}"
+    );
+}

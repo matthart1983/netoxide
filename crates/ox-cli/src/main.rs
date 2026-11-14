@@ -102,6 +102,8 @@ enum Command {
     },
     /// Print the audit log and check its hash chain
     Audit,
+    /// List rules that never apply, add nothing, allow everything or see no traffic
+    Hygiene,
     /// List the addresses DHCP has handed out
     Leases,
     /// Approve a candidate someone else saved (four-eyes)
@@ -229,6 +231,8 @@ enum FileCmd {
         running: PathBuf,
         candidate: PathBuf,
     },
+    /// List rules in a config file that never apply, add nothing or allow everything
+    Hygiene { config: PathBuf },
     /// Validate and compile a candidate file, list its changes, and replay flows
     Plan {
         running: PathBuf,
@@ -632,6 +636,23 @@ fn daemon(cli: &Cli) -> Result<()> {
             let v = oxd.json("GET", "/v1/whoami", None)?;
             out!("{} ({})", text(&v["name"]), text(&v["role"]));
         }
+        Command::Hygiene => {
+            let rows = oxd.json("GET", "/v1/hygiene", None)?;
+            let rows = rows.as_array().cloned().unwrap_or_default();
+            if rows.is_empty() {
+                out!("nothing to report: no rule is shadowed, redundant, wide open or unused");
+            }
+            for r in &rows {
+                out!(
+                    "{:<20} {} → {}  {}: {}",
+                    text(&r["rule"]),
+                    text(&r["from"]),
+                    text(&r["to"]),
+                    text(&r["kind"]),
+                    text(&r["detail"])
+                );
+            }
+        }
         Command::Leases => {
             let rows = oxd.json("GET", "/v1/leases", None)?;
             let rows = rows.as_array().cloned().unwrap_or_default();
@@ -675,6 +696,23 @@ fn file(cmd: &FileCmd) -> Result<()> {
                 out!("{}", rs.summary());
             } else {
                 out!("{}", serde_json::to_string_pretty(&render(&rs).0)?);
+            }
+        }
+        FileCmd::Hygiene { config } => {
+            let (_, rs) = load(config)?;
+            let found = ox_nft::hygiene(&rs);
+            if found.is_empty() {
+                out!("nothing to report: no rule is shadowed, redundant or wide open");
+            }
+            for f in found {
+                out!(
+                    "{:<20} {} → {}  {}: {}",
+                    f.rule,
+                    f.from,
+                    f.to,
+                    f.kind.as_str(),
+                    f.detail
+                );
             }
         }
         FileCmd::Diff { running, candidate } => {

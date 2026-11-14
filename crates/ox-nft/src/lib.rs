@@ -8,6 +8,7 @@
 //!
 //! Nothing here talks to the kernel. Applying the JSON is the daemon's job.
 
+mod hygiene;
 mod render;
 
 use std::net::IpAddr;
@@ -15,6 +16,7 @@ use std::net::IpAddr;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use ox_schema::{Action, AddrRef, Config, PortSpec, Proto, ServiceRef, Translate};
 
+pub use hygiene::{Finding, Kind as FindingKind, hygiene};
 pub use render::{Stats, list_command, render, render_empty, render_lockdown};
 
 /// Name of the nftables table Netoxide owns. Nothing else is touched.

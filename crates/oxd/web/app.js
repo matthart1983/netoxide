@@ -32,6 +32,7 @@ const state = {
   running: null,      // { config, summary, describe }
   hits: {},           // rule ID -> packets
   leases: [],
+  hygiene: [],       // findings about rules in the running config
   candidate: null,    // selected candidate name
   meta: null,
   plan: null,
@@ -122,6 +123,7 @@ async function refresh(rerender) {
     }
     state.hits = parseHits(await call('GET', '/v1/kernel').catch(() => null));
     state.leases = await call('GET', '/v1/leases');
+    state.hygiene = await call('GET', '/v1/hygiene').catch(() => []);
     const names = state.status.candidates || [];
     if (!names.includes(state.candidate)) state.candidate = names[0] || null;
     if (state.candidate) {
@@ -282,7 +284,9 @@ function rules() {
       (p.rule || []).map((r, i) => [
         i + 1,
         h('span', { class: 'id' }, r.id),
-        [r.name, r.enabled === false ? h('span', { class: 'tag note' }, 'disabled') : null, r.reason ? h('div', { class: 'dim' }, r.reason) : null],
+        [r.name, r.enabled === false ? h('span', { class: 'tag note' }, 'disabled') : null,
+          r.reason ? h('div', { class: 'dim' }, r.reason) : null,
+          state.hygiene.filter((f) => f.rule === r.id).map((f) => h('div', null, h('span', { class: 'tag note' }, f.kind), ' ', h('span', { class: 'dim' }, f.detail)))],
         list(r.source), list(r.destination), list(r.service),
         h('span', { class: 'tag ' + r.action }, r.action + (r.log ? ', logged' : '')),
         hits(r.id),
