@@ -169,7 +169,7 @@ pub fn diff(running: &Config, candidate: &Config) -> Vec<Change> {
         &candidate.interfaces,
         |i| {
             format!(
-                "zone {} addresses {}{}{}{}",
+                "zone {} addresses {}{}{}{}{}",
                 i.zone,
                 list(&i.addresses.iter().map(|a| a.0).collect::<Vec<_>>()),
                 if i.default_route {
@@ -186,6 +186,10 @@ pub fn diff(running: &Config, candidate: &Config) -> Vec<Change> {
                     " address from the network"
                 } else {
                     ""
+                },
+                match &i.vlan {
+                    Some(v) => format!(" VLAN {} on {}", v.id, v.parent),
+                    None => String::new(),
                 }
             )
         },

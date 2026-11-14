@@ -56,6 +56,8 @@ pub struct Target {
     /// WireGuard tunnels to bring up, by interface name. Tunnels that are
     /// not listed must not exist.
     pub wireguard: BTreeMap<String, ox_schema::WireGuard>,
+    /// VLAN interfaces to create: the name, the port it sits on, the number.
+    pub vlans: Vec<(String, String, u16)>,
 }
 
 /// What the box does before it has any config.
@@ -82,6 +84,7 @@ impl Baseline {
             gateways: vec![],
             dhcp_clients: vec![],
             wireguard: BTreeMap::new(),
+            vlans: vec![],
         }
     }
 }
@@ -333,6 +336,14 @@ fn target(config: &Config, ruleset: &Ruleset) -> Target {
             .map(|(name, _)| name.clone())
             .collect(),
         wireguard: config.wireguard.clone(),
+        vlans: config
+            .interfaces
+            .iter()
+            .filter_map(|(name, i)| {
+                let v = i.vlan.as_ref()?;
+                Some((name.clone(), v.parent.clone(), v.id))
+            })
+            .collect(),
     }
 }
 

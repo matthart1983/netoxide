@@ -88,6 +88,81 @@ pub async fn ensure_addresses(wanted: &[(String, IpNet)]) -> Result<Ensured, Str
     Ok(done)
 }
 
+/// Creates the VLAN interfaces that are not there yet and brings their
+/// ports up. Returns the ones it created. An interface that already has
+/// the name is left as it is: something else made it, so it is not ours to
+/// change or to remove later.
+pub async fn ensure_vlans(wanted: &[(String, String, u16)]) -> Result<Vec<String>, String> {
+    let mut created = vec![];
+    if wanted.is_empty() {
+        return Ok(created);
+    }
+    let (connection, handle, _) =
+        rtnetlink::new_connection().map_err(|e| format!("cannot open a netlink socket: {e}"))?;
+    let task = tokio::spawn(connection);
+    let mut result = Ok(());
+    for (name, parent, id) in wanted {
+        if index_of(&handle, name).await.is_some() {
+            continue;
+        }
+        let Some(port) = index_of(&handle, parent).await else {
+            result = Err(format!(
+                "{name} is VLAN {id} on {parent}, and this machine has no interface called {parent}"
+            ));
+            break;
+        };
+        if let Err(e) = handle
+            .link()
+            .add(rtnetlink::LinkVlan::new(name, port, *id).build())
+            .execute()
+            .await
+        {
+            result = Err(format!(
+                "cannot create {name} as VLAN {id} on {parent}: {e}"
+            ));
+            break;
+        }
+        created.push(name.clone());
+        // Tagged traffic only flows while the port itself is up.
+        if let Err(e) = handle
+            .link()
+            .set(LinkUnspec::new_with_index(port).up().build())
+            .execute()
+            .await
+        {
+            result = Err(format!("cannot bring {parent} up for {name}: {e}"));
+            break;
+        }
+    }
+    task.abort();
+    // What was created before a failure is still reported through the
+    // error path's caller, which removes it.
+    match result {
+        Ok(()) => Ok(created),
+        Err(e) => {
+            delete_links(&created).await;
+            Err(e)
+        }
+    }
+}
+
+/// Deletes interfaces by name. One that is already gone counts as deleted.
+pub async fn delete_links(names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    let Ok((connection, handle, _)) = rtnetlink::new_connection() else {
+        return;
+    };
+    let task = tokio::spawn(connection);
+    for name in names {
+        if let Some(index) = index_of(&handle, name).await {
+            let _ = handle.link().del(index).execute().await;
+        }
+    }
+    task.abort();
+}
+
 /// Takes addresses off their interfaces. One that is already gone, or whose
 /// interface is gone, counts as removed. Returns what could not be removed.
 pub async fn remove_addresses(unwanted: &[(String, IpNet)]) -> Vec<String> {

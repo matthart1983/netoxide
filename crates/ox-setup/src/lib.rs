@@ -139,6 +139,7 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
         default_route,
         gateway: vec![],
         dhcp_client: false,
+        vlan: None,
     };
     let mut wan = iface(&a.wan, "wan", true);
     if a.wan_dhcp {
@@ -357,6 +358,12 @@ pub fn describe(config: &Config) -> Vec<String> {
                 .join(", ")
         };
         out.push(format!("{name} is in zone {} ({addrs})", i.zone));
+        if let Some(v) = &i.vlan {
+            out.push(format!(
+                "{name} is VLAN {} on {}, made by the box",
+                v.id, v.parent
+            ));
+        }
         if i.dhcp_client {
             out.push(format!(
                 "{name}: the box asks the network there for its IPv4 address and router"

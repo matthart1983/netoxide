@@ -133,7 +133,7 @@ The short version. The full list is in [docs/status.md](docs/status.md#limits-to
 
 - It has never run on real hardware or carried real traffic. The furthest it has been is a virtual machine on one developer's computer, with SELinux off.
 - Nobody outside the project has reviewed the security of any of it.
-- The daemon does not create VLAN, bridge, bond or PPPoE interfaces. The operating system still does.
+- The daemon creates VLAN interfaces. It does not create bridge, bond or PPPoE interfaces; the operating system still does.
 - No IPv6 prefix delegation, no multi-WAN, no routing protocols, no traffic shaping, no intrusion detection, no high availability.
 - The VPN is WireGuard only. It has been tested between two Netoxide boxes, not against the official WireGuard apps.
 - No single sign-on. Access is by token.

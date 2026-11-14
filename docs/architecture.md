@@ -80,12 +80,13 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 161 tests. Eleven of them run a daemon inside a private, rootless network namespace, nine of those against the real kernel:
+There are 163 tests. Twelve of them run a daemon inside a private, rootless network namespace, ten of those against the real kernel:
 
 - The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
 - The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.
 - The home example's resolver is queried with `dig` over IPv4 and IPv6, a record is changed with a confirm window, and the old answer returns when the window lapses.
 - A small DHCP client on the far end of a virtual cable gets an address from the pool and a fixed address through the firewall, and stops being answered when the rule is removed.
+- The box makes a VLAN interface from the config and a client on the tagged network reaches it over IPv4 and IPv6. Changing the number makes the interface again, a VLAN on a port that does not exist fails the commit and leaves the old one, and an interface someone else made is never removed.
 - A service that cannot start refuses the commit and leaves the kernel unchanged.
 - Two boxes, each with its own daemon, swap public keys and join their inside networks with a WireGuard tunnel. A device behind one fetches a page from the other over IPv4 and IPv6, a port the rules do not allow is dropped, explain follows the route through the tunnel, both ends report the peer as connected, narrowing a peer's networks stops that traffic only, and removing the tunnel removes the interface.
 - Real packets cross the box between three namespaces, a client inside, the box, and a server outside: web and ping are allowed out and the source is rewritten, another port is dropped, a forwarded port reaches the inside server, the kernel's counters land on the right rules, and each result matches what `ox explain` says for the same packet. A change that is not kept stops blocking traffic when its window lapses. Renumbering the inside network takes the old address off the port and leaves an address someone else put there.

@@ -62,6 +62,8 @@ struct Managed {
     tunnels: BTreeSet<String>,
     /// Routes through tunnels: the interface and the network.
     tunnel_routes: BTreeSet<(String, IpNet)>,
+    /// VLAN interfaces Netoxide created: the name, the port and the number.
+    vlans: BTreeSet<(String, String, u16)>,
 }
 
 fn block_on<T>(work: impl Future<Output = T>) -> T {
@@ -97,10 +99,40 @@ impl SystemApplier {
     }
 
     /// Puts the target's addresses, routes and DHCP clients in place.
+    /// Drops deleted VLAN interfaces from the record, with what was on them.
+    fn forget_vlans(&mut self, names: &[String]) {
+        self.managed.vlans.retain(|v| !names.contains(&v.0));
+        self.managed.addresses.retain(|(i, _)| !names.contains(i));
+        self.managed.routes.retain(|(i, _)| !names.contains(i));
+        self.save_managed();
+    }
+
     fn bring_up(&mut self, target: &Target) -> Result<(), String> {
         // Tunnels first: their interfaces must exist to be given addresses.
         let created = block_on(wg::configure(&target.wireguard, &self.state_dir))?;
         self.managed.tunnels.extend(created);
+        self.save_managed();
+        // VLANs next, for the same reason.
+        // One of ours whose port or number changed is made again.
+        let changed: Vec<String> = self
+            .managed
+            .vlans
+            .iter()
+            .filter(|v| !target.vlans.contains(v) && target.vlans.iter().any(|t| t.0 == v.0))
+            .map(|v| v.0.clone())
+            .collect();
+        if !changed.is_empty() {
+            block_on(net::delete_links(&changed));
+            self.forget_vlans(&changed);
+        }
+        let created = block_on(net::ensure_vlans(&target.vlans))?;
+        self.managed.vlans.extend(
+            target
+                .vlans
+                .iter()
+                .filter(|v| created.contains(&v.0))
+                .cloned(),
+        );
         self.save_managed();
         let ensured = block_on(net::ensure_addresses(&target.addresses))?;
         self.missing = ensured.missing;
@@ -173,6 +205,18 @@ impl SystemApplier {
             self.managed.addresses.retain(|(t, _)| !tunnels.contains(t));
             self.save_managed();
         }
+        // VLANs this config does not have, likewise.
+        let vlans: Vec<String> = self
+            .managed
+            .vlans
+            .iter()
+            .filter(|v| !keep.vlans.contains(v))
+            .map(|v| v.0.clone())
+            .collect();
+        if !vlans.is_empty() {
+            block_on(net::delete_links(&vlans));
+            self.forget_vlans(&vlans);
+        }
         let routes: Vec<(String, IpAddr)> = self
             .managed
             .routes
@@ -236,21 +280,13 @@ impl Applier for SystemApplier {
             let previous = self.current.clone();
             self.take_down_all_but(previous.as_ref());
             if let Some(previous) = &previous {
-                // A default route the failed target replaced, and the
-                // peers and routes of tunnels it changed.
-                let _ = block_on(net::set_default_routes(&previous.gateways));
-                let _ = block_on(wg::configure(&previous.wireguard, &self.state_dir));
-                let back = wg::routes(&previous.wireguard);
-                let stale: Vec<(String, IpNet)> = self
-                    .managed
-                    .tunnel_routes
-                    .iter()
-                    .filter(|r| !back.contains(r))
-                    .cloned()
-                    .collect();
-                let _ = block_on(wg::set_routes(&back, &stale));
-                self.managed.tunnel_routes = back.into_iter().collect();
-                self.save_managed();
+                // Put back what the failed target replaced on its way: a
+                // default route, a VLAN made again with another number, the
+                // peers and routes of a tunnel. Everything here is safe to
+                // repeat, so the whole of the previous config is brought up.
+                if let Err(again) = self.bring_up(previous) {
+                    eprintln!("oxd: could not put the previous interfaces back: {again}");
+                }
             }
             return Err(match undone {
                 Ok(()) => e,
