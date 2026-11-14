@@ -37,6 +37,11 @@ pub struct Answers {
     pub lans: Vec<Port>,
     /// Hand out addresses and answer DNS for the inside network.
     pub serve: Option<Serve>,
+    /// The provider assigns the box's IPv4 address on the internet port
+    /// (DHCP). Any IPv4 address in `wan` is then left out of the config.
+    pub wan_dhcp: bool,
+    /// The provider's routers, for an internet port with fixed addresses.
+    pub gateway: Vec<IpAddr>,
 }
 
 /// How the box serves DNS and DHCP to the inside network.
@@ -128,7 +133,20 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
         zone: zone.into(),
         addresses: p.addrs.iter().map(|n| IfaceAddr(*n)).collect(),
         default_route,
+        gateway: vec![],
+        dhcp_client: false,
     };
+    let mut wan = iface(&a.wan, "wan", true);
+    if a.wan_dhcp {
+        wan.addresses.retain(|n| !n.0.addr().is_ipv4());
+        wan.dhcp_client = true;
+    }
+    wan.gateway = a
+        .gateway
+        .iter()
+        .copied()
+        .filter(|g| !(a.wan_dhcp && g.is_ipv4()))
+        .collect();
     let mut config = Config {
         schema: SCHEMA_VERSION,
         hostname: a.hostname.clone(),
@@ -148,7 +166,7 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
             ),
         ]
         .into(),
-        interfaces: [(a.wan.name.clone(), iface(&a.wan, "wan", true))].into(),
+        interfaces: [(a.wan.name.clone(), wan)].into(),
         addresses: Default::default(),
         services: [
             ("ssh", vec!["tcp/22"]),
@@ -222,6 +240,21 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
             )],
         },
     ];
+    if a.wan_dhcp {
+        config.services.insert(
+            "dhcp-client".into(),
+            vec!["udp/68".parse().expect("built-in")],
+        );
+        // The answer to the box's own request. It comes from whatever
+        // address the provider's server has, so the source is open.
+        config.policies[2].rules.push(rule(
+            "r-dhcp-client",
+            "IPv4 address assignment from the provider",
+            vec![AddrRef::Any],
+            &["dhcp-client"],
+            "starter config: the provider's answer to the box asking for its address",
+        ));
+    }
     // Private IPv4 addresses are not routable on the internet, so hide them.
     let v4: Vec<AddrRef> = inside
         .iter()
@@ -319,6 +352,14 @@ pub fn describe(config: &Config) -> Vec<String> {
                 .join(", ")
         };
         out.push(format!("{name} is in zone {} ({addrs})", i.zone));
+        if i.dhcp_client {
+            out.push(format!(
+                "{name}: the box asks the network there for its IPv4 address and router"
+            ));
+        }
+        for g in &i.gateway {
+            out.push(format!("{name}: the default route goes through {g}"));
+        }
     }
     for p in &config.policies {
         let to = if p.to == SELF_ZONE {
@@ -729,6 +770,8 @@ mod tests {
             wan: port("eth0", &["203.0.113.10/24", "2001:db8:1::10/64"]),
             lans: vec![port("eth1", &["192.168.10.1/24", "2001:db8:2::1/64"])],
             serve: None,
+            wan_dhcp: false,
+            gateway: vec![],
         })
         .unwrap()
     }
@@ -852,6 +895,8 @@ mod tests {
             wan: port("eth0", &["2001:db8:1::10/64"]),
             lans: vec![port("eth1", &["2001:db8:2::1/64"])],
             serve: None,
+            wan_dhcp: false,
+            gateway: vec![],
         })
         .unwrap();
         assert!(v6.nat.outbound.is_empty());
@@ -867,6 +912,8 @@ mod tests {
                 port("eth2", &["192.168.20.1/24"]),
             ],
             serve: None,
+            wan_dhcp: false,
+            gateway: vec![],
         })
         .unwrap();
         assert_eq!(c.zone_interfaces("lan"), ["eth1", "eth2"]);
@@ -879,6 +926,8 @@ mod tests {
             wan: port("eth0", &[]),
             lans: vec![port("eth1", &["192.168.10.1/24", "2001:db8:2::1/64"])],
             serve: Some(Serve::default()),
+            wan_dhcp: false,
+            gateway: vec![],
         })
         .unwrap()
     }
@@ -976,6 +1025,8 @@ mod tests {
                 wan: port("eth0", &[]),
                 lans: vec![port("eth1", &[net])],
                 serve: Some(Serve::default()),
+                wan_dhcp: false,
+                gateway: vec![],
             });
             assert!(c.is_ok(), "{net}: {c:?}");
         }
@@ -988,6 +1039,8 @@ mod tests {
             wan: port("eth0", &[]),
             lans: vec![],
             serve: None,
+            wan_dhcp: false,
+            gateway: vec![],
         };
         assert!(starter(&a).unwrap_err().contains("at least one port"));
         a.lans = vec![port("eth0", &["192.168.1.1/24"])];

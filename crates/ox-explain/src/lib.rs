@@ -186,15 +186,23 @@ fn route<'a>(rs: &'a Ruleset, dst: IpAddr) -> Route<'a> {
             how: format!("{net} is connected"),
         };
     }
-    let default = rs
-        .interfaces
-        .iter()
-        .find(|i| i.default_route && i.addrs.iter().any(|a| a.addr().is_ipv4() == dst.is_ipv4()));
-    match default {
-        Some(i) => Route::Via {
+    let uplinks = || rs.interfaces.iter().filter(|i| i.default_route);
+    let same_family =
+        |i: &&ox_nft::Iface| i.addrs.iter().any(|a| a.addr().is_ipv4() == dst.is_ipv4());
+    if let Some(i) = uplinks().find(same_family) {
+        return Route::Via {
             iface: &i.name,
             zone: &i.zone,
             how: "default route".to_string(),
+        };
+    }
+    // An uplink with no fixed address of this family gets one from the
+    // network (DHCP or router advertisements), and its route with it.
+    match uplinks().next() {
+        Some(i) => Route::Via {
+            iface: &i.name,
+            zone: &i.zone,
+            how: "default route; the address there comes from the network".to_string(),
         },
         None => Route::None,
     }

@@ -191,6 +191,18 @@
           "description": "True when the default route leaves by this interface.",
           "type": "boolean"
         },
+        "dhcp_client": {
+          "description": "Ask the network on this interface for the box's IPv4 address and\nrouter (DHCP), as an internet provider's modem expects. Only on an\ninterface with `default_route` and no fixed IPv4 address.",
+          "type": "boolean"
+        },
+        "gateway": {
+          "description": "The routers the default route goes through, at most one for IPv4\nand one for IPv6, such as `[\"203.0.113.1\"]`. Only on an interface\nwith `default_route`. Leave it out when the address comes from the\nnetwork, which then names the router itself.",
+          "items": {
+            "format": "ip",
+            "type": "string"
+          },
+          "type": "array"
+        },
         "zone": {
           "type": "string"
         }

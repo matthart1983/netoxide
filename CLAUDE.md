@@ -23,11 +23,13 @@ decision. This file gives you what you need to start working.
 | Commit engine | `crates/ox-store` | Candidates, commits, commit-confirm, auto revert, rollback, hash-chained audit log |
 | Kernel apply | `crates/ox-libnft` | FFI to libnftables. The only crate with `unsafe` |
 | Daemon | `crates/oxd` | HTTP+JSON API on a Unix socket and on HTTPS (`--listen`), applies to the kernel, runs dnsmasq, serves the web UI and `/metrics` |
-| Interfaces | `crates/oxd/src/net.rs` | On apply: add the config's addresses over netlink, bring links up, enable forwarding. Additive only; never removes. Missing interfaces are reported in status, not fatal |
+| Interfaces | `crates/oxd/src/net.rs` | On apply: add the config's addresses over netlink, bring links up, set default routes (`gateway`), enable forwarding. Remembers what it added (`managed.json`) and removes only that, when a config drops it or a commit fails. Missing interfaces are reported in status, not fatal |
+| DHCP client | `crates/oxd/src/dhcp.rs` | `dhcp_client = true` on the uplink: a tokio task per interface speaks DHCP in raw Ethernet frames on a packet socket, installs address and default route, renews, and re-requests its old address after a restart. The validator requires a visible accept rule for udp/68 |
+| VM test | `tests/vm/` | Boots the host kernel in QEMU with a root disk built from the host's `/usr`, installs per `dist/README.md`, 99 checks under real systemd including a crash and a reboot. Not in CI |
 | Access control | `crates/ox-store/src/auth.rs`, `crates/oxd/src/api.rs` | Socket peer = admin, named from the kernel. HTTPS = bearer token with a role (viewer, auditor, operator, admin). Four-eyes approval. Every handler takes a `Caller` and calls `caller.may(Action::…)` first |
 | Web UI | `crates/oxd/web/` | `index.html`, `app.js`, `app.css`, compiled in with `include_str!`. No build step, no dependencies, strict CSP, daemon text inserted with `textContent` only |
 | Hygiene | `crates/ox-nft/src/hygiene.rs` | Shadowed, redundant and allow-everything rules; `oxd` adds "no packets" from kernel counters |
-| Packaging | `dist/`, `.github/workflows/ci.yml`, `SECURITY.md` | systemd unit (verified for syntax only), install steps (never run), CI |
+| Packaging | `dist/`, `.github/workflows/ci.yml`, `SECURITY.md` | systemd unit (`Type=notify`; runs in the VM test), install steps (run by the VM test), CI |
 | CLI | `crates/ox-cli` | `ox`: daemon commands, `ox file ...` offline commands, `ox import` |
 | Socket client | `crates/ox-client` | The small HTTP client `ox` and the TUI share |
 | DNS and DHCP | `crates/ox-services` + `crates/oxd/src/services.rs` | `[dns]` and `[dhcp.<iface>]` in the schema, rendered as a dnsmasq config; `oxd` runs and restarts dnsmasq. Applied and reverted with the ruleset as one `Target` |
@@ -35,8 +37,15 @@ decision. This file gives you what you need to start working.
 | Importer | `crates/ox-import` | pfSense config.xml → config + report + differential verify |
 | VPN, multi-WAN, routing protocols, IDS, HA, controller, Terraform, OS image | — | **Not started** |
 
-The daemon has only run inside rootless network namespaces. Nobody has run it
-on a real box.
+The daemon has run inside rootless network namespaces and in the test VM
+(`tests/vm/run.sh`: real systemd, root, virtio network cards, SELinux off).
+Nobody has run it on hardware.
+
+An internal security review on 14 Nov 2026 found no auth bypass or config
+injection. Its other findings are fixed, with tests, except three that are
+listed under "Limits today" in the README: wall-clock deadlines, the unkeyed
+audit chain, and no connection limit on the HTTPS listener. A damaged audit
+log must never stop the rules loading (`Audit::open` repairs or sets aside).
 
 `ox-nft::Ruleset` is the one resolved form of a config. `render` turns it into
 nftables JSON and `ox-explain` evaluates packets against it, so an explanation
@@ -120,7 +129,7 @@ tui/              netoxide-tui: live.rs + live_ui.rs (live mode), app.rs + ui.rs
 
 Proposed next, not decided, roughly in this order:
 
-1. Run it on real hardware or a VM with systemd: the unit in `dist/`, the install steps, a first watched deployment. Nothing has left a network namespace yet.
+1. Run it on real hardware with SELinux enforcing, and a first watched deployment. DHCPv6 prefix delegation for the inside network. VLAN and PPPoE interfaces.
 2. Services as sandboxed systemd units instead of direct children of `oxd`; Unbound and Kea renderers beside dnsmasq. The schema must stay backend-neutral.
 3. More one-step actions (add a guest network, allow a service) in `ox-setup`, the same actions in the TUI, rule editing there, and `ox trace`.
 4. WireGuard, then IPsec.
@@ -130,7 +139,9 @@ Proposed next, not decided, roughly in this order:
 8. HA, the fleet controller, a Terraform provider, the OS image.
 9. An independent security audit before any 1.0.
 
-The strongest test is `packets_cross_the_box_as_the_config_and_explain_say` in `crates/oxd/tests/daemon.rs`: three namespaces, real traffic, and every result compared with explain. When you add a data-plane feature, extend that lab instead of trusting the rendered JSON alone.
+Run `tests/vm/run.sh` after touching `dist/oxd.service`, the daemon's start-up, `net.rs` or `dhcp.rs`. It caught three bugs the namespace tests could not: the unit's system-call filter killed dnsmasq, a failed commit left addresses behind, and `ox explain` said "no route" for an uplink with no fixed address.
+
+The strongest `cargo test` test is `packets_cross_the_box_as_the_config_and_explain_say` in `crates/oxd/tests/daemon.rs`: three namespaces, real traffic, and every result compared with explain. When you add a data-plane feature, extend that lab instead of trusting the rendered JSON alone.
 
 Rules for work on the API and the web UI:
 

@@ -1,9 +1,9 @@
 # Installing Netoxide on a Linux machine
 
-These steps have been written out but **not yet run on a real system**. The
-daemon itself has only run inside network namespaces. Try this on a spare
-machine or a VM with console access, not on a box you can only reach over the
-network.
+`tests/vm/run.sh` runs these steps in a virtual machine and checks the result,
+including a reboot. They have **not been run on hardware**, or on a system
+with SELinux or AppArmor enforcing. Try this on a spare machine or a VM with
+console access, not on a box you can only reach over the network.
 
 ## What you need
 
@@ -20,6 +20,10 @@ sudo install -m 0644 dist/oxd.service /etc/systemd/system/oxd.service
 sudo systemctl daemon-reload
 ```
 
+Netoxide sets addresses and the default route on the ports its config names.
+Take those ports away from the operating system's network manager first
+(NetworkManager, systemd-networkd, ifupdown), or both will configure them.
+
 Stop anything else that manages the firewall or serves DNS and DHCP on the
 same ports first, such as firewalld, a distribution's own nftables service, or
 a system dnsmasq. Netoxide only touches its own nftables table, `inet
@@ -30,7 +34,9 @@ netoxide`, but two firewalls on one box is asking for confusion.
 ```sh
 sudo systemctl enable --now oxd
 sudo ox status
-sudo ox init --save starter        # answer the questions
+sudo ox init --save starter        # answer the questions: which port faces the
+                                   # internet, whether the provider assigns its
+                                   # address, which ports face inside
 sudo ox plan starter
 sudo ox commit starter --confirm 5m
 sudo ox confirm                    # only once you have checked you still have access

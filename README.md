@@ -66,9 +66,10 @@ The research behind this is in [`docs/research/market-gap.md`](docs/research/mar
 | Web UI | The daemon serves a browser interface over HTTPS: what the box does in plain sentences, rules with packet counts, NAT, network and leases, changes with plan, approve and commit with an undo timer, explain, audit, and settings. Forward a port, block a device or edit the config from it. |
 | Access control | The local socket identifies the caller from the kernel. The HTTPS listener needs an access token with a role: viewer, auditor, operator or admin. Four-eyes approval can require a second person before a commit. |
 | Health | Prometheus metrics at `/metrics`, and a hygiene report of rules that never apply, add nothing, allow everything, or have seen no packets. |
-| Addresses and forwarding | On a commit the daemon puts the config's addresses on their interfaces, brings those links up and turns on packet forwarding, over netlink. It only ever adds: it never removes an address or turns forwarding off. |
+| Addresses and routes | On a commit the daemon puts the config's addresses on their interfaces, brings those links up, sets the default route through the `gateway` you name, and turns on packet forwarding, over netlink. It takes an address or route off again when a later config drops it or a commit fails, and only ever the ones it added itself. |
+| Internet-side address | With `dhcp_client = true` the box asks the provider's network for its IPv4 address and router, renews the lease, and asks for the same address after a restart. `ox init` sets this up when you say the provider assigns the address. |
 | IPv6 and own traffic | The box can announce its IPv6 network so devices configure themselves, and policies from `self` filter what the box itself sends. |
-| Audit log | Every candidate save, commit, confirm and revert is appended to a hash-chained log. Editing or deleting a line breaks the chain, and the log says which line. |
+| Audit log | Every candidate save, commit, confirm and revert is appended to a hash-chained log. Editing or deleting a line breaks the chain, and the log says which line. Entries cut off the end are noticed too. A damaged log never stops the firewall loading: it is repaired or set aside, and the damage becomes the next entry. |
 | Plan | Lists what a candidate changes, and replays observed flows through both configs to show which would get a different verdict. |
 | Explain | Says what happens to one packet and which rule decides: port forward, route, zone pair, rule, source NAT. Works for the running config and for a candidate that is not applied. |
 | pfSense import | Translates a `config.xml` backup into a config and a report, then checks its own translation against a model of the pfSense ruleset. |
@@ -590,16 +591,18 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 124 tests. Eight of them use the real kernel inside a private, rootless network namespace:
+There are 136 tests. Eight of them use the real kernel inside a private, rootless network namespace:
 
 - The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
 - The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.
 - The home example's resolver is queried with `dig` over IPv4 and IPv6, a record is changed with a confirm window, and the old answer returns when the window lapses.
 - A small DHCP client on the far end of a virtual cable gets an address from the pool and a fixed address through the firewall, and stops being answered when the rule is removed.
 - A service that cannot start refuses the commit and leaves the kernel unchanged.
-- Real packets cross the box between three namespaces, a client inside, the box, and a server outside: web and ping are allowed out and the source is rewritten, another port is dropped, a forwarded port reaches the inside server, the kernel's counters land on the right rules, and each result matches what `ox explain` says for the same packet. A change that is not kept stops blocking traffic when its window lapses.
+- Real packets cross the box between three namespaces, a client inside, the box, and a server outside: web and ping are allowed out and the source is rewritten, another port is dropped, a forwarded port reaches the inside server, the kernel's counters land on the right rules, and each result matches what `ox explain` says for the same packet. A change that is not kept stops blocking traffic when its window lapses. Renumbering the inside network takes the old address off the port and leaves an address someone else put there.
 - The HTTPS listener is called with curl: tokens, roles, four-eyes approval and revocation.
 - The web UI's endpoints and the page's security headers are checked.
+
+A separate test boots a virtual machine and checks the installed daemon under systemd: 99 checks across install, DHCP in both directions, DNS, IPv4 and IPv6 traffic, the undo timer, a killed daemon, a reboot and removal. It needs QEMU with KVM and is not part of `cargo test`. See [`tests/vm/README.md`](tests/vm/README.md).
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
@@ -607,29 +610,32 @@ The TUI tests compare every mock screen with `tui/snapshots.txt` and every live 
 
 ## Install
 
-[`dist/README.md`](dist/README.md) has the steps for a Linux machine with systemd: build, install the unit, first start, the web UI, lockdown, monitoring and removal. They have been written out and not yet run on a real system.
+[`dist/README.md`](dist/README.md) has the steps for a Linux machine with systemd: build, install the unit, first start, the web UI, lockdown, monitoring and removal. The VM test runs them, under systemd, on every run. Nobody has run them on hardware.
 
 ## Limits today
 
-- **Access control is new and unaudited.** Tokens, roles, four-eyes and the HTTPS listener are tested, but nobody outside this project has reviewed them. There is no single sign-on (OIDC), and the roles are four fixed ones.
+- **Access control is new and has had no outside audit.** Tokens, roles, four-eyes and the HTTPS listener are tested. One internal review pass found no way around them and eleven other defects, which are fixed except the three listed next. Nobody outside this project has reviewed any of it. There is no single sign-on (OIDC), and the roles are four fixed ones.
+- **Known and not fixed.** Token expiry and the undo timer use the wall clock, so a box whose clock jumps backwards extends both. The audit chain has no key, so someone who can write the state directory can rewrite the log and its head together; shipping the head off the box would close that. The HTTPS listener has no connection limit or header timeout of its own.
+- **An admin can get around four-eyes** by turning it off or making a second token. Both are in the audit log. Operators cannot.
 - **The web UI has been checked by hand in one browser.** Sign-in, overview, rules, changes and a commit with its timer were exercised in Chrome. The forms for forwarding, blocking, editing, explain and tokens were not; their endpoints are covered by tests.
 - **Nothing is loaded before the first commit** unless you start `oxd --lockdown`, so by default the kernel's own defaults apply until then.
 - **DNS and DHCP are new.** They are tested end to end in a namespace: `dig` against the resolver over IPv4 and IPv6, and a small DHCP client that gets a pool address and a fixed address through the firewall. No real device has used them. There are no DNS blocklists, IPv6 is announce-only (no DHCPv6), and the daemon runs dnsmasq directly, not as a sandboxed systemd unit as the spec asks.
 - **dnsmasq is the only backend.** The spec names Unbound and Kea. The config does not name the program, so they can be added without changing configs.
-- **The daemon adds addresses and never removes them.** An address you delete from the config stays on the interface until you remove it yourself. It does not create VLAN, bridge, bond or PPPoE interfaces, and it does not run a DHCP client for the internet side; the operating system still does those.
+- **Interfaces are only partly managed.** The daemon does not create VLAN, bridge, bond or PPPoE interfaces; the operating system still does. Stop the operating system's own network manager on the ports you give to Netoxide, or the two will both set addresses.
+- **The internet side is IPv4 DHCP or fixed addresses.** For IPv6 the box takes an address from the provider's router advertisements. It does not ask for a delegated prefix (DHCPv6-PD), so the inside network gets IPv6 only if you have a fixed prefix. The DNS servers a lease names are shown and not used; the resolver forwards to the servers in the config.
 - **The box's own traffic is allowed out unless you filter it.** Write a policy from `self` to a zone to filter what the box sends there.
-- **The systemd unit and the install steps in `dist/` have not been run on a real system.** The unit passes `systemd-analyze verify` and nothing more.
+- **The systemd unit and the install steps have run only in the test VM**, with SELinux off and virtual network cards.
 - **Long zone pairs lose per-rule counters.** A pair that needs more than 32 nftables rules is merged: neighbouring rules with the same action become one set lookup and share a counter, so the TUI shows no packet count for them. Rules that log, match ICMP or any service, or overlap a neighbour are not merged. A pair that is still over 32 after merging is refused.
 - **Explain knows only connected networks and the default route.** A destination behind a static or dynamic route shows "no route".
 - **Schema 1 has no VPN, routing protocols, traffic shaping, schedules or HA.**
 - **The importer reads pfSense only** and has not been tested on a real backup.
-- **Nothing has run on real hardware or under real traffic.**
+- **Nothing has run on real hardware or under real traffic.** The furthest it has been is a virtual machine on one developer's computer.
 
 ## Not built yet
 
 Roughly in the order planned:
 
-1. Running it on real hardware: the systemd unit, the install steps, link state, and a first deployment that is watched.
+1. Running it on real hardware, with SELinux enforcing, and a first deployment that is watched.
 2. Services as sandboxed systemd units, and Unbound and Kea as backends beside dnsmasq.
 3. More one-step actions such as "add a guest network", rule editing in the terminal UI, and live trace.
 4. WireGuard, then IPsec.

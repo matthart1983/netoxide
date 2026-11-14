@@ -316,7 +316,8 @@ fn filtering_the_boxs_own_traffic_must_not_break_its_services() {
         "{p:?}"
     );
     assert_eq!(
-        problems(&own("\"dns\", \"tcp/443\"", "wan")),
+        // The box also asks the provider for its address there.
+        problems(&own("\"dns\", \"tcp/443\", \"udp/67\"", "wan")),
         Vec::<String>::new()
     );
     // DHCP replies leave by lan.
@@ -328,4 +329,94 @@ fn filtering_the_boxs_own_traffic_must_not_break_its_services() {
     assert_eq!(problems(&own("\"udp/68\"", "lan")), Vec::<String>::new());
     let p = problems(&own("\"dns\"", "self"));
     assert!(p.iter().any(|m| m.contains("takes no rules")), "{p:?}");
+}
+
+/// MINI with the outside interface's settings replaced, and extra text added.
+fn uplink(settings: &str, extra: &str) -> Vec<String> {
+    let wan = "[interfaces.wan0]\nzone = \"wan\"\naddresses = [\"192.0.2.2/30\", \"2001:db8::2/64\"]\ndefault_route = true\n";
+    assert!(MINI.contains(wan));
+    problems(&format!("{}{extra}", MINI.replace(wan, settings)))
+}
+
+const DHCP_UPLINK: &str = "[interfaces.wan0]\nzone = \"wan\"\naddresses = [\"2001:db8::2/64\"]\ndefault_route = true\ndhcp_client = true\n";
+const DHCP_RULE: &str = "\n[[policy]]\nfrom = \"wan\"\nto = \"self\"\n[[policy.rule]]\nid = \"r-dhcp-client\"\nname = \"Address from the provider\"\naction = \"accept\"\nservice = [\"udp/68\"]\n";
+
+#[test]
+fn a_gateway_must_be_reachable_on_its_interface() {
+    let with = |gateway: &str| {
+        uplink(
+            &format!(
+                "[interfaces.wan0]\nzone = \"wan\"\naddresses = [\"192.0.2.2/30\", \"2001:db8::2/64\"]\ndefault_route = true\ngateway = {gateway}\n"
+            ),
+            "",
+        )
+    };
+    assert_eq!(
+        with(r#"["192.0.2.1", "2001:db8::1"]"#),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        with(r#"["192.0.2.1", "fe80::1"]"#),
+        Vec::<String>::new(),
+        "link-local is on every link"
+    );
+    assert!(with(r#"["198.51.100.1"]"#)[0].contains("not in any network this interface has"));
+    assert!(with(r#"["192.0.2.2"]"#)[0].contains("the box's own address"));
+    assert!(with(r#"["192.0.2.1", "192.0.2.3"]"#)[0].contains("more than one IPv4 gateway"));
+    // Not on the interface that carries the default route.
+    let lan =
+        "[interfaces.lan0]\nzone = \"lan\"\naddresses = [\"10.0.0.1/24\", \"2001:db8:1::1/64\"]\n";
+    assert!(MINI.contains(lan));
+    let moved = problems(&MINI.replace(lan, &format!("{lan}gateway = [\"10.0.0.254\"]\n")));
+    assert!(moved[0].contains("set default_route = true"), "{moved:?}");
+}
+
+#[test]
+fn asking_the_network_for_an_address_needs_a_rule_for_the_answer() {
+    assert_eq!(uplink(DHCP_UPLINK, DHCP_RULE), Vec::<String>::new());
+    let none = uplink(DHCP_UPLINK, "");
+    assert!(
+        none[0].contains("no rule in wan → self accepts the answer"),
+        "{none:?}"
+    );
+    assert!(none[0].contains("udp/68"));
+    // A fixed IPv4 address or gateway contradicts it.
+    let fixed = uplink(
+        &DHCP_UPLINK.replace("\"2001:db8::2/64\"", "\"192.0.2.2/30\""),
+        DHCP_RULE,
+    );
+    assert!(fixed[0].contains("list no fixed IPv4 address"), "{fixed:?}");
+    let routed = uplink(
+        &format!("{DHCP_UPLINK}gateway = [\"192.0.2.1\"]\n"),
+        DHCP_RULE,
+    );
+    assert!(
+        routed.iter().any(|p| p.contains("list no IPv4 gateway")),
+        "{routed:?}"
+    );
+    // A policy for the box's own traffic must let the request out.
+    let cut = uplink(
+        DHCP_UPLINK,
+        &format!(
+            "{DHCP_RULE}\n[[policy]]\nfrom = \"self\"\nto = \"wan\"\n[[policy.rule]]\nid = \"r-out\"\nname = \"Only DNS out\"\naction = \"accept\"\nservice = [\"udp/53\"]\n"
+        ),
+    );
+    assert!(
+        cut.iter()
+            .any(|p| p.contains("does not accept its DHCP requests")),
+        "{cut:?}"
+    );
+}
+
+#[test]
+fn names_the_kernel_reserves_and_odd_hostnames_are_refused() {
+    for name in ["all", "default"] {
+        let p = problems(&MINI.replace("[interfaces.lan0]", &format!("[interfaces.{name}]")));
+        assert!(
+            p.iter().any(|p| p.contains("reserved by the kernel")),
+            "{name}: {p:?}"
+        );
+    }
+    let p = problems(&MINI.replace("hostname = \"t\"", "hostname = \"box\\u001b[2J\""));
+    assert!(p[0].contains("must be a host name"), "{p:?}");
 }

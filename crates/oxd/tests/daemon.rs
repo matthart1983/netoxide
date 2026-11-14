@@ -1077,6 +1077,56 @@ fn packets_cross_the_box_as_the_config_and_explain_say() {
         Some("outside web")
     );
 
+    // Renumbering the inside network takes the old address off the port,
+    // because the daemon put it there. An address it did not put there stays.
+    let box_ns = lab.daemon.child.id();
+    let addrs = |lab: &Lab| {
+        let out = lab
+            .cmd(box_ns, "ip")
+            .args(["-br", "addr", "show", "eth1"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    assert!(
+        lab.cmd(box_ns, "ip")
+            .args(["addr", "add", "10.99.0.1/24", "dev", "eth1"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(addrs(&lab).contains("192.168.10.1/24"));
+    let renumbered = ROUTER
+        .replace("192.168.10.1/24", "192.168.77.1/24")
+        .replace("192.168.10.0/24", "192.168.77.0/24")
+        .replace("192.168.10.50", "192.168.77.50");
+    lab.daemon.ok("PUT", "/v1/candidates/renumber", &renumbered);
+    lab.daemon.ok(
+        "POST",
+        "/v1/candidates/renumber/commit",
+        r#"{"confirm_secs":10,"reason":"renumber"}"#,
+    );
+    let now = addrs(&lab);
+    assert!(
+        now.contains("192.168.77.1/24") && !now.contains("192.168.10.1/24"),
+        "{now}"
+    );
+    assert!(
+        now.contains("10.99.0.1/24"),
+        "someone else's address is left alone: {now}"
+    );
+    // Nobody keeps it, and the old address comes back with the old rules.
+    std::thread::sleep(Duration::from_secs(12));
+    let back = addrs(&lab);
+    assert!(
+        back.contains("192.168.10.1/24") && !back.contains("192.168.77.1/24"),
+        "{back}"
+    );
+    assert_eq!(
+        lab.fetch(client, "http://203.0.113.9/").as_deref(),
+        Some("outside web")
+    );
+
     drop(lab);
     std::fs::remove_dir_all(&dir).unwrap();
 }

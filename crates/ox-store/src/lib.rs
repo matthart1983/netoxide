@@ -48,6 +48,10 @@ pub struct Target {
     pub forwarding: bool,
     /// Interfaces that carry the default route.
     pub uplinks: Vec<String>,
+    /// Default routes to set: the interface and the router on it.
+    pub gateways: Vec<(String, std::net::IpAddr)>,
+    /// Interfaces where the box asks the network for its IPv4 address.
+    pub dhcp_clients: Vec<String>,
 }
 
 /// What the box does before it has any config.
@@ -71,6 +75,8 @@ impl Baseline {
             addresses: vec![],
             forwarding: false,
             uplinks: vec![],
+            gateways: vec![],
+            dhcp_clients: vec![],
         }
     }
 }
@@ -252,6 +258,8 @@ pub struct Engine<A: Applier> {
     baseline: Baseline,
     state: State,
     audit: Audit,
+    /// The access tokens, as last loaded or saved.
+    token_cache: Vec<Token>,
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -260,6 +268,16 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     f.write_all(data)?;
     f.sync_all()?;
     fs::rename(&tmp, path)
+}
+
+/// How many candidates may be stored. Each is at most as large as the API
+/// accepts, so this bounds what saved candidates can take from the disk.
+const MAX_CANDIDATES: usize = 100;
+
+/// Text from a caller, made safe to print: no control characters, which
+/// could rewrite an administrator's terminal, and no longer than `max`.
+fn clean(text: &str, max: usize) -> String {
+    text.chars().filter(|c| !c.is_control()).take(max).collect()
 }
 
 /// The firewall and the service configs one config renders to.
@@ -287,6 +305,17 @@ fn target(config: &Config, ruleset: &Ruleset) -> Target {
             .filter(|(_, i)| i.default_route)
             .map(|(name, _)| name.clone())
             .collect(),
+        gateways: config
+            .interfaces
+            .iter()
+            .flat_map(|(name, i)| i.gateway.iter().map(move |g| (name.clone(), *g)))
+            .collect(),
+        dhcp_clients: config
+            .interfaces
+            .iter()
+            .filter(|(_, i)| i.dhcp_client)
+            .map(|(name, _)| name.clone())
+            .collect(),
     }
 }
 
@@ -310,6 +339,12 @@ impl<A: Applier> Engine<A> {
     pub fn open_with(dir: &Path, applier: A, baseline: Baseline, now: u64) -> Result<Engine<A>> {
         fs::create_dir_all(dir.join("commits"))?;
         fs::create_dir_all(dir.join("candidates"))?;
+        // Configs, token hashes and the audit log are for root only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+        }
         let state = match fs::read_to_string(dir.join("state.json")) {
             Ok(text) => serde_json::from_str(&text)
                 .map_err(|e| StoreError::Corrupt(format!("state.json: {e}")))?,
@@ -325,7 +360,15 @@ impl<A: Applier> Engine<A> {
             baseline,
             state,
             audit: Audit::open(&dir.join("audit.log"))?,
+            // A token file that cannot be read lets nobody in.
+            token_cache: auth::load(&dir.join("tokens.json")).unwrap_or_default(),
         };
+        if let Some(damage) = engine.audit.take_damage() {
+            eprintln!("audit log: {damage}");
+            engine
+                .audit
+                .append(now, "system", "audit log damaged", &damage)?;
+        }
         if engine.state.pending.is_some() {
             engine.revert("system", true, now)?;
         } else if let Some(id) = engine.state.running {
@@ -468,6 +511,11 @@ impl<A: Applier> Engine<A> {
     pub fn put_candidate(&mut self, name: &str, text: &str, who: &str, now: u64) -> Result<()> {
         let path = self.candidate_path(name)?;
         check(text)?;
+        if !path.exists() && self.candidates()?.len() >= MAX_CANDIDATES {
+            return Err(StoreError::Invalid(format!(
+                "there are already {MAX_CANDIDATES} candidates; delete some before saving another"
+            )));
+        }
         write_atomic(&path, text.as_bytes())?;
         // A new version of the candidate has no approval, whoever approved the last one.
         let meta = CandidateMeta {
@@ -554,9 +602,11 @@ impl<A: Applier> Engine<A> {
         auth::load(&self.dir.join("tokens.json")).map_err(StoreError::Corrupt)
     }
 
-    fn save_tokens(&self, tokens: &[Token]) -> Result<()> {
+    fn save_tokens(&mut self, tokens: &[Token]) -> Result<()> {
         let json = serde_json::to_vec_pretty(tokens).expect("tokens are plain JSON");
-        Ok(write_atomic(&self.dir.join("tokens.json"), &json)?)
+        write_atomic(&self.dir.join("tokens.json"), &json)?;
+        self.token_cache = tokens.to_vec();
+        Ok(())
     }
 
     /// Creates an access token and returns its secret. The secret is shown
@@ -580,13 +630,20 @@ impl<A: Applier> Engine<A> {
                 "a token called '{name}' exists; revoke it first"
             )));
         }
+        let expires = match ttl_secs {
+            Some(t) => Some(
+                now.checked_add(t)
+                    .ok_or_else(|| StoreError::Invalid("that lifetime is too long".into()))?,
+            ),
+            None => None,
+        };
         let secret = auth::new_secret()?;
         tokens.push(Token {
             name: name.to_string(),
             role,
             sha256: audit::sha256_hex(secret.as_bytes()),
             created: now,
-            expires: ttl_secs.map(|t| now + t),
+            expires,
             created_by: who.to_string(),
         });
         self.save_tokens(&tokens)?;
@@ -619,7 +676,9 @@ impl<A: Applier> Engine<A> {
 
     /// Who a token secret belongs to, if it is known and not expired.
     pub fn identify(&self, secret: &str, now: u64) -> Option<Identity> {
-        auth::verify(&self.tokens().ok()?, secret, now)
+        // From memory, so a flood of requests with made-up tokens costs no
+        // disk reads while the engine is locked.
+        auth::verify(&self.token_cache, secret, now)
     }
 
     pub fn candidate(&self, name: &str) -> Result<String> {
@@ -638,7 +697,8 @@ impl<A: Applier> Engine<A> {
     // ── commits ─────────────────────────────────────────────────────────
 
     /// Applies a config and records it as the running commit.
-    fn apply_new(&mut self, new: NewCommit, now: u64) -> Result<Commit> {
+    /// Writes a commit that has just been applied to disk and to the audit log.
+    fn record(&mut self, new: NewCommit, now: u64) -> Result<Commit> {
         let NewCommit {
             text,
             source,
@@ -647,16 +707,6 @@ impl<A: Applier> Engine<A> {
             reason,
             confirm_secs,
         } = new;
-        if let Some(p) = &self.state.pending {
-            return Err(StoreError::Busy { commit: p.commit });
-        }
-        let (config, ruleset) = check(text)?;
-        // Apply first. If the daemon dies before the commit is recorded, the
-        // next start applies the old running commit again.
-        self.applier
-            .apply(&target(&config, &ruleset))
-            .map_err(StoreError::Apply)?;
-
         let id = self.state.next_id;
         let outcome = match confirm_secs {
             Some(secs) => Outcome::Pending {
@@ -710,6 +760,62 @@ impl<A: Applier> Engine<A> {
                 commit.sha256
             ),
         )?;
+        Ok(commit)
+    }
+
+    fn apply_new(&mut self, new: NewCommit, now: u64) -> Result<Commit> {
+        let NewCommit {
+            text,
+            source,
+            candidate,
+            who,
+            reason,
+            confirm_secs,
+        } = new;
+        if let Some(p) = &self.state.pending {
+            return Err(StoreError::Busy { commit: p.commit });
+        }
+        let reason = clean(reason, 500);
+        let (config, ruleset) = check(text)?;
+        // Apply first. If the daemon dies before the commit is recorded, the
+        // next start applies the old running commit again.
+        self.applier
+            .apply(&target(&config, &ruleset))
+            .map_err(StoreError::Apply)?;
+
+        let before = self.state.clone();
+        let recorded = self.record(
+            NewCommit {
+                text,
+                source,
+                candidate,
+                who,
+                reason: &reason,
+                confirm_secs,
+            },
+            now,
+        );
+        let commit = match recorded {
+            Ok(commit) => commit,
+            Err(e) => {
+                // The new rules are loaded and there is no record of them,
+                // for example because the disk is full. Rules nobody can
+                // account for must not stay: go back to the recorded ones.
+                self.state = before;
+                let _ = self.save_state();
+                let back = self
+                    .target_of(self.state.running)
+                    .and_then(|t| self.applier.apply(&t).map_err(StoreError::Apply));
+                return Err(StoreError::Apply(match back {
+                    Ok(()) => format!(
+                        "the change was applied but could not be recorded ({e}), so the box went back to what it ran before"
+                    ),
+                    Err(b) => format!(
+                        "the change was applied but could not be recorded ({e}), and going back failed too ({b})"
+                    ),
+                }));
+            }
+        };
         self.prune()?;
         Ok(commit)
     }
@@ -869,6 +975,11 @@ impl<A: Applier> Engine<A> {
         self.audit.read()
     }
 
+    /// How many entries the audit log holds, without reading it.
+    pub fn audit_len(&self) -> u64 {
+        self.audit.len()
+    }
+
     pub fn note(&mut self, now: u64, who: &str, event: &str, detail: &str) -> Result<()> {
         self.audit.append(now, who, event, detail)?;
         Ok(())
@@ -1025,6 +1136,88 @@ mod tests {
         assert_eq!(e.status(2000).unwrap().reverts_in, None);
         assert_eq!(e.history().unwrap().len(), 1);
         assert!(!has_rule(&mut e, "r-0412"));
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn a_commit_that_cannot_be_recorded_is_undone() {
+        use std::os::unix::fs::PermissionsExt;
+        let (d, mut e) = with_base("unrecorded");
+        // A full disk, as far as the commit files are concerned.
+        let commits = d.join("commits");
+        fs::set_permissions(&commits, fs::Permissions::from_mode(0o500)).unwrap();
+        let err = e
+            .commit_candidate("block-legacy-smb", "jun", "x", None, 2000)
+            .unwrap_err()
+            .to_string();
+        fs::set_permissions(&commits, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            err.contains("could not be recorded") && err.contains("went back"),
+            "{err}"
+        );
+        assert_eq!(e.running().unwrap().unwrap().id, 1);
+        assert_eq!(e.history().unwrap().len(), 1);
+        assert!(
+            has_rule(&mut e, "r-0388") && !has_rule(&mut e, "r-0412"),
+            "the rules nobody could record are not left loaded"
+        );
+        // The candidate is still there to try again.
+        e.commit_candidate("block-legacy-smb", "jun", "x", None, 2001)
+            .unwrap();
+        assert!(has_rule(&mut e, "r-0412"));
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn a_damaged_audit_log_does_not_stop_the_rules_loading_at_start() {
+        let (d, e) = with_base("torn-audit");
+        drop(e);
+        let log = d.join("audit.log");
+        let mut text = fs::read_to_string(&log).unwrap();
+        text.push_str("{\"seq\":99,\"ti");
+        fs::write(&log, text).unwrap();
+
+        let mut e = open(&d, 3000);
+        assert_eq!(e.applier().applied, 1, "the running commit was applied");
+        assert!(has_rule(&mut e, "r-0388"));
+        let entries = e.audit().unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|x| x.event == "audit log damaged" && x.detail.contains("cut short")),
+            "the damage is on record"
+        );
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn candidates_are_capped_and_reasons_are_cleaned() {
+        let (d, mut e) = with_base("caps");
+        let have = e.candidates().unwrap().len();
+        for i in have..MAX_CANDIDATES {
+            e.put_candidate(&format!("c{i}"), BRANCH, "ana", 1500)
+                .unwrap();
+        }
+        let err = e
+            .put_candidate("one-more", BRANCH, "ana", 1500)
+            .unwrap_err();
+        assert!(err.to_string().contains("already 100 candidates"), "{err}");
+        // Saving over an existing one is still fine.
+        e.put_candidate("c50", BRANCH, "ana", 1501).unwrap();
+
+        let reason = format!("ticket 7\x1b[2J\u{7}{}", "x".repeat(600));
+        let c = e
+            .commit_candidate("c50", "ana", &reason, None, 1600)
+            .unwrap();
+        assert!(
+            c.reason.starts_with("ticket 7[2Jx"),
+            "control characters are gone"
+        );
+        assert_eq!(c.reason.chars().count(), 500);
+        assert!(matches!(
+            e.create_token("t", Role::Viewer, Some(u64::MAX), "ana", 1600),
+            Err(StoreError::Invalid(_))
+        ));
         fs::remove_dir_all(d).unwrap();
     }
 

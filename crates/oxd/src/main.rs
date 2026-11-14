@@ -3,27 +3,31 @@
 //! It owns the config. Every change goes through it as a candidate and a
 //! commit, and it is the only thing that loads rules into the kernel.
 //!
-//! The API is HTTP and JSON on a Unix socket. Access is whoever can open the
-//! socket file; there is no TLS, login or role check yet. The caller's name
-//! comes from the `x-ox-user` header and is recorded as given.
+//! The API is HTTP and JSON. On the Unix socket the caller is whoever the
+//! kernel says opened it, and is an admin. On the HTTPS listener the caller
+//! is the owner of an access token and has that token's role.
 //!
 //! Stopping the daemon leaves the loaded ruleset in place. The box keeps
 //! forwarding with the last commit.
 
 mod api;
+mod dhcp;
 mod net;
 mod services;
 mod tls;
 mod web;
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::IpAddr,
     os::unix::fs::PermissionsExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use ipnet::IpNet;
 use ox_nft::list_command;
 use ox_store::{Applier, Baseline, Engine, NullApplier, Target};
 use serde_json::Value;
@@ -36,6 +40,122 @@ struct SystemApplier {
     current: Option<Target>,
     /// Interfaces the config names that this machine does not have.
     missing: Vec<String>,
+    /// What Netoxide put on the machine itself. Only these are ever taken
+    /// off again. Kept on disk so a restart remembers them.
+    managed: Managed,
+    managed_path: PathBuf,
+    /// Where the DHCP clients keep their leases.
+    state_dir: PathBuf,
+    /// The interfaces asking the network for an address.
+    dhcp: BTreeMap<String, dhcp::Client>,
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct Managed {
+    addresses: BTreeSet<(String, IpNet)>,
+    /// Default routes: the interface and the router.
+    routes: BTreeSet<(String, IpAddr)>,
+}
+
+fn block_on<T>(work: impl Future<Output = T>) -> T {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(work))
+}
+
+impl SystemApplier {
+    fn new(state_dir: &Path, dnsmasq: services::Dnsmasq) -> SystemApplier {
+        let managed_path = state_dir.join("managed.json");
+        let managed = std::fs::read(&managed_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        SystemApplier {
+            dnsmasq,
+            current: None,
+            missing: vec![],
+            managed,
+            managed_path,
+            state_dir: state_dir.to_path_buf(),
+            dhcp: BTreeMap::new(),
+        }
+    }
+
+    fn save_managed(&self) {
+        let text = serde_json::to_vec(&self.managed).unwrap_or_default();
+        let tmp = self.managed_path.with_extension("tmp");
+        let saved =
+            std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &self.managed_path));
+        if let Err(e) = saved {
+            eprintln!("oxd: cannot record what was put on the interfaces: {e}");
+        }
+    }
+
+    /// Puts the target's addresses, routes and DHCP clients in place.
+    fn bring_up(&mut self, target: &Target) -> Result<(), String> {
+        let ensured = block_on(net::ensure_addresses(&target.addresses))?;
+        self.missing = ensured.missing;
+        self.managed.addresses.extend(ensured.added);
+        self.managed.routes.extend(target.gateways.iter().cloned());
+        self.save_managed();
+        block_on(net::set_default_routes(&target.gateways))?;
+        for name in &target.dhcp_clients {
+            if !self.dhcp.contains_key(name) {
+                let _in_runtime = tokio::runtime::Handle::current().enter();
+                self.dhcp
+                    .insert(name.clone(), dhcp::Client::start(name, &self.state_dir));
+            }
+        }
+        Ok(())
+    }
+
+    /// Takes off what Netoxide put on the machine that `keep` does not ask
+    /// for: addresses, default routes and DHCP clients with their leases.
+    fn take_down_all_but(&mut self, keep: Option<&Target>) {
+        let empty = Target::default();
+        let keep = keep.unwrap_or(&empty);
+        let gone: Vec<String> = self
+            .dhcp
+            .keys()
+            .filter(|name| !keep.dhcp_clients.contains(name))
+            .cloned()
+            .collect();
+        for name in gone {
+            if let Some(client) = self.dhcp.remove(&name) {
+                block_on(client.stop());
+            }
+        }
+        // A lease from an earlier run of the daemon, on an interface that
+        // no longer asks for one.
+        for name in dhcp::remembered(&self.state_dir) {
+            if !keep.dhcp_clients.contains(&name) {
+                block_on(dhcp::forget(&self.state_dir, &name));
+            }
+        }
+        let routes: Vec<(String, IpAddr)> = self
+            .managed
+            .routes
+            .iter()
+            .filter(|r| !keep.gateways.contains(r))
+            .cloned()
+            .collect();
+        let addresses: Vec<(String, IpNet)> = self
+            .managed
+            .addresses
+            .iter()
+            .filter(|a| !keep.addresses.contains(a))
+            .cloned()
+            .collect();
+        if routes.is_empty() && addresses.is_empty() {
+            return;
+        }
+        block_on(net::remove_default_routes(&routes));
+        for problem in block_on(net::remove_addresses(&addresses)) {
+            eprintln!("oxd: {problem}");
+        }
+        self.managed.routes.retain(|r| !routes.contains(r));
+        self.managed.addresses.retain(|a| !addresses.contains(a));
+        self.save_managed();
+    }
 }
 
 fn load(ruleset: &Value) -> Result<(), String> {
@@ -54,9 +174,7 @@ impl Applier for SystemApplier {
         // routed before the firewall is in place, and before the services,
         // which listen on those addresses.
         let rest = (|| {
-            self.missing = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(net::ensure_addresses(&target.addresses))
-            })?;
+            self.bring_up(target)?;
             if target.forwarding {
                 net::enable_forwarding(&target.uplinks)?;
             }
@@ -73,11 +191,19 @@ impl Applier for SystemApplier {
                 None => (ox_nft::render_empty(), None),
             };
             let undone = load(&ruleset).and_then(|()| self.dnsmasq.apply(old.as_ref()));
+            let previous = self.current.clone();
+            self.take_down_all_but(previous.as_ref());
+            if let Some(previous) = &previous {
+                // A default route the failed target replaced.
+                let _ = block_on(net::set_default_routes(&previous.gateways));
+            }
             return Err(match undone {
                 Ok(()) => e,
                 Err(u) => format!("{e}. Going back also failed: {u}"),
             });
         }
+        // What the previous config had and this one does not.
+        self.take_down_all_but(Some(target));
         self.current = Some(target.clone());
         Ok(())
     }
@@ -96,6 +222,11 @@ impl Applier for SystemApplier {
             .state()
             .map(|s| (ox_services::DNSMASQ.to_string(), s))
             .into_iter()
+            .chain(
+                self.dhcp
+                    .iter()
+                    .map(|(name, client)| (format!("address on {name}"), client.state())),
+            )
             .chain(self.missing.iter().map(|name| {
                 (
                     format!("interface {name}"),
@@ -103,6 +234,25 @@ impl Applier for SystemApplier {
                 )
             }))
             .collect()
+    }
+}
+
+/// Tells systemd the rules are loaded and the API is up, so units ordered
+/// after this one (the network coming up) wait for the firewall. Does
+/// nothing when not started by systemd.
+fn notify_ready() {
+    use std::os::{linux::net::SocketAddrExt, unix::net};
+    let Some(path) = std::env::var_os("NOTIFY_SOCKET") else {
+        return;
+    };
+    let bytes = path.as_encoded_bytes();
+    let addr = match bytes.strip_prefix(b"@") {
+        Some(name) => net::SocketAddr::from_abstract_name(name),
+        None => net::SocketAddr::from_pathname(&path),
+    };
+    let sent = addr.and_then(|addr| net::UnixDatagram::unbound()?.send_to_addr(b"READY=1", &addr));
+    if let Err(e) = sent {
+        eprintln!("oxd: could not tell systemd the daemon is ready: {e}");
     }
 }
 
@@ -212,15 +362,14 @@ async fn serve(args: Args) -> Result<(), String> {
     let applier: Box<dyn Applier> = if args.dry_run {
         Box::new(NullApplier::default())
     } else {
-        Box::new(SystemApplier {
-            dnsmasq: services::Dnsmasq::new(
+        Box::new(SystemApplier::new(
+            &args.state_dir,
+            services::Dnsmasq::new(
                 args.state_dir.join("services"),
                 args.dnsmasq.clone(),
                 args.keep_privileges,
             ),
-            current: None,
-            missing: vec![],
-        })
+        ))
     };
     let baseline = if args.lockdown {
         Baseline::Lockdown
@@ -248,7 +397,7 @@ async fn serve(args: Args) -> Result<(), String> {
         let mut every = tokio::time::interval(Duration::from_secs(1));
         loop {
             every.tick().await;
-            match ticker.lock().unwrap().tick(now()) {
+            match ticker.lock().unwrap_or_else(|e| e.into_inner()).tick(now()) {
                 Ok(Some(c)) => eprintln!(
                     "oxd: commit #{} was not confirmed and has been reverted",
                     c.id
@@ -259,6 +408,7 @@ async fn serve(args: Args) -> Result<(), String> {
         }
     });
 
+    notify_ready();
     eprintln!(
         "oxd: listening on {} ({})",
         args.socket.display(),

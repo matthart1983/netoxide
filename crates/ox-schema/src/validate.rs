@@ -69,8 +69,11 @@ impl Checker<'_> {
                 ),
             );
         }
-        if c.hostname.is_empty() {
-            self.add("hostname", "must not be empty");
+        if !is_hostname(&c.hostname) {
+            self.add(
+                "hostname",
+                "must be a host name: letters, digits and hyphens, with dots between parts",
+            );
         }
         self.zones_and_interfaces();
         self.objects();
@@ -97,6 +100,11 @@ impl Checker<'_> {
             let ok_chars = name
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'));
+            // The kernel keeps settings for every interface under these
+            // names, so an interface cannot have them.
+            if matches!(name.as_str(), "." | ".." | "all" | "default") {
+                self.add(&at, "this name is reserved by the kernel");
+            }
             if name.is_empty() || name.len() > IFNAMSIZ || !ok_chars {
                 self.add(
                     &at,
@@ -106,6 +114,7 @@ impl Checker<'_> {
             if !c.zones.contains_key(&iface.zone) {
                 self.add(&at, format!("zone '{}' is not defined", iface.zone));
             }
+            self.uplink(&at, iface);
         }
         for family in ["IPv4", "IPv6"] {
             let with_default: Vec<&str> = c
@@ -128,6 +137,83 @@ impl Checker<'_> {
                     ),
                 );
             }
+        }
+    }
+
+    /// The settings that say how an interface reaches the internet.
+    fn uplink(&mut self, at: &str, iface: &crate::Interface) {
+        if (iface.dhcp_client || !iface.gateway.is_empty()) && !iface.default_route {
+            self.add(
+                at,
+                "gateway and dhcp_client belong on the interface that carries the default route; \
+                 set default_route = true",
+            );
+            return;
+        }
+        for v4 in [true, false] {
+            let family = if v4 { "IPv4" } else { "IPv6" };
+            let gateways: Vec<std::net::IpAddr> = iface
+                .gateway
+                .iter()
+                .copied()
+                .filter(|g| g.is_ipv4() == v4)
+                .collect();
+            if gateways.len() > 1 {
+                self.add(
+                    at,
+                    format!("more than one {family} gateway; schema 1 allows one"),
+                );
+            }
+            for g in gateways {
+                let link_local =
+                    matches!(g, std::net::IpAddr::V6(a) if a.segments()[0] & 0xffc0 == 0xfe80);
+                let on_link = iface.addresses.iter().any(|a| a.0.contains(&g));
+                if iface.addresses.iter().any(|a| a.0.addr() == g) {
+                    self.add(at, format!("gateway {g} is the box's own address"));
+                } else if !on_link && !link_local {
+                    self.add(
+                        at,
+                        format!(
+                            "gateway {g} is not in any network this interface has an address in"
+                        ),
+                    );
+                }
+            }
+        }
+        if !iface.dhcp_client {
+            return;
+        }
+        if iface.addresses.iter().any(|a| a.0.addr().is_ipv4()) {
+            self.add(
+                at,
+                "dhcp_client asks the network for the IPv4 address, so list no fixed IPv4 address here",
+            );
+        }
+        if iface.gateway.iter().any(std::net::IpAddr::is_ipv4) {
+            self.add(
+                at,
+                "dhcp_client gets the router from the network, so list no IPv4 gateway here",
+            );
+        }
+        if !self.box_accepts(&iface.zone, Proto::Udp, 68) {
+            self.add(
+                at,
+                format!(
+                    "the box asks for its address here, but no rule in {} → self accepts the \
+                     answer; add an accept rule there for udp/68",
+                    iface.zone
+                ),
+            );
+        }
+        if self.self_accepts(&iface.zone, Proto::Udp, 67) == Some(false) {
+            self.add(
+                at,
+                format!(
+                    "the policy self → {} filters what the box sends there and does not accept \
+                     its DHCP requests; add an accept rule there for udp/67",
+                    iface.zone
+                ),
+            );
         }
     }
 

@@ -5,7 +5,7 @@
 //! from the first minute. A browser will warn about it until it is replaced
 //! with a certificate the browser trusts.
 
-use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+use std::{fs, io::Write, os::unix::fs::OpenOptionsExt, path::Path};
 
 use axum_server::tls_rustls::RustlsConfig;
 
@@ -38,13 +38,26 @@ pub async fn config(
                 }
                 let made = rcgen::generate_simple_self_signed(names)
                     .map_err(|e| format!("could not make a certificate: {e}"))?;
-                fs::write(&cert, made.cert.pem())
-                    .map_err(|e| format!("{}: {e}", cert.display()))?;
-                fs::write(&key, made.signing_key.serialize_pem())
-                    .map_err(|e| format!("{}: {e}", key.display()))?;
-                // Only the daemon's user may read the private key.
-                fs::set_permissions(&key, fs::Permissions::from_mode(0o600))
-                    .map_err(|e| format!("{}: {e}", key.display()))?;
+                // The key is never on disk with wider permissions, and each
+                // file appears whole or not at all, so a crash here cannot
+                // leave half a pair that stops the next start.
+                let put = |path: &Path, text: String| -> Result<(), String> {
+                    let tmp = path.with_extension("tmp");
+                    let _ = fs::remove_file(&tmp);
+                    let write = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(&tmp)
+                        .and_then(|mut f| {
+                            f.write_all(text.as_bytes())?;
+                            f.sync_all()
+                        })
+                        .and_then(|()| fs::rename(&tmp, path));
+                    write.map_err(|e| format!("{}: {e}", path.display()))
+                };
+                put(&key, made.signing_key.serialize_pem())?;
+                put(&cert, made.cert.pem())?;
             }
             (
                 cert,

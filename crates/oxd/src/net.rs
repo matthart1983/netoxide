@@ -1,35 +1,50 @@
 //! Brings the machine's interfaces in line with the config, over netlink.
 //!
-//! This only ever adds. It puts the config's addresses on their interfaces,
-//! brings those links up, and turns on packet forwarding. It never removes
-//! an address or turns forwarding off, because something else on the machine
-//! may rely on them, and a firewall that takes the address it is managed
-//! through off its interface has locked its operator out.
+//! It puts the config's addresses on their interfaces, brings those links
+//! up, and turns on packet forwarding. It reports which addresses it added,
+//! so the daemon can take exactly those off again when a later config drops
+//! them or a commit fails half way. An address that was already there when
+//! Netoxide first saw the interface is never removed, and forwarding is
+//! never turned off, because something else on the machine may rely on them.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 use futures_util::stream::TryStreamExt;
 use ipnet::IpNet;
-use rtnetlink::LinkUnspec;
+use rtnetlink::{LinkUnspec, RouteMessageBuilder};
 
 /// "File exists": the address is already on the interface.
 const EEXIST: i32 = -17;
 
-/// Adds each address to its interface and brings the link up. Returns the
-/// interfaces the config names that this machine does not have.
-pub async fn ensure_addresses(wanted: &[(String, IpNet)]) -> Result<Vec<String>, String> {
+/// "Cannot assign requested address": the address is not on the interface.
+const EADDRNOTAVAIL: i32 = -99;
+
+/// What `ensure_addresses` did.
+#[derive(Default)]
+pub struct Ensured {
+    /// Interfaces the config names that this machine does not have.
+    pub missing: Vec<String>,
+    /// Addresses that were not there before and are now.
+    pub added: Vec<(String, IpNet)>,
+}
+
+/// Adds each address to its interface and brings the link up.
+pub async fn ensure_addresses(wanted: &[(String, IpNet)]) -> Result<Ensured, String> {
     let mut by_iface: BTreeMap<&str, Vec<&IpNet>> = BTreeMap::new();
     for (name, addr) in wanted {
         by_iface.entry(name).or_default().push(addr);
     }
+    let mut done = Ensured::default();
     if by_iface.is_empty() {
-        return Ok(vec![]);
+        return Ok(done);
     }
     let (connection, handle, _) =
         rtnetlink::new_connection().map_err(|e| format!("cannot open a netlink socket: {e}"))?;
     let task = tokio::spawn(connection);
 
-    let mut missing = vec![];
     for (name, addrs) in by_iface {
         let link = handle
             .link()
@@ -42,7 +57,7 @@ pub async fn ensure_addresses(wanted: &[(String, IpNet)]) -> Result<Vec<String>,
             Ok(Some(link)) => link.header.index,
             // The kernel answers "no such device" as an error, not an empty list.
             Ok(None) | Err(rtnetlink::Error::NetlinkError(_)) => {
-                missing.push(name.to_string());
+                done.missing.push(name.to_string());
                 continue;
             }
             Err(e) => return Err(format!("cannot look up interface {name}: {e}")),
@@ -54,9 +69,12 @@ pub async fn ensure_addresses(wanted: &[(String, IpNet)]) -> Result<Vec<String>,
                 .execute()
                 .await
             {
-                Ok(()) => {}
+                Ok(()) => done.added.push((name.to_string(), *addr)),
                 Err(rtnetlink::Error::NetlinkError(e)) if e.raw_code() == EEXIST => {}
-                Err(e) => return Err(format!("cannot put {addr} on {name}: {e}")),
+                Err(e) => {
+                    task.abort();
+                    return Err(format!("cannot put {addr} on {name}: {e}"));
+                }
             }
         }
         handle
@@ -67,7 +85,49 @@ pub async fn ensure_addresses(wanted: &[(String, IpNet)]) -> Result<Vec<String>,
             .map_err(|e| format!("cannot bring {name} up: {e}"))?;
     }
     task.abort();
-    Ok(missing)
+    Ok(done)
+}
+
+/// Takes addresses off their interfaces. One that is already gone, or whose
+/// interface is gone, counts as removed. Returns what could not be removed.
+pub async fn remove_addresses(unwanted: &[(String, IpNet)]) -> Vec<String> {
+    let mut failed = vec![];
+    if unwanted.is_empty() {
+        return failed;
+    }
+    let (connection, handle, _) = match rtnetlink::new_connection() {
+        Ok(c) => c,
+        Err(e) => return vec![format!("cannot open a netlink socket: {e}")],
+    };
+    let task = tokio::spawn(connection);
+    for (name, addr) in unwanted {
+        let link = handle
+            .link()
+            .get()
+            .match_name(name.clone())
+            .execute()
+            .try_next()
+            .await;
+        let Ok(Some(link)) = link else {
+            continue;
+        };
+        let mut found = handle
+            .address()
+            .get()
+            .set_link_index_filter(link.header.index)
+            .set_address_filter(addr.addr())
+            .set_prefix_length_filter(addr.prefix_len())
+            .execute();
+        while let Ok(Some(message)) = found.try_next().await {
+            match handle.address().del(message).execute().await {
+                Ok(()) => {}
+                Err(rtnetlink::Error::NetlinkError(e)) if e.raw_code() == EADDRNOTAVAIL => {}
+                Err(e) => failed.push(format!("cannot take {addr} off {name}: {e}")),
+            }
+        }
+    }
+    task.abort();
+    failed
 }
 
 /// Lets the kernel route packets between interfaces, for IPv4 and IPv6.
@@ -92,4 +152,81 @@ pub fn enable_forwarding(uplinks: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+async fn index_of(handle: &rtnetlink::Handle, name: &str) -> Option<u32> {
+    let link = handle
+        .link()
+        .get()
+        .match_name(name.to_string())
+        .execute()
+        .try_next()
+        .await;
+    link.ok().flatten().map(|l| l.header.index)
+}
+
+fn default_route(index: u32, gateway: IpAddr) -> rtnetlink::packet_route::route::RouteMessage {
+    match gateway {
+        IpAddr::V4(g) => RouteMessageBuilder::<Ipv4Addr>::new()
+            .output_interface(index)
+            .gateway(g)
+            .build(),
+        IpAddr::V6(g) => RouteMessageBuilder::<Ipv6Addr>::new()
+            .output_interface(index)
+            .gateway(g)
+            .build(),
+    }
+}
+
+/// Points the default route at each router, replacing one that is there.
+/// An interface this machine does not have is skipped: `ensure_addresses`
+/// has already reported it.
+pub async fn set_default_routes(wanted: &[(String, IpAddr)]) -> Result<(), String> {
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let (connection, handle, _) =
+        rtnetlink::new_connection().map_err(|e| format!("cannot open a netlink socket: {e}"))?;
+    let task = tokio::spawn(connection);
+    let mut result = Ok(());
+    for (name, gateway) in wanted {
+        let Some(index) = index_of(&handle, name).await else {
+            continue;
+        };
+        if let Err(e) = handle
+            .route()
+            .add(default_route(index, *gateway))
+            .replace()
+            .execute()
+            .await
+        {
+            result = Err(format!(
+                "cannot set the default route through {gateway} on {name}: {e}"
+            ));
+            break;
+        }
+    }
+    task.abort();
+    result
+}
+
+/// Removes default routes Netoxide set. One that is already gone counts as removed.
+pub async fn remove_default_routes(unwanted: &[(String, IpAddr)]) {
+    if unwanted.is_empty() {
+        return;
+    }
+    let Ok((connection, handle, _)) = rtnetlink::new_connection() else {
+        return;
+    };
+    let task = tokio::spawn(connection);
+    for (name, gateway) in unwanted {
+        if let Some(index) = index_of(&handle, name).await {
+            let _ = handle
+                .route()
+                .del(default_route(index, *gateway))
+                .execute()
+                .await;
+        }
+    }
+    task.abort();
 }

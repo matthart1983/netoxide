@@ -96,6 +96,17 @@ pub struct Interface {
     /// True when the default route leaves by this interface.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub default_route: bool,
+    /// The routers the default route goes through, at most one for IPv4
+    /// and one for IPv6, such as `["203.0.113.1"]`. Only on an interface
+    /// with `default_route`. Leave it out when the address comes from the
+    /// network, which then names the router itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gateway: Vec<std::net::IpAddr>,
+    /// Ask the network on this interface for the box's IPv4 address and
+    /// router (DHCP), as an internet provider's modem expects. Only on an
+    /// interface with `default_route` and no fixed IPv4 address.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dhcp_client: bool,
 }
 
 /// An interface address with its prefix length, such as `10.20.0.1/16`.

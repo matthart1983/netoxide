@@ -3,8 +3,9 @@
 # Install: copy to /etc/systemd/system/oxd.service, put the binaries in
 # /usr/bin, then `systemctl enable --now oxd`.
 #
-# This unit has passed `systemd-analyze verify` but has not been run on a
-# real system yet. Treat the sandboxing below as a starting point.
+# tests/vm/run.sh installs this unit in a virtual machine and checks the
+# daemon under it: DNS, DHCP, traffic, a crash, a reboot. It has not run on
+# hardware, or on a system with SELinux or AppArmor enforcing.
 
 [Unit]
 Description=Netoxide firewall daemon
@@ -15,7 +16,9 @@ Before=network-pre.target
 After=local-fs.target
 
 [Service]
-Type=simple
+# The daemon says when the rules are loaded, so the network waits for them.
+Type=notify
+NotifyAccess=main
 # Extra options go in OXD_ARGS, for example:
 #   OXD_ARGS=--lockdown --listen 0.0.0.0:8443
 # --lockdown drops inbound traffic until the first commit, which cuts a

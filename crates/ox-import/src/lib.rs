@@ -341,6 +341,8 @@ pub fn import_pfsense(xml: &str) -> Result<Imported, ImportError> {
                     .map(|a| IfaceAddr(*a))
                     .collect(),
                 default_route: i.gw4 || i.gw6,
+                gateway: vec![],
+                dhcp_client: false,
             },
         );
         report.translated.push(format!(

@@ -71,6 +71,10 @@ pub struct InitArgs<'a> {
     pub no_services: bool,
     /// Resolvers to forward DNS to, instead of the defaults.
     pub dns_upstream: &'a [IpAddr],
+    /// The provider assigns the address on the internet port.
+    pub wan_dhcp: bool,
+    /// The provider's routers, for an internet port with fixed addresses.
+    pub gateway: &'a [IpAddr],
 }
 
 pub fn init(args: &InitArgs, oxd: &Client) -> Result<()> {
@@ -124,6 +128,41 @@ pub fn init(args: &InitArgs, oxd: &Client) -> Result<()> {
             .unwrap_or_default(),
         name: wan_name.clone(),
     };
+    let wan_found = found.iter().find(|d| d.name == wan_name);
+    let has_v4 = wan.addrs.iter().any(|a| a.addr().is_ipv4());
+    let mut gateway = args.gateway.to_vec();
+    let wan_dhcp = if args.wan_dhcp {
+        true
+    } else if !gateway.is_empty() {
+        false
+    } else if interactive {
+        let answer = ask(
+            &format!("Does your provider assign the address on {wan_name} by itself? (yes or no)"),
+            "yes",
+        )?;
+        let fixed = matches!(answer.trim().to_lowercase().as_str(), "n" | "no");
+        if fixed {
+            let guess = wan_found
+                .and_then(|d| d.gateway)
+                .map(|g| g.to_string())
+                .unwrap_or_default();
+            let answer = ask(
+                "What is the provider's router address (the gateway)?",
+                &guess,
+            )?;
+            if !answer.trim().is_empty() {
+                gateway.push(
+                    answer.trim().parse().map_err(|_| {
+                        format!("'{answer}' is not an address, such as 203.0.113.1")
+                    })?,
+                );
+            }
+        }
+        !fixed
+    } else {
+        // No fixed address to use, so the provider must assign one.
+        !has_v4
+    };
 
     let mut lans = vec![];
     if args.lan.is_empty() {
@@ -169,6 +208,8 @@ pub fn init(args: &InitArgs, oxd: &Client) -> Result<()> {
             }
             serve
         }),
+        wan_dhcp,
+        gateway,
     };
     let config = ox_setup::starter(&answers)?;
     for port in std::iter::once(&answers.wan).chain(&answers.lans) {
@@ -208,9 +249,10 @@ pub fn init(args: &InitArgs, oxd: &Client) -> Result<()> {
             }
         }
     }
-    if answers.wan.addrs.is_empty() {
+    if !answers.wan_dhcp && answers.gateway.is_empty() {
         out!(
-            "{} has no fixed address in the config, which is fine for a provider that assigns one.",
+            "Note: {} has no gateway in the config, so the box sets no default route itself. \
+             Add one with --gateway, or use --wan-dhcp if the provider assigns the address.",
             answers.wan.name
         );
     }
