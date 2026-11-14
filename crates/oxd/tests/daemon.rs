@@ -185,7 +185,18 @@ fn commit_confirm_revert_and_rollback_against_the_kernel() {
         .filter(|e| e["event"] == "auto revert")
         .count();
     assert_eq!(reverts, 2);
-    assert!(entries.iter().any(|e| e["who"] == "tester"));
+    // The name comes from the kernel, not from anything the client sends.
+    // Inside the daemon's user namespace an outside caller has no name, so
+    // it is recorded by its mapped user ID.
+    assert!(
+        entries.iter().all(|e| e["who"] != "tester"),
+        "the x-ox-user header must not be trusted"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["event"] == "commit" && !e["who"].as_str().unwrap().is_empty())
+    );
 
     drop(d);
     std::fs::remove_dir_all(&dir).unwrap();
@@ -471,6 +482,175 @@ fn a_dhcp_client_gets_an_address_through_the_firewall() {
         r#"{"reason":"no dhcp"}"#,
     );
     assert_eq!(dhcp(&d, "02:00:00:00:00:02", "phone"), None);
+
+    drop(d);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Calls the HTTPS listener from inside the daemon's namespace with curl.
+/// Returns the status and the body.
+fn https(
+    d: &Daemon,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<&str>,
+) -> (u16, String) {
+    let mut cmd = Command::new("nsenter");
+    cmd.args(["--user", "--net", "--preserve-credentials", "-t"])
+        .arg(d.child.id().to_string())
+        // -k: the daemon made its own certificate, which curl has no reason to trust.
+        .args(["curl", "-sk", "-X", method, "-w", "\n%{http_code}"])
+        .arg(format!("https://127.0.0.1:8443{path}"));
+    if let Some(t) = token {
+        cmd.args(["-H", &format!("Authorization: Bearer {t}")]);
+    }
+    if let Some(b) = body {
+        cmd.args(["-H", "Content-Type: application/json", "--data-binary", b]);
+    }
+    let out = cmd.output().expect("curl runs");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let (body, code) = text.rsplit_once('\n').unwrap_or(("", "0"));
+    (code.trim().parse().unwrap_or(0), body.to_string())
+}
+
+/// Tokens, roles and four-eyes approval over the HTTPS listener.
+#[test]
+fn the_https_api_needs_a_token_and_respects_its_role() {
+    if !(have("curl", "--version") && have("nsenter", "--version")) {
+        eprintln!("skipped: needs curl and nsenter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("oxd-https-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let Some(d) = start_home(&dir, &["--listen", "127.0.0.1:8443", "--dry-run"]) else {
+        eprintln!("skipped: needs unshare(1) and unprivileged user namespaces");
+        return;
+    };
+    // Give the listener a moment to come up after the socket.
+    std::thread::sleep(Duration::from_millis(300));
+
+    // No token, or a wrong one: nothing but the page itself.
+    assert_eq!(https(&d, "GET", "/v1/status", None, None).0, 401);
+    assert_eq!(
+        https(&d, "GET", "/v1/status", Some("ox_wrong"), None).0,
+        401
+    );
+    let (code, page) = https(&d, "GET", "/", None, None);
+    assert_eq!(code, 200);
+    assert!(page.contains("Netoxide"));
+
+    // Tokens are made on the local socket, by an admin.
+    let token = |name: &str, role: &str| -> String {
+        let v = d.ok(
+            "POST",
+            "/v1/tokens",
+            &json!({ "name": name, "role": role }).to_string(),
+        );
+        v["token"].as_str().unwrap().to_string()
+    };
+    let (viewer, ana, jun, auditor) = (
+        token("viewer", "viewer"),
+        token("ana", "operator"),
+        token("jun", "operator"),
+        token("auditor", "auditor"),
+    );
+    let who = https(&d, "GET", "/v1/whoami", Some(&ana), None).1;
+    assert!(
+        who.contains("token:ana") && who.contains("operator"),
+        "{who}"
+    );
+
+    // A viewer reads and nothing else.
+    assert_eq!(https(&d, "GET", "/v1/status", Some(&viewer), None).0, 200);
+    let (code, text) = https(
+        &d,
+        "PUT",
+        "/v1/candidates/base",
+        Some(&viewer),
+        Some(BRANCH),
+    );
+    assert_eq!(code, 403, "{text}");
+    assert!(text.contains("may not save or delete candidates"), "{text}");
+    assert_eq!(https(&d, "GET", "/v1/audit", Some(&viewer), None).0, 403);
+    assert_eq!(https(&d, "GET", "/v1/audit", Some(&auditor), None).0, 200);
+    // Only an admin manages tokens, and an operator is not one.
+    assert_eq!(https(&d, "GET", "/v1/tokens", Some(&ana), None).0, 403);
+    assert_eq!(
+        https(&d, "POST", "/v1/rollback", Some(&ana), Some("{}")).0,
+        403
+    );
+
+    // An operator saves and commits.
+    assert_eq!(
+        https(&d, "PUT", "/v1/candidates/base", Some(&ana), Some(BRANCH)).0,
+        200
+    );
+    let (code, text) = https(
+        &d,
+        "POST",
+        "/v1/candidates/base/commit",
+        Some(&ana),
+        Some(r#"{"reason":"first"}"#),
+    );
+    assert_eq!(code, 200, "{text}");
+
+    // With four-eyes on, the author cannot approve their own candidate.
+    d.ok("PUT", "/v1/settings", r#"{"four_eyes":true}"#);
+    assert_eq!(
+        https(&d, "PUT", "/v1/candidates/smb", Some(&jun), Some(CANDIDATE)).0,
+        200
+    );
+    let commit = |t: &str| {
+        https(
+            &d,
+            "POST",
+            "/v1/candidates/smb/commit",
+            Some(t),
+            Some(r#"{"reason":"CHG-2207"}"#),
+        )
+    };
+    let (code, text) = commit(&jun);
+    assert_eq!(code, 403, "{text}");
+    assert!(text.contains("needs approval"), "{text}");
+    let (code, text) = https(&d, "POST", "/v1/candidates/smb/approve", Some(&jun), None);
+    assert_eq!(code, 422, "{text}");
+    assert_eq!(
+        https(
+            &d,
+            "POST",
+            "/v1/candidates/smb/approve",
+            Some(&viewer),
+            None
+        )
+        .0,
+        403
+    );
+    assert_eq!(
+        https(&d, "POST", "/v1/candidates/smb/approve", Some(&ana), None).0,
+        200
+    );
+    assert_eq!(commit(&jun).0, 200);
+
+    // A revoked token stops working at once.
+    d.ok("DELETE", "/v1/tokens/jun", "");
+    assert_eq!(https(&d, "GET", "/v1/status", Some(&jun), None).0, 401);
+
+    // The audit log names the tokens that acted.
+    let audit = https(&d, "GET", "/v1/audit", Some(&auditor), None).1;
+    assert!(
+        audit.contains("token:jun") && audit.contains("candidate approved"),
+        "{audit}"
+    );
+
+    // The private key the daemon made is readable by its owner only.
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(dir.join("state/tls/key.pem"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "key.pem mode is {mode:o}");
 
     drop(d);
     std::fs::remove_dir_all(&dir).unwrap();

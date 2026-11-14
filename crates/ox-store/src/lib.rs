@@ -14,6 +14,7 @@
 //! and in dry-run mode.
 
 mod audit;
+mod auth;
 
 use std::{
     fs,
@@ -28,6 +29,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub use audit::{Audit, AuditError, Entry};
+pub use auth::{Action, CandidateMeta, Identity, Role, Settings, Token};
 
 /// How many commits the box keeps.
 pub const HISTORY: u64 = 100;
@@ -142,6 +144,8 @@ pub enum StoreError {
     Invalid(String),
     #[error("commit #{commit} is waiting for confirmation; confirm or revert it first")]
     Busy { commit: u64 },
+    #[error("{0}")]
+    NeedsApproval(String),
     #[error("no commit is waiting for confirmation")]
     NothingPending,
     #[error("not applied, nothing changed: {0}")]
@@ -439,13 +443,157 @@ impl<A: Applier> Engine<A> {
         let path = self.candidate_path(name)?;
         check(text)?;
         write_atomic(&path, text.as_bytes())?;
+        // A new version of the candidate has no approval, whoever approved the last one.
+        let meta = CandidateMeta {
+            author: who.to_string(),
+            saved_at: now,
+            sha256: audit::sha256_hex(text.as_bytes()),
+            approved_by: None,
+            approved_at: None,
+        };
+        self.save_meta(name, &meta)?;
         self.audit.append(
             now,
             who,
             "candidate saved",
-            &format!("{name} sha256 {}", audit::sha256_hex(text.as_bytes())),
+            &format!("{name} sha256 {}", meta.sha256),
         )?;
         Ok(())
+    }
+
+    fn meta_path(&self, name: &str) -> Result<PathBuf> {
+        Ok(self.candidate_path(name)?.with_extension("meta.json"))
+    }
+
+    fn save_meta(&self, name: &str, meta: &CandidateMeta) -> Result<()> {
+        let json = serde_json::to_vec_pretty(meta).expect("meta is plain JSON");
+        Ok(write_atomic(&self.meta_path(name)?, &json)?)
+    }
+
+    /// Who saved a candidate and whether it is approved.
+    pub fn candidate_meta(&self, name: &str) -> Result<CandidateMeta> {
+        let text = self.candidate(name)?;
+        let mut meta: CandidateMeta =
+            auth::load(&self.meta_path(name)?).map_err(StoreError::Corrupt)?;
+        // An approval only counts for the exact text it was given for.
+        if meta.sha256 != audit::sha256_hex(text.as_bytes()) {
+            meta.approved_by = None;
+            meta.approved_at = None;
+        }
+        Ok(meta)
+    }
+
+    /// Records that someone other than the author has reviewed a candidate.
+    pub fn approve(&mut self, name: &str, who: &str, now: u64) -> Result<CandidateMeta> {
+        let mut meta = self.candidate_meta(name)?;
+        if meta.author == who {
+            return Err(StoreError::Invalid(format!(
+                "you saved candidate '{name}' last; the approval has to come from someone else"
+            )));
+        }
+        meta.approved_by = Some(who.to_string());
+        meta.approved_at = Some(now);
+        self.save_meta(name, &meta)?;
+        self.audit.append(
+            now,
+            who,
+            "candidate approved",
+            &format!("{name} sha256 {} by author {}", meta.sha256, meta.author),
+        )?;
+        Ok(meta)
+    }
+
+    // ── settings and tokens ─────────────────────────────────────────────
+
+    pub fn settings(&self) -> Result<Settings> {
+        auth::load(&self.dir.join("settings.json")).map_err(StoreError::Corrupt)
+    }
+
+    /// Turns the four-eyes rule on or off.
+    pub fn set_four_eyes(&mut self, on: bool, who: &str, now: u64) -> Result<Settings> {
+        let mut settings = self.settings()?;
+        settings.four_eyes = on;
+        let json = serde_json::to_vec_pretty(&settings).expect("settings are plain JSON");
+        write_atomic(&self.dir.join("settings.json"), &json)?;
+        self.audit.append(
+            now,
+            who,
+            "setting changed",
+            &format!("four-eyes approval {}", if on { "on" } else { "off" }),
+        )?;
+        Ok(settings)
+    }
+
+    pub fn tokens(&self) -> Result<Vec<Token>> {
+        auth::load(&self.dir.join("tokens.json")).map_err(StoreError::Corrupt)
+    }
+
+    fn save_tokens(&self, tokens: &[Token]) -> Result<()> {
+        let json = serde_json::to_vec_pretty(tokens).expect("tokens are plain JSON");
+        Ok(write_atomic(&self.dir.join("tokens.json"), &json)?)
+    }
+
+    /// Creates an access token and returns its secret. The secret is shown
+    /// once and never stored.
+    pub fn create_token(
+        &mut self,
+        name: &str,
+        role: Role,
+        ttl_secs: Option<u64>,
+        who: &str,
+        now: u64,
+    ) -> Result<String> {
+        if !is_name(name) {
+            return Err(StoreError::Invalid(format!(
+                "'{name}' is not a token name; use lowercase letters, digits and hyphens"
+            )));
+        }
+        let mut tokens = self.tokens()?;
+        if tokens.iter().any(|t| t.name == name) {
+            return Err(StoreError::Invalid(format!(
+                "a token called '{name}' exists; revoke it first"
+            )));
+        }
+        let secret = auth::new_secret()?;
+        tokens.push(Token {
+            name: name.to_string(),
+            role,
+            sha256: audit::sha256_hex(secret.as_bytes()),
+            created: now,
+            expires: ttl_secs.map(|t| now + t),
+            created_by: who.to_string(),
+        });
+        self.save_tokens(&tokens)?;
+        self.audit.append(
+            now,
+            who,
+            "token created",
+            &format!(
+                "{name} role {}{}",
+                role.as_str(),
+                ttl_secs
+                    .map(|t| format!(", expires in {t} s"))
+                    .unwrap_or_default()
+            ),
+        )?;
+        Ok(secret)
+    }
+
+    pub fn revoke_token(&mut self, name: &str, who: &str, now: u64) -> Result<()> {
+        let mut tokens = self.tokens()?;
+        let before = tokens.len();
+        tokens.retain(|t| t.name != name);
+        if tokens.len() == before {
+            return Err(StoreError::NotFound(format!("token '{name}'")));
+        }
+        self.save_tokens(&tokens)?;
+        self.audit.append(now, who, "token revoked", name)?;
+        Ok(())
+    }
+
+    /// Who a token secret belongs to, if it is known and not expired.
+    pub fn identify(&self, secret: &str, now: u64) -> Option<Identity> {
+        auth::verify(&self.tokens().ok()?, secret, now)
     }
 
     pub fn candidate(&self, name: &str) -> Result<String> {
@@ -456,6 +604,7 @@ impl<A: Applier> Engine<A> {
     pub fn delete_candidate(&mut self, name: &str, who: &str, now: u64) -> Result<()> {
         fs::remove_file(self.candidate_path(name)?)
             .map_err(|_| StoreError::NotFound(format!("candidate '{name}'")))?;
+        let _ = fs::remove_file(self.meta_path(name)?);
         self.audit.append(now, who, "candidate deleted", name)?;
         Ok(())
     }
@@ -517,6 +666,7 @@ impl<A: Applier> Engine<A> {
             None => {
                 if let Some(name) = &candidate {
                     let _ = fs::remove_file(self.candidate_path(name)?);
+                    let _ = fs::remove_file(self.meta_path(name)?);
                 }
             }
         }
@@ -549,6 +699,15 @@ impl<A: Applier> Engine<A> {
         now: u64,
     ) -> Result<Commit> {
         let text = self.candidate(name)?;
+        if self.settings()?.four_eyes {
+            let meta = self.candidate_meta(name)?;
+            if meta.approved_by.is_none() {
+                return Err(StoreError::NeedsApproval(format!(
+                    "candidate '{name}' needs approval from someone other than its author, {}",
+                    meta.author
+                )));
+            }
+        }
         self.apply_new(
             NewCommit {
                 text: &text,
@@ -615,6 +774,7 @@ impl<A: Applier> Engine<A> {
         self.save_state()?;
         if let Some(name) = &pending.candidate {
             let _ = fs::remove_file(self.candidate_path(name)?);
+            let _ = fs::remove_file(self.meta_path(name)?);
         }
         self.audit
             .append(now, who, "confirm", &format!("#{}", commit.id))?;
@@ -999,6 +1159,99 @@ mod tests {
         assert!(!open_box.status(1000).unwrap().lockdown);
         fs::remove_dir_all(d).unwrap();
         fs::remove_dir_all(d2).unwrap();
+    }
+
+    #[test]
+    fn four_eyes_needs_someone_other_than_the_author() {
+        let (d, mut e) = with_base("four-eyes");
+        e.set_four_eyes(true, "ana", 1100).unwrap();
+        let err = e
+            .commit_candidate("block-legacy-smb", "jun", "x", None, 1101)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::NeedsApproval(_)), "{err}");
+        assert!(!has_rule(&mut e, "r-0412"));
+
+        // jun saved it, so jun cannot approve it.
+        let err = e
+            .approve("block-legacy-smb", "jun", 1102)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("someone else"), "{err}");
+        e.approve("block-legacy-smb", "ana", 1103).unwrap();
+        assert_eq!(
+            e.candidate_meta("block-legacy-smb")
+                .unwrap()
+                .approved_by
+                .as_deref(),
+            Some("ana")
+        );
+
+        // Saving the candidate again drops the approval, even with the same text.
+        e.put_candidate("block-legacy-smb", CANDIDATE, "jun", 1104)
+            .unwrap();
+        assert!(
+            e.candidate_meta("block-legacy-smb")
+                .unwrap()
+                .approved_by
+                .is_none()
+        );
+        assert!(
+            e.commit_candidate("block-legacy-smb", "jun", "x", None, 1105)
+                .is_err()
+        );
+
+        e.approve("block-legacy-smb", "ana", 1106).unwrap();
+        e.commit_candidate("block-legacy-smb", "jun", "x", None, 1107)
+            .unwrap();
+        assert!(has_rule(&mut e, "r-0412"));
+
+        // With the rule off, no approval is asked for.
+        e.set_four_eyes(false, "ana", 1108).unwrap();
+        e.put_candidate("back", BRANCH, "jun", 1109).unwrap();
+        e.commit_candidate("back", "jun", "x", None, 1110).unwrap();
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn tokens_identify_their_holder_until_they_expire_or_are_revoked() {
+        let d = dir("tokens");
+        let mut e = open(&d, 1000);
+        let secret = e
+            .create_token("ci", Role::Operator, Some(3600), "ana", 1000)
+            .unwrap();
+        let stored = std::fs::read_to_string(d.join("tokens.json")).unwrap();
+        assert!(
+            !stored.contains(&secret),
+            "the secret itself is never stored"
+        );
+
+        let who = e.identify(&secret, 1500).unwrap();
+        assert_eq!((who.name.as_str(), who.role), ("token:ci", Role::Operator));
+        assert_eq!(e.identify("ox_wrong", 1500), None);
+        assert_eq!(e.identify(&secret, 4600), None, "expired");
+
+        assert!(
+            e.create_token("ci", Role::Viewer, None, "ana", 1001)
+                .is_err(),
+            "names are unique"
+        );
+        assert!(
+            e.create_token("Bad Name", Role::Viewer, None, "ana", 1001)
+                .is_err()
+        );
+        e.revoke_token("ci", "ana", 1002).unwrap();
+        assert_eq!(e.identify(&secret, 1500), None);
+        assert!(matches!(
+            e.revoke_token("ci", "ana", 1003),
+            Err(StoreError::NotFound(_))
+        ));
+
+        let events: Vec<String> = e.audit().unwrap().into_iter().map(|a| a.event).collect();
+        assert!(
+            events.contains(&"token created".to_string())
+                && events.contains(&"token revoked".to_string())
+        );
+        fs::remove_dir_all(d).unwrap();
     }
 
     #[test]

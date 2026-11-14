@@ -104,6 +104,18 @@ enum Command {
     Audit,
     /// List the addresses DHCP has handed out
     Leases,
+    /// Approve a candidate someone else saved (four-eyes)
+    Approve { candidate: String },
+    /// Require a second person's approval before a commit: on or off
+    FourEyes {
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
+    /// Access tokens for the HTTPS API and the web UI
+    #[command(subcommand)]
+    Token(TokenCmd),
+    /// Show who the daemon thinks you are
+    Whoami,
     /// Print the Netoxide table as the kernel holds it
     Kernel,
     /// Guided setup: pick the internet and inside ports, get a complete starter config
@@ -169,6 +181,24 @@ enum Command {
     /// Work on config files, without the daemon
     #[command(subcommand)]
     File(FileCmd),
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+    /// Create a token. Its secret is printed once and cannot be shown again
+    Create {
+        name: String,
+        /// viewer, auditor, operator or admin
+        #[arg(long, value_parser = ["viewer", "auditor", "operator", "admin"])]
+        role: String,
+        /// Stop working after this many days
+        #[arg(long)]
+        days: Option<u64>,
+    },
+    /// List tokens
+    List,
+    /// Revoke a token
+    Revoke { name: String },
 }
 
 #[derive(Subcommand)]
@@ -388,6 +418,9 @@ fn daemon(cli: &Cli) -> Result<()> {
                 }
             );
             out!("applier     {}", text(&s["applier"]));
+            if s["four_eyes"] == true {
+                out!("four-eyes   on: a commit needs approval from someone other than its author");
+            }
             for svc in s["services"].as_array().into_iter().flatten() {
                 out!("service     {} {}", text(&svc[0]), text(&svc[1]));
             }
@@ -539,6 +572,65 @@ fn daemon(cli: &Cli) -> Result<()> {
                 );
             }
             out!("\nchain verified: {} entries", entries.len());
+        }
+        Command::Approve { candidate } => {
+            let m = oxd.json("POST", &format!("/v1/candidates/{candidate}/approve"), None)?;
+            out!(
+                "approved {candidate}, saved by {}. It can now be committed.",
+                text(&m["author"])
+            );
+        }
+        Command::FourEyes { state } => {
+            let on = state == "on";
+            oxd.json("PUT", "/v1/settings", Some(&json!({ "four_eyes": on })))?;
+            out!(
+                "{}",
+                if on {
+                    "A commit now needs approval from someone other than the candidate's author."
+                } else {
+                    "Commits no longer need a second person's approval."
+                }
+            );
+        }
+        Command::Token(cmd) => match cmd {
+            TokenCmd::Create { name, role, days } => {
+                let v = oxd.json(
+                    "POST",
+                    "/v1/tokens",
+                    Some(&json!({ "name": name, "role": role, "ttl_secs": days.map(|d| d * 86_400) })),
+                )?;
+                out!("Token {name} with role {role}. This secret is shown once:\n");
+                out!("  {}", text(&v["token"]));
+                out!("\nUse it in the web UI, or send it as: Authorization: Bearer <token>");
+            }
+            TokenCmd::List => {
+                let rows = oxd.json("GET", "/v1/tokens", None)?;
+                let rows = rows.as_array().cloned().unwrap_or_default();
+                if rows.is_empty() {
+                    out!("no tokens");
+                }
+                for t in &rows {
+                    out!(
+                        "{:<20} {:<9} created {} by {}  {}",
+                        text(&t["name"]),
+                        text(&t["role"]),
+                        when(t["created"].as_u64().unwrap_or(0)),
+                        text(&t["created_by"]),
+                        match t["expires"].as_u64() {
+                            Some(e) => format!("expires {}", when(e)),
+                            None => "does not expire".to_string(),
+                        }
+                    );
+                }
+            }
+            TokenCmd::Revoke { name } => {
+                oxd.send("DELETE", &format!("/v1/tokens/{name}"), None)?;
+                out!("revoked token {name}");
+            }
+        },
+        Command::Whoami => {
+            let v = oxd.json("GET", "/v1/whoami", None)?;
+            out!("{} ({})", text(&v["name"]), text(&v["role"]));
         }
         Command::Leases => {
             let rows = oxd.json("GET", "/v1/leases", None)?;
