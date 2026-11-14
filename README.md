@@ -4,6 +4,7 @@ Netoxide is an open-source firewall and router OS for Linux with a Rust control 
 
 **Status: pre-alpha.** What exists today is a single-box firewall core. A daemon applies a typed config to the kernel through nftables, with commit, confirm, automatic revert, rollback and an audit log. There is a CLI and a pfSense importer. It has only been run inside network namespaces, never on a production box. Do not put it in front of a real network.
 
+- [Who it is for](#who-it-is-for)
 - [What works today](#what-works-today)
 - [Try it without touching your machine](#try-it-without-touching-your-machine)
 - [The config](#the-config)
@@ -20,6 +21,26 @@ Netoxide is an open-source firewall and router OS for Linux with a Rust control 
 - [Not built yet](#not-built-yet)
 - [Documents](#documents)
 - [Licence and name](#licence-and-name)
+
+## Who it is for
+
+Two groups, with one product for both:
+
+- **Home-lab users and small offices** running one box, who want a firewall that is quick to set up, clear about what it is doing, and free in full.
+- **Teams and service providers** running 10 to 300 firewalls, who want config as code, safe changes, an audit trail and fleet management.
+
+The design rule is "easy first, advanced within reach". Each area has an easy path and an advanced path over the same config, so the easy path writes ordinary config that the advanced tools can read and change. Nothing a single box needs depends on a controller, a login server or a fleet feature.
+
+| Area | Easy path | Advanced path |
+| --- | --- | --- |
+| Setup | A guided setup that writes the config. **Planned** | Write the config file. **Works today** |
+| Rules | "Forward a port", "block a device", "add a guest network". **Planned** | Zone-pair rules, address groups, services, NAT. **Works today** |
+| Changes | Apply, with automatic undo if you lock yourself out. **Works today** | Named candidates, plan with flow impact, rollback. **Works today.** Four-eyes approval is planned |
+| Understanding | Press `x` on a rule in the terminal UI to see what it does to a packet. **Works today** | `ox explain` for any packet, against running and candidate. **Works today.** Live trace is planned |
+| Interface | Terminal UI: view, commit, confirm, undo. **Works today.** Web UI is planned | CLI and HTTP API. **Work today.** Terraform provider is planned |
+| Scale | One box with no extra parts. **Works today** | Fleet controller, templates, staged rollouts. **Planned** |
+
+**If you run a home lab, be aware of where this is today.** You still write a TOML file by hand, there is no DHCP or DNS server, and there is no web UI, so Netoxide cannot yet replace a home router. The easy path is what gets built next. See [Not built yet](#not-built-yet).
 
 ## Why
 

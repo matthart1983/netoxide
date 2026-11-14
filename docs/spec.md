@@ -4,7 +4,7 @@ Nov 14, 2026 · @Matt
 
 ## Summary
 
-Netoxide is a working name for an open-source firewall and router OS on Linux, with a Rust control plane, built for teams that run 10 to 300 firewalls across sites. Its claim is that a buyer can check every promise it makes. The source is public from the first commit, the config has a published schema, upgrades are signed images that roll back on a failed boot, and the HA test results ship with each release.
+Netoxide is a working name for an open-source firewall and router OS on Linux, with a Rust control plane, built for two audiences: home-lab users running one box, and teams that run 10 to 300 firewalls across sites. It has to be easy to use on day one and still offer the advanced features a fleet needs. Its claim is that a buyer can check every promise it makes. The source is public from the first commit, the config has a published schema, upgrades are signed images that roll back on a failed boot, and the HA test results ship with each release.
 
 The research found one gap that no open project fills today. Nobody combines free stable releases, typed config with commit-confirm, a fleet controller in the open core, image upgrades and tested HA. pfSense and OPNsense charge for fleet management and keep a schemaless XML config. VyOS has the config model and sells its stable builds. NethSecurity has the controller and an OpenWrt config model. nfSensei, the Rust firewall from pfSense's co-founder, has no public source and one developer.
 
@@ -60,19 +60,31 @@ The evidence does not support several tempting claims, and the spec leaves them 
 
 ## Positioning and target users
 
-Netoxide is the firewall for people who run many firewalls. The positioning line is "every claim checkable", and each release publishes the artefacts that back it.
+Netoxide serves one box at home and hundreds at work with the same software. The positioning line is "every claim checkable", and each release publishes the artefacts that back it.
 
 | Ring | Who | What they run today | Why they move |
 | --- | --- | --- | --- |
 | 1 | MSPs and multi-site IT teams with 10 to 300 boxes | pfSense or OPNsense, often with home-grown scripts | Per-device fleet fees, no real config-as-code, upgrade risk across the fleet |
 | 2 | EU organisations answering CRA and supply-chain questionnaires | OPNsense, Sophos, FortiGate | SBOM, declared support period, EU steward, self-hosted management |
 | 3 | Platform teams running branch and edge sites | VyOS, plain nftables, NixOS routers | GitOps workflow with a supported product behind it |
+| Home | Home-lab users and small offices with one box | pfSense or OPNsense community editions, OpenWrt, UniFi | A guided setup, a clear UI, every feature free, and skills that carry over to work |
 
 Home labs are a first-class audience and get the same software free. A single box has to be easy to set up and run without reading this spec. Home-lab users are the test bed and the contributor pool, and they are the people who later bring the product to work, which is how pfSense and OPNsense grew. They are not the paying segment.
 
+Each area has an easy path and an advanced path over the same config.
+
+| Area | Easy path | Advanced path |
+|---|---|---|
+| Setup | A guided setup writes the config | Write or generate the config file, or pull it from Git |
+| Rules | "Forward a port", "block a device", "add a guest network" | Zone-pair rules, address groups, services, NAT |
+| Changes | Apply, with automatic undo if you lock yourself out | Named candidates, plan with flow impact, four-eyes approval, rollback |
+| Understanding | "Why was this blocked?" in the UI | `ox explain`, live trace, rule hygiene reports |
+| Interface | Web UI and terminal UI | CLI, API, Terraform provider |
+| Scale | One box with no extra parts | Fleet controller, templates, staged rollouts |
+
 Evidence for ring 1 is moderate. Both incumbents put their paid work into fleet management, a Netgate forum user evaluating Nexus for about 100 firewalls asked for finer RBAC ([Netgate forum](https://forum.netgate.com/post/1245184)), and a third-party SaaS sells OPNsense central management ([NetDefense](https://netdefense.io/opnsense-central-management)). We have no sizing. Phase 0 of the roadmap includes 15 interviews with fleet operators before the build starts.
 
-Netoxide does not replace a FortiGate or Palo Alto where the buyer needs application identification, TLS inspection at scale and a paid threat-intelligence feed. It also does not chase the 129 USD UniFi gateway buyer.
+Netoxide does not replace a FortiGate or Palo Alto where the buyer needs application identification, TLS inspection at scale and a paid threat-intelligence feed. It is also not a sealed appliance for a buyer who wants a 129 USD UniFi gateway and no view of how it works.
 
 ### The memory-safety claim
 
@@ -370,8 +382,8 @@ The dates assume six full-time engineers from March 2027. Proxmox needed more th
 
 Exit criteria per gate.
 
-1. **Go or stop, end of February 2027.** At least 10 of 15 fleet operators name fleet fees, config-as-code or upgrade risk unprompted, and 5 agree to be design partners. The benchmark rig publishes nftables against pfSense 26.10 on the same hardware. A legal reading of CRA steward status is in hand. We have read what 26.10 shipped and under which licence.
-2. **0.1 alpha, end of August 2027.** One box runs filtering, NAT, WireGuard, DNS and DHCP from a typed config. Commit-confirm reverts without reboot in a test that runs on every commit. A/B upgrade rollback passes 500 consecutive power-cut tests. The team's own sites run it.
+1. **Go or stop, end of February 2027.** At least 10 of 15 fleet operators name fleet fees, config-as-code or upgrade risk unprompted, and 5 agree to be design partners. Ten home-lab users try the single-box build, and at least seven finish setup without help. The benchmark rig publishes nftables against pfSense 26.10 on the same hardware. A legal reading of CRA steward status is in hand. We have read what 26.10 shipped and under which licence.
+2. **0.1 alpha, end of August 2027.** One box runs filtering, NAT, WireGuard, DNS and DHCP from a typed config. Commit-confirm reverts without reboot in a test that runs on every commit. A/B upgrade rollback passes 500 consecutive power-cut tests. The team's own sites run it. Five people who have not read the docs each reach a working router through the guided setup in under ten minutes.
 3. **0.5 beta, end of February 2028.** The controller manages 100 simulated and 20 real fleets. HA meets the failover target in published results. The importer translates 95% of items across 200 donated configs. The Terraform provider ships with the release.
 4. **1.0, end of August 2028.** The independent audit is published with all high findings fixed. The LTS branch opens with a 5-year support statement. A tested hardware list covers at least 10 models. The first compliance build has its CRA technical file started with a notified body.
 
@@ -392,6 +404,7 @@ The largest risk is that the target segment is smaller or less willing to move t
 | CRA Class II cost sinks the commercial entity | No sourced cost or duration for the assessment | Legal reading in Phase 0, steward and seller as separate entities |
 | AGPL blocks enterprise adoption | Some companies ban it | Decide in Phase 0 with design partners' legal teams |
 | Embedded C services carry the bugs Rust was meant to avoid | Unbound, Kea, FRR, strongSwan and Suricata are C or mixed | Sandbox each service, track Hickory, dora and Holo for replacement |
+| Two audiences pull the design apart | Easy defaults and fleet features compete for the same screens and the same engineering time | One config model with guided flows on top, and a usability test with new users at each gate |
 
 Open questions for you.
 
