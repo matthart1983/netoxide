@@ -271,22 +271,7 @@ fn edit(
     Ok(())
 }
 
-/// A candidate name from free text.
-fn candidate_name(prefix: &str, name: &str) -> String {
-    let mut s = String::new();
-    for c in name.chars() {
-        let c = c.to_ascii_lowercase();
-        if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            s.push(c);
-        } else if !s.ends_with('-') && !s.is_empty() {
-            s.push('-');
-        }
-    }
-    s.truncate(20);
-    format!("{prefix}-{}", s.trim_end_matches('-'))
-        .trim_end_matches('-')
-        .to_string()
-}
+use ox_setup::candidate_name;
 
 /// `192.168.10.20`, `192.168.10.20:8123` or `[2001:db8::20]:8123`.
 pub fn parse_target(s: &str) -> std::result::Result<(IpAddr, Option<u16>), String> {

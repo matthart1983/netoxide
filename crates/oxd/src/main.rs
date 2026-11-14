@@ -12,6 +12,8 @@
 
 mod api;
 mod services;
+mod tls;
+mod web;
 
 use std::{
     os::unix::fs::PermissionsExt,
@@ -98,6 +100,12 @@ struct Args {
     lockdown: bool,
     keep_privileges: bool,
     dnsmasq: String,
+    /// Address for the HTTPS listener, such as 0.0.0.0:8443.
+    listen: Option<std::net::SocketAddr>,
+    tls_cert: Option<PathBuf>,
+    tls_key: Option<PathBuf>,
+    /// Loopback address for a plain HTTP listener, for a TLS proxy on this machine.
+    listen_http: Option<std::net::SocketAddr>,
 }
 
 const USAGE: &str = "\
@@ -114,6 +122,16 @@ oxd: the Netoxide daemon
   --keep-service-privileges
                       do not switch services to an unprivileged user. Needed
                       inside a user namespace
+  --listen <addr:port>
+                      also serve the API and the web UI over HTTPS here.
+                      Every request needs an access token (see `ox token`)
+  --listen-http <127.0.0.1:port>
+                      the same without TLS, on a loopback address only, for
+                      a TLS proxy running on this machine
+  --tls-cert <file>   certificate chain for --listen, in PEM
+  --tls-key <file>    private key for --listen, in PEM. Without these two, a
+                      self-signed certificate is made and kept in the state
+                      directory
 ";
 
 fn parse_args() -> Result<Args, String> {
@@ -124,6 +142,10 @@ fn parse_args() -> Result<Args, String> {
         lockdown: false,
         keep_privileges: false,
         dnsmasq: "dnsmasq".into(),
+        listen: None,
+        tls_cert: None,
+        tls_key: None,
+        listen_http: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -134,6 +156,30 @@ fn parse_args() -> Result<Args, String> {
             "--lockdown" => args.lockdown = true,
             "--keep-service-privileges" => args.keep_privileges = true,
             "--dnsmasq" => args.dnsmasq = it.next().ok_or("--dnsmasq needs a value")?,
+            "--listen" => {
+                let v = it.next().ok_or("--listen needs an address and port")?;
+                args.listen = Some(v.parse().map_err(|_| {
+                    format!("'{v}' is not an address and port, such as 0.0.0.0:8443")
+                })?);
+            }
+            "--listen-http" => {
+                let v = it.next().ok_or("--listen-http needs an address and port")?;
+                let addr: std::net::SocketAddr = v.parse().map_err(|_| {
+                    format!("'{v}' is not an address and port, such as 127.0.0.1:8080")
+                })?;
+                // Tokens would cross the network in the clear on any other address.
+                if !addr.ip().is_loopback() {
+                    return Err(
+                        "--listen-http only accepts a loopback address; use --listen for HTTPS"
+                            .into(),
+                    );
+                }
+                args.listen_http = Some(addr);
+            }
+            "--tls-cert" => {
+                args.tls_cert = Some(it.next().ok_or("--tls-cert needs a file")?.into())
+            }
+            "--tls-key" => args.tls_key = Some(it.next().ok_or("--tls-key needs a file")?.into()),
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument '{other}'")),
         }
@@ -200,19 +246,55 @@ async fn serve(args: Args) -> Result<(), String> {
             "applying to the kernel"
         }
     );
-    let socket = args.socket.clone();
-    axum::serve(listener, api::router(shared, leases))
-        .with_graceful_shutdown(async {
-            let mut term =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("SIGTERM handler");
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = term.recv() => {}
+    if args.tls_cert.is_some() != args.tls_key.is_some() {
+        return Err("--tls-cert and --tls-key go together".into());
+    }
+    if let Some(addr) = args.listen {
+        let (config, note) = tls::config(
+            &args.state_dir,
+            args.tls_cert.as_deref(),
+            args.tls_key.as_deref(),
+        )
+        .await?;
+        // No connect info here, so every request must carry a token.
+        let app = api::router(shared.clone(), leases.clone());
+        eprintln!("oxd: HTTPS on {addr} ({note}); every request needs an access token");
+        tokio::spawn(async move {
+            if let Err(e) = axum_server::bind_rustls(addr, config)
+                .serve(app.into_make_service())
+                .await
+            {
+                eprintln!("oxd: the HTTPS listener stopped: {e}");
             }
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+        });
+    }
+    if let Some(addr) = args.listen_http {
+        let plain = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| format!("{addr}: {e}"))?;
+        let app = api::router(shared.clone(), leases.clone());
+        eprintln!("oxd: HTTP on {addr}, loopback only; every request needs an access token");
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(plain, app).await {
+                eprintln!("oxd: the HTTP listener stopped: {e}");
+            }
+        });
+    }
+    let socket = args.socket.clone();
+    axum::serve(
+        listener,
+        api::router(shared, leases).into_make_service_with_connect_info::<api::Peer>(),
+    )
+    .with_graceful_shutdown(async {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(socket);
     eprintln!("oxd: stopped; the loaded ruleset stays in place");
     Ok(())

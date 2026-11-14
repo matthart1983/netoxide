@@ -132,6 +132,7 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
     let mut config = Config {
         schema: SCHEMA_VERSION,
         hostname: a.hostname.clone(),
+        ipv6_autoconfig: vec![],
         zones: [
             (
                 "wan".to_string(),
@@ -267,6 +268,13 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
                 IpNet::V4(n) => Some(*n),
                 IpNet::V6(_) => None,
             });
+            if lan
+                .addrs
+                .iter()
+                .any(|n| n.addr().is_ipv6() && n.prefix_len() == 64)
+            {
+                config.ipv6_autoconfig.push(lan.name.clone());
+            }
             if let Some((first, last)) = own.and_then(pool) {
                 config.dhcp.insert(
                     lan.name.clone(),
@@ -394,6 +402,11 @@ pub fn describe(config: &Config) -> Vec<String> {
             out.push(format!("local names end in .{d}"));
         }
     }
+    for name in &config.ipv6_autoconfig {
+        out.push(format!(
+            "devices on {name} give themselves an IPv6 address from the network the box announces"
+        ));
+    }
     for (name, p) in &config.dhcp {
         out.push(format!(
             "devices on {name} get an address from {} to {}, kept for {}",
@@ -457,6 +470,13 @@ fn fresh_id(config: &Config, prefix: &str, name: &str) -> String {
         n += 1;
     }
     id
+}
+
+/// A candidate name for a one-step action, such as `forward-home-assistant`.
+pub fn candidate_name(prefix: &str, name: &str) -> String {
+    format!("{prefix}-{}", slug(name, 20))
+        .trim_end_matches('-')
+        .to_string()
 }
 
 /// The zone whose interface network holds an address.

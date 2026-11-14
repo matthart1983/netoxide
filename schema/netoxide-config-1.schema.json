@@ -437,6 +437,13 @@
       "description": "Interfaces by kernel name, such as `lan0.20`.",
       "type": "object"
     },
+    "ipv6_autoconfig": {
+      "description": "Interfaces where the box announces its IPv6 network, so devices there\ngive themselves an address and learn the box as their router.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "nat": {
       "$ref": "#/$defs/Nat"
     },

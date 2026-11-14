@@ -347,6 +347,28 @@ fn a_chain_that_cannot_be_merged_enough_is_refused() {
 }
 
 #[test]
+fn a_policy_from_self_is_dispatched_by_the_interface_the_packet_leaves_by() {
+    let own = format!(
+        "{BRANCH}\n[[policy]]\nfrom = \"self\"\nto = \"wan\"\n\n[[policy.rule]]\nid = \"r-out\"\nname = \"out\"\naction = \"accept\"\nservice = [\"dns\"]\n"
+    );
+    let rs = compile(&Config::from_toml(&own).unwrap()).unwrap();
+    let text = render(&rs).0.to_string();
+    assert!(
+        text.contains("\"name\":\"out_zones\""),
+        "the output chain needs its own dispatch map"
+    );
+    assert!(
+        text.contains("[\"wan0\",{\"jump\":{\"target\":\"p_self__wan\"}}]"),
+        "{text}"
+    );
+    // Without such a policy the output chain stays untouched.
+    let plain = render(&compile(&Config::from_toml(BRANCH).unwrap()).unwrap())
+        .0
+        .to_string();
+    assert!(!plain.contains("out_zones"));
+}
+
+#[test]
 fn stats_count_what_was_rendered() {
     let rs = compile(&Config::from_toml(BRANCH).unwrap()).unwrap();
     let (json, stats) = render(&rs);
@@ -373,7 +395,7 @@ fn the_kernel_accepts_the_ruleset() {
     match nft(&["--version"]) {
         Ok(o) if o.status.success() => {}
         _ => {
-            eprintln!("skipped: needs unshare(1), nft(8) and unprivileged user namespaces");
+            skip("needs unshare(1), nft(8) and unprivileged user namespaces");
             return;
         }
     }
@@ -390,10 +412,15 @@ fn the_kernel_accepts_the_ruleset() {
         "source = [\"any\"]\ndestination = [\"10.30.3.0/24\"]\nservice = [\"tcp/8080\"]",
     ));
     let long = with_rules(&long);
+    // The fourth filters what the box itself sends to the internet.
+    let own = format!(
+        "{BRANCH}\n[[policy]]\nfrom = \"self\"\nto = \"wan\"\n\n[[policy.rule]]\nid = \"r-out\"\nname = \"out\"\naction = \"accept\"\nservice = [\"dns\", \"https\", \"ping\"]\n"
+    );
     for (name, toml) in [
         ("branch", BRANCH),
         ("candidate", CANDIDATE),
         ("merged", long.as_str()),
+        ("own-traffic", own.as_str()),
     ] {
         let rs = compile(&Config::from_toml(toml).unwrap()).unwrap();
         let (json, stats) = render(&rs);
@@ -443,4 +470,62 @@ fn the_kernel_accepts_the_ruleset() {
         twice.extend(json["nftables"].as_array().unwrap().clone());
         load("twice", &serde_json::json!({ "nftables": twice }), false);
     }
+}
+
+#[test]
+fn hygiene_finds_dead_and_redundant_rules_in_both_families() {
+    use ox_nft::{FindingKind, hygiene};
+    // The example config is clean.
+    let clean = compile(&Config::from_toml(BRANCH).unwrap()).unwrap();
+    assert!(hygiene(&clean).is_empty(), "{:?}", hygiene(&clean));
+
+    let extra = [
+        // Covered by r-0301 (staff to intranet, http and https), same action.
+        rule(
+            "dup",
+            "accept",
+            "source = [\"10.20.7.0/24\", \"2001:db8:4a00:1:7::/80\"]\ndestination = [\"@intranet\"]\nservice = [\"https\"]",
+        ),
+        // Covered by r-0388 with the other action: it can never apply.
+        rule(
+            "dead",
+            "drop",
+            "source = [\"10.20.4.17\"]\ndestination = [\"10.30.0.8\"]\nservice = [\"tcp/445\"]",
+        ),
+        // Not covered: a wider source than any earlier rule.
+        rule(
+            "fine",
+            "accept",
+            "source = [\"10.0.0.0/8\"]\ndestination = [\"@intranet\"]\nservice = [\"https\"]",
+        ),
+        rule("open", "accept", ""),
+        rule("after", "drop", "service = [\"tcp/23\"]"),
+    ];
+    let rs = compile(&Config::from_toml(&with_rules(&extra)).unwrap()).unwrap();
+    let found: Vec<(String, FindingKind)> =
+        hygiene(&rs).into_iter().map(|f| (f.rule, f.kind)).collect();
+    assert_eq!(
+        found,
+        [
+            ("dup".to_string(), FindingKind::Redundant),
+            ("dead".to_string(), FindingKind::Shadowed),
+            ("open".to_string(), FindingKind::AllowsEverything),
+            ("after".to_string(), FindingKind::Shadowed),
+        ]
+    );
+    let detail = &hygiene(&rs)[1].detail;
+    assert!(
+        detail.contains("r-0388") && detail.contains("never applies"),
+        "{detail}"
+    );
+}
+
+/// Notes a test that cannot run here. With OX_REQUIRE_KERNEL_TESTS set, as
+/// in CI, a skip is a failure, so these tests cannot silently stop running.
+fn skip(why: &str) {
+    assert!(
+        std::env::var_os("OX_REQUIRE_KERNEL_TESTS").is_none(),
+        "this test was required but could not run: it {why}"
+    );
+    eprintln!("skipped: {why}");
 }

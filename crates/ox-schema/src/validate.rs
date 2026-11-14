@@ -209,10 +209,13 @@ impl Checker<'_> {
         for p in &c.policies {
             let pair = format!("policy {} → {}", p.from, p.to);
             if p.from == SELF_ZONE {
-                self.add(
-                    &pair,
-                    "rules for traffic sent by the box itself are not in schema 1; it is allowed out",
-                );
+                // Traffic the box itself sends. It needs somewhere to go.
+                if p.to == SELF_ZONE {
+                    self.add(
+                        &pair,
+                        "the box talking to itself is always allowed and takes no rules",
+                    );
+                }
             } else if !c.zones.contains_key(&p.from) {
                 self.add(&pair, format!("zone '{}' is not defined", p.from));
             } else if c.zone_interfaces(&p.from).is_empty() {
@@ -363,6 +366,29 @@ impl Checker<'_> {
             })
     }
 
+    /// Whether a policy for traffic the box sends to a zone accepts this
+    /// port. `None` when there is no such policy, which means it is allowed.
+    fn self_accepts(&self, to: &str, proto: Proto, port: u16) -> Option<bool> {
+        let policy = self
+            .config
+            .policies
+            .iter()
+            .find(|p| p.from == SELF_ZONE && p.to == to)?;
+        Some(
+            policy
+                .rules
+                .iter()
+                .filter(|r| r.enabled && r.action == Action::Accept)
+                .any(|r| match self.config.resolve_services(&r.service) {
+                    None => true,
+                    Some(specs) => specs.iter().any(|s| {
+                        matches!(s, PortSpec::Ports { proto: p, first, last }
+                            if *p == proto && (*first..=*last).contains(&port))
+                    }),
+                }),
+        )
+    }
+
     fn services(&mut self) {
         let c = self.config;
         if let Some(dns) = &c.dns {
@@ -408,6 +434,26 @@ impl Checker<'_> {
                     );
                 }
             }
+            // The resolver forwards to its upstreams by the default route. If
+            // the box's own traffic to that zone is filtered, DNS must be let out.
+            for zone in c
+                .interfaces
+                .values()
+                .filter(|i| i.default_route)
+                .map(|i| i.zone.as_str())
+                .collect::<BTreeSet<_>>()
+            {
+                let out = |proto| self.self_accepts(zone, proto, 53);
+                if out(Proto::Udp) == Some(false) || out(Proto::Tcp) == Some(false) {
+                    self.add(
+                        "dns",
+                        format!(
+                            "the resolver forwards queries out by zone {zone}, but the policy self → {zone} \
+                             does not accept DNS; add an accept rule there for udp/53 and tcp/53"
+                        ),
+                    );
+                }
+            }
             let mut names = BTreeSet::new();
             for h in &dns.hosts {
                 let at = format!("dns host {}", h.name);
@@ -419,6 +465,30 @@ impl Checker<'_> {
                 }
                 if !names.insert((h.name.to_ascii_lowercase(), h.address.is_ipv4())) {
                     self.add(&at, "this name is listed twice for the same address family");
+                }
+            }
+        }
+
+        let mut announced = BTreeSet::new();
+        for name in &c.ipv6_autoconfig {
+            let at = format!("ipv6_autoconfig {name}");
+            if !announced.insert(name) {
+                self.add(&at, "this interface is listed twice");
+            }
+            match c.interfaces.get(name) {
+                None => self.add(&at, "this interface is not defined"),
+                Some(i) => {
+                    // Devices build their address from a 64-bit network.
+                    let ok = i
+                        .addresses
+                        .iter()
+                        .any(|a| a.0.addr().is_ipv6() && a.0.prefix_len() == 64);
+                    if !ok {
+                        self.add(
+                            &at,
+                            "the interface needs an IPv6 address with a /64 prefix to announce",
+                        );
+                    }
                 }
             }
         }
@@ -485,6 +555,16 @@ impl Checker<'_> {
                     format!(
                         "addresses are handed out here, but no rule in {} → self accepts DHCP; \
                          add an accept rule there for udp/67",
+                        iface.zone
+                    ),
+                );
+            }
+            if self.self_accepts(&iface.zone, Proto::Udp, 68) == Some(false) {
+                self.add(
+                    &at,
+                    format!(
+                        "the policy self → {} filters what the box sends there and does not accept \
+                         DHCP replies; add an accept rule there for udp/68",
                         iface.zone
                     ),
                 );

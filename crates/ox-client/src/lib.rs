@@ -13,14 +13,12 @@ use serde_json::Value;
 
 pub struct Client {
     socket: PathBuf,
-    user: String,
 }
 
 impl Client {
     pub fn new(socket: &Path) -> Client {
         Client {
             socket: socket.to_path_buf(),
-            user: std::env::var("USER").unwrap_or_else(|_| "unknown".into()),
         }
     }
 
@@ -38,11 +36,9 @@ impl Client {
                 self.socket.display()
             )
         })?;
-        // Header values must stay on one line.
-        let user: String = self.user.chars().filter(|c| !c.is_control()).collect();
         let (content_type, payload) = body.unwrap_or(("text/plain", ""));
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: oxd\r\nConnection: close\r\nx-ox-user: {user}\r\n\
+            "{method} {path} HTTP/1.1\r\nHost: oxd\r\nConnection: close\r\n\
              Content-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{payload}",
             payload.len()
         );

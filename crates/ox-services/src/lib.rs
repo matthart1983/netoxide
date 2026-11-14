@@ -27,7 +27,7 @@ const ROOT_ANCHORS: [&str; 2] = [
 /// file and similar on the command line, so this text depends on the config
 /// alone and two boxes with the same config render the same file.
 pub fn dnsmasq_conf(config: &Config) -> Option<String> {
-    if config.dns.is_none() && config.dhcp.is_empty() {
+    if config.dns.is_none() && config.dhcp.is_empty() && config.ipv6_autoconfig.is_empty() {
         return None;
     }
     let mut out = String::new();
@@ -53,11 +53,14 @@ pub fn dnsmasq_conf(config: &Config) -> Option<String> {
         .iter()
         .copied()
         .chain(config.dhcp.keys().map(String::as_str))
+        .chain(config.ipv6_autoconfig.iter().map(String::as_str))
         .collect();
     for name in &all {
         line(&format!("interface={name}"));
     }
-    for name in dns_ifaces.iter().filter(|n| !config.dhcp.contains_key(**n)) {
+    let hands_out =
+        |n: &str| config.dhcp.contains_key(n) || config.ipv6_autoconfig.iter().any(|i| i == n);
+    for name in dns_ifaces.iter().filter(|n| !hands_out(n)) {
         line(&format!("no-dhcp-interface={name}"));
     }
 
@@ -127,6 +130,14 @@ pub fn dnsmasq_conf(config: &Config) -> Option<String> {
                 let _ = write!(entry, ",{n}");
             }
             line(&entry);
+        }
+    }
+    if !config.ipv6_autoconfig.is_empty() {
+        // Announce the interface's own /64. Devices pick their address
+        // themselves; the box hands out none and keeps no IPv6 leases.
+        line("enable-ra");
+        for name in &config.ipv6_autoconfig {
+            line(&format!("dhcp-range=::,constructor:{name},ra-only,64,12h"));
         }
     }
     if !config.dhcp.is_empty() {

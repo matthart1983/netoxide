@@ -22,13 +22,17 @@ decision. This file gives you what you need to start working.
 | Plan | `crates/ox-plan` | Config diff, and which observed flows change verdict |
 | Commit engine | `crates/ox-store` | Candidates, commits, commit-confirm, auto revert, rollback, hash-chained audit log |
 | Kernel apply | `crates/ox-libnft` | FFI to libnftables. The only crate with `unsafe` |
-| Daemon | `crates/oxd` | HTTP+JSON API on a Unix socket, applies to the kernel, `--dry-run` |
+| Daemon | `crates/oxd` | HTTP+JSON API on a Unix socket and on HTTPS (`--listen`), applies to the kernel, runs dnsmasq, serves the web UI and `/metrics` |
+| Access control | `crates/ox-store/src/auth.rs`, `crates/oxd/src/api.rs` | Socket peer = admin, named from the kernel. HTTPS = bearer token with a role (viewer, auditor, operator, admin). Four-eyes approval. Every handler takes a `Caller` and calls `caller.may(Action::…)` first |
+| Web UI | `crates/oxd/web/` | `index.html`, `app.js`, `app.css`, compiled in with `include_str!`. No build step, no dependencies, strict CSP, daemon text inserted with `textContent` only |
+| Hygiene | `crates/ox-nft/src/hygiene.rs` | Shadowed, redundant and allow-everything rules; `oxd` adds "no packets" from kernel counters |
+| Packaging | `dist/`, `.github/workflows/ci.yml`, `SECURITY.md` | systemd unit (verified for syntax only), install steps (never run), CI |
 | CLI | `crates/ox-cli` | `ox`: daemon commands, `ox file ...` offline commands, `ox import` |
 | Socket client | `crates/ox-client` | The small HTTP client `ox` and the TUI share |
 | DNS and DHCP | `crates/ox-services` + `crates/oxd/src/services.rs` | `[dns]` and `[dhcp.<iface>]` in the schema, rendered as a dnsmasq config; `oxd` runs and restarts dnsmasq. Applied and reverted with the ruleset as one `Target` |
 | Easy path | `crates/ox-setup` | `detect` (ports of this machine), `starter` (guided-setup config), `add_forward`, `block`, `describe`. Behind `ox init`, `ox forward`, `ox block` |
 | Importer | `crates/ox-import` | pfSense config.xml → config + report + differential verify |
-| Services, VPN, HA, API auth/RBAC, web UI, controller, OS image | — | **Not started** |
+| VPN, multi-WAN, routing protocols, IDS, HA, controller, Terraform, OS image | — | **Not started** |
 
 The daemon has only run inside rootless network namespaces. Nobody has run it
 on a real box.
@@ -81,6 +85,7 @@ Matt's design goal (14 Nov 2026): Netoxide has to appeal to home-lab users and t
 ## Hard rules for code
 
 - `#![forbid(unsafe_code)]` in every first-party crate, except one small audited FFI crate. Each `unsafe` block there gets an audit note.
+- The only crate with `unsafe` is `ox-libnft`. `nix` gives safe wrappers for the few system calls the rest needs.
 - Never call `std::process::Command` with shell strings from `oxd` or its libraries. `oxd` starts dnsmasq with a fixed argument list (`crates/oxd/src/services.rs`); that is the only process it starts. The spec wants services as systemd units; that is not done yet.
 - Every dependency change passes `cargo-deny` and `cargo-vet`. `deny.toml` is in place and `cargo deny check` passes. `cargo-vet` is not set up yet.
 - The firewall ruleset swaps in one nftables transaction. The rule compiler emits sets, maps and verdict maps, never a linear chain longer than 32 rules. A zone pair over 32 is merged (`Chain::layout` in `ox-nft`): neighbouring rules with the same action share one concatenated-set lookup. Only neighbours merge, so first-match order holds, and nftables refuses overlapping set entries, so an overlapping rule starts a new run. Merged rules share a counter. A pair still over 32 is refused.
@@ -112,16 +117,24 @@ examples/         branch.toml, branch-candidate.toml, flows.jsonl, pfsense-confi
 tui/              netoxide-tui: live.rs + live_ui.rs (live mode), app.rs + ui.rs + data.rs (mock mode)
 ```
 
-Proposed next, not decided, roughly in this order. The two-audience goal moved single-box ease of use ahead of fleet security:
+Proposed next, not decided, roughly in this order:
 
-1. Rules for traffic the box sends; IPv6 address handout (router advertisements); DHCP tested with a real client over a veth pair. (`ox init`, `ox forward`, `ox block`, lockdown, DNS and DHCPv4 are built.)
+1. Run it on real hardware or a VM with systemd: the unit in `dist/`, the install steps, a first watched deployment. Nothing has left a network namespace yet.
 2. Services as sandboxed systemd units instead of direct children of `oxd`; Unbound and Kea renderers beside dnsmasq. The schema must stay backend-neutral.
-3. More one-step actions (add a guest network, allow a service) and the same actions in the TUI, plus rule and candidate editing there. New actions go in `ox-setup` as functions over `Config` that return plain sentences, and they must prove their result with `ox-explain` the way `add_forward` does.
-4. A web UI on the daemon's API. Home users expect one.
-5. API security: TLS listener, OIDC or token auth, the five roles, four-eyes approval. Today the socket's file permission is the only control.
-6. WireGuard, then IPsec.
+3. More one-step actions (add a guest network, allow a service) in `ox-setup`, the same actions in the TUI, rule editing there, and `ox trace`.
+4. WireGuard, then IPsec.
+5. OIDC sign-in, finer roles, and `ox` over HTTPS (the CLI client is Unix-socket only).
+6. Multi-WAN, FRR, CAKE, Suricata.
 7. OPNsense import, and testing the pfSense importer against real backups.
-8. HA, the fleet controller, the OS image. These are later phases in the spec.
+8. HA, the fleet controller, a Terraform provider, the OS image.
+9. An independent security audit before any 1.0.
+
+Rules for work on the API and the web UI:
+
+- A new route takes a `Caller` and checks `caller.may(...)` before anything else. Add its case to the HTTPS test in `crates/oxd/tests/daemon.rs`.
+- Never trust a name the client sends. On the socket it comes from `SO_PEERCRED`; on HTTPS from the token.
+- In `app.js`, build elements with `h()` and pass daemon text as children. Never assign `innerHTML`. No inline script or style: the CSP forbids both.
+- To look at the web UI, run `oxd --dry-run --listen-http 127.0.0.1:8098` with a scratch state directory and open it in a browser. `--dry-run` loads nothing into the kernel.
 
 Run before handing work back:
 
