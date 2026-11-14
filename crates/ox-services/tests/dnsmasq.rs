@@ -90,7 +90,7 @@ fn dnsmasq_accepts_the_rendered_config() {
         .output()
         .is_ok_and(|o| o.status.success());
     if !ok {
-        eprintln!("skipped: dnsmasq is not installed");
+        skip("dnsmasq is not installed");
         return;
     }
     let dhcp_only = HOME.split("[dns]").next().unwrap().to_string()
@@ -128,4 +128,14 @@ fn lease_files_are_read() {
         ("192.168.10.5", Some("nas"))
     );
     assert_eq!(rows[1].name, None);
+}
+
+/// Notes a test that cannot run here. With OX_REQUIRE_KERNEL_TESTS set, as
+/// in CI, a skip is a failure, so these tests cannot silently stop running.
+fn skip(why: &str) {
+    assert!(
+        std::env::var_os("OX_REQUIRE_KERNEL_TESTS").is_none(),
+        "this test was required but could not run: it {why}"
+    );
+    eprintln!("skipped: {why}");
 }

@@ -108,7 +108,7 @@ fn commit_confirm_revert_and_rollback_against_the_kernel() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let Some(d) = Daemon::start(&dir) else {
-        eprintln!("skipped: needs unshare(1), unprivileged user namespaces and libnftables");
+        skip("needs unshare(1), unprivileged user namespaces and libnftables");
         return;
     };
 
@@ -290,14 +290,14 @@ fn have(program: &str, arg: &str) -> bool {
 #[test]
 fn dns_and_dhcp_follow_the_commits() {
     if !(have("dnsmasq", "--version") && have("dig", "-v") && have("nsenter", "--version")) {
-        eprintln!("skipped: needs dnsmasq, dig and nsenter");
+        skip("needs dnsmasq, dig and nsenter");
         return;
     }
     let dir = std::env::temp_dir().join(format!("oxd-dns-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let Some(d) = start_home(&dir, &["--lockdown"]) else {
-        eprintln!("skipped: needs unshare(1), unprivileged user namespaces and libnftables");
+        skip("needs unshare(1), unprivileged user namespaces and libnftables");
         return;
     };
 
@@ -380,7 +380,7 @@ fn a_service_that_cannot_run_refuses_the_commit_and_changes_nothing() {
     std::fs::create_dir_all(&dir).unwrap();
     // `false` stands in for a dnsmasq that rejects every config.
     let Some(d) = start_home(&dir, &["--dnsmasq", "false"]) else {
-        eprintln!("skipped: needs unshare(1), unprivileged user namespaces and libnftables");
+        skip("needs unshare(1), unprivileged user namespaces and libnftables");
         return;
     };
     d.ok("PUT", "/v1/candidates/base", BRANCH);
@@ -437,14 +437,14 @@ fn a_dhcp_client_gets_an_address_through_the_firewall() {
         && have("python3", "--version")
         && have("nsenter", "--version"))
     {
-        eprintln!("skipped: needs dnsmasq, python3 and nsenter");
+        skip("needs dnsmasq, python3 and nsenter");
         return;
     }
     let dir = std::env::temp_dir().join(format!("oxd-dhcp-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let Some(d) = start_home(&dir, &["--lockdown"]) else {
-        eprintln!("skipped: needs unshare(1), unprivileged user namespaces and libnftables");
+        skip("needs unshare(1), unprivileged user namespaces and libnftables");
         return;
     };
 
@@ -540,14 +540,14 @@ fn https(
 #[test]
 fn the_https_api_needs_a_token_and_respects_its_role() {
     if !(have("curl", "--version") && have("nsenter", "--version")) {
-        eprintln!("skipped: needs curl and nsenter");
+        skip("needs curl and nsenter");
         return;
     }
     let dir = std::env::temp_dir().join(format!("oxd-https-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let Some(d) = start_home(&dir, &["--listen", "127.0.0.1:8443", "--dry-run"]) else {
-        eprintln!("skipped: needs unshare(1) and unprivileged user namespaces");
+        skip("needs unshare(1) and unprivileged user namespaces");
         return;
     };
     // Give the listener a moment to come up after the socket.
@@ -682,14 +682,14 @@ fn the_https_api_needs_a_token_and_respects_its_role() {
 #[test]
 fn the_web_ui_endpoints_work_and_the_page_is_locked_down() {
     if !(have("curl", "--version") && have("nsenter", "--version")) {
-        eprintln!("skipped: needs curl and nsenter");
+        skip("needs curl and nsenter");
         return;
     }
     let dir = std::env::temp_dir().join(format!("oxd-web-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let Some(d) = start_home(&dir, &["--listen", "127.0.0.1:8443", "--dry-run"]) else {
-        eprintln!("skipped: needs unshare(1) and unprivileged user namespaces");
+        skip("needs unshare(1) and unprivileged user namespaces");
         return;
     };
     std::thread::sleep(Duration::from_millis(300));
@@ -795,4 +795,14 @@ fn the_web_ui_endpoints_work_and_the_page_is_locked_down() {
 
     drop(d);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Notes a test that cannot run here. With OX_REQUIRE_KERNEL_TESTS set, as
+/// in CI, a skip is a failure, so these tests cannot silently stop running.
+fn skip(why: &str) {
+    assert!(
+        std::env::var_os("OX_REQUIRE_KERNEL_TESTS").is_none(),
+        "this test was required but could not run: it {why}"
+    );
+    eprintln!("skipped: {why}");
 }

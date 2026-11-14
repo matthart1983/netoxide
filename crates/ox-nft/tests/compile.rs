@@ -395,7 +395,7 @@ fn the_kernel_accepts_the_ruleset() {
     match nft(&["--version"]) {
         Ok(o) if o.status.success() => {}
         _ => {
-            eprintln!("skipped: needs unshare(1), nft(8) and unprivileged user namespaces");
+            skip("needs unshare(1), nft(8) and unprivileged user namespaces");
             return;
         }
     }
@@ -518,4 +518,14 @@ fn hygiene_finds_dead_and_redundant_rules_in_both_families() {
         detail.contains("r-0388") && detail.contains("never applies"),
         "{detail}"
     );
+}
+
+/// Notes a test that cannot run here. With OX_REQUIRE_KERNEL_TESTS set, as
+/// in CI, a skip is a failure, so these tests cannot silently stop running.
+fn skip(why: &str) {
+    assert!(
+        std::env::var_os("OX_REQUIRE_KERNEL_TESTS").is_none(),
+        "this test was required but could not run: it {why}"
+    );
+    eprintln!("skipped: {why}");
 }
