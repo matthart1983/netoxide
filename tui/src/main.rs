@@ -8,6 +8,8 @@
 //!
 //! All data is mock data from `data.rs`. Nothing talks to a firewall.
 
+#![forbid(unsafe_code)]
+
 mod app;
 mod data;
 mod html;
@@ -26,7 +28,10 @@ use app::{App, Screen};
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(i) = args.iter().position(|a| a == "--html") {
-        let path = args.get(i + 1).map(String::as_str).unwrap_or("netoxide-tui.html");
+        let path = args
+            .get(i + 1)
+            .map(String::as_str)
+            .unwrap_or("netoxide-tui.html");
         std::fs::write(path, html::page(148, 40))?;
         eprintln!("wrote {path}");
         return Ok(());
@@ -97,26 +102,114 @@ fn snapshot(which: &str, w: u16, h: u16, keys: Option<&str>) -> io::Result<()> {
         for c in keys.unwrap_or("").chars() {
             app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
-        let mut term = Terminal::new(TestBackend::new(w, h))?;
-        term.draw(|f| ui::draw(f, &mut app))?;
-        let buf = term.backend().buffer();
-        let mut out = io::stdout().lock();
         // Stop quietly if the reader goes away (e.g. piped into `head`).
-        if writeln!(out, "── {} ──", s.title()).is_err() {
+        if io::stdout()
+            .lock()
+            .write_all(render_text(&mut app, w, h)?.as_bytes())
+            .is_err()
+        {
             return Ok(());
-        }
-        for y in 0..h {
-            let mut line = String::new();
-            let mut x = 0;
-            while x < w {
-                let cell = &buf[(x, y)];
-                line.push_str(cell.symbol());
-                x += 1;
-            }
-            if writeln!(out, "{}", line.trim_end()).is_err() {
-                return Ok(());
-            }
         }
     }
     Ok(())
+}
+
+/// One screen as plain text: a title line, then one line per terminal row.
+fn render_text(app: &mut App, w: u16, h: u16) -> io::Result<String> {
+    let mut term = Terminal::new(TestBackend::new(w, h))?;
+    term.draw(|f| ui::draw(f, app))?;
+    let buf = term.backend().buffer();
+    let mut out = format!("── {} ──\n", app.screen.title());
+    for y in 0..h {
+        let mut line = String::new();
+        for x in 0..w {
+            line.push_str(buf[(x, y)].symbol());
+        }
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(app: &mut App, c: char) {
+        app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    fn screen(app: &mut App, s: Screen, w: u16, h: u16) -> String {
+        app.screen = s;
+        render_text(app, w, h).unwrap()
+    }
+
+    /// `snapshots.txt` is `--snapshot all --size 160x46`. Regenerate it with
+    /// that command when a layout change is intended.
+    #[test]
+    fn snapshots_match() {
+        let mut got = String::new();
+        for s in Screen::ALL {
+            got.push_str(&screen(&mut App::new(), s, 160, 46));
+        }
+        let want = include_str!("../snapshots.txt");
+        assert!(
+            got == want,
+            "screens differ from snapshots.txt; regenerate it if intended"
+        );
+    }
+
+    #[test]
+    fn every_screen_draws_at_the_minimum_size() {
+        for s in Screen::ALL {
+            let text = screen(&mut App::new(), s, ui::MIN_W, ui::MIN_H);
+            assert!(
+                !text.contains("needs at least"),
+                "{s:?} refused the minimum size"
+            );
+        }
+    }
+
+    #[test]
+    fn confirm_makes_the_candidate_the_running_config() {
+        let mut app = App::new();
+        app.screen = Screen::Changes;
+        assert_eq!(app.running_commit(), data::BASE_COMMIT);
+        key(&mut app, 'c');
+        assert!(app.applied() && app.has_candidate());
+        assert_eq!(app.running_commit(), data::NEXT_COMMIT);
+        key(&mut app, 'y');
+        assert!(app.applied() && !app.has_candidate());
+
+        let policy = screen(&mut app, Screen::Policy, 160, 46);
+        assert!(policy.contains("running #2480") && policy.contains("no candidate"));
+        assert!(
+            !policy.contains('◆'),
+            "confirmed rule is still marked as candidate"
+        );
+        let explain = screen(&mut app, Screen::Explain, 160, 46);
+        assert!(explain.contains("DROP") && !explain.contains("ACCEPT"));
+    }
+
+    #[test]
+    fn a_confirmed_commit_cannot_be_committed_again() {
+        let mut app = App::new();
+        app.screen = Screen::Changes;
+        for c in ['c', 'y', 'c'] {
+            key(&mut app, c);
+        }
+        assert!(matches!(app.commit, app::CommitPhase::Confirmed));
+    }
+
+    #[test]
+    fn revert_keeps_the_candidate_and_the_old_commit() {
+        let mut app = App::new();
+        app.screen = Screen::Changes;
+        key(&mut app, 'c');
+        key(&mut app, 'r');
+        assert!(!app.applied() && app.has_candidate());
+        assert_eq!(app.running_commit(), data::BASE_COMMIT);
+        let explain = screen(&mut app, Screen::Explain, 160, 46);
+        assert!(explain.contains("ACCEPT"));
+    }
 }

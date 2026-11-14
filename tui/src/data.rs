@@ -78,7 +78,7 @@ pub fn zone_pairs() -> Vec<ZonePair> {
     vec![
         ZonePair {
             label: "lan → dmz",
-            total: 7,
+            total: 6,
             default_hits: "2,114",
             rules: vec![
                 pending(r(
@@ -849,7 +849,7 @@ pub const DIFF: &[(char, &str)] = &[
 
 pub const PLAN: &[&str] = &[
     "schema 1.0 validation passed",
-    "compiled 412 rules → 9 sets, 3 verdict maps, longest chain 18",
+    "compiled 96 rules → 9 sets, 3 verdict maps, longest chain 18",
     "one nftables transaction, atomic swap",
     "HA: commit to primary and backup in one transaction",
 ];
@@ -891,14 +891,14 @@ pub const ADMINS: &[(&str, &str, &str, &str, &str)] = &[
         "External auditor",
         "ext-auditor",
         "auditor",
-        "OIDC, expires 31 Dec",
+        "OIDC to 31 Dec",
         "3 Nov",
     ),
     (
         "Break-glass",
         "local-admin",
         "network admin",
-        "local + TOTP, console only",
+        "local + TOTP",
         "never",
     ),
 ];
@@ -907,7 +907,7 @@ pub const ADMINS: &[(&str, &str, &str, &str, &str)] = &[
 pub const TOKENS: &[(&str, &str, &str, &str)] = &[
     (
         "terraform-ci",
-        "policy:write nat:write plan",
+        "policy:write nat:write",
         "s.patel",
         "14 Feb 2027",
     ),
@@ -917,12 +917,7 @@ pub const TOKENS: &[(&str, &str, &str, &str)] = &[
         "a.okafor",
         "1 Jun 2027",
     ),
-    (
-        "monitoring",
-        "metrics:read status:read",
-        "a.ruiz",
-        "1 Jun 2027",
-    ),
+    ("monitoring", "metrics:read", "a.ruiz", "1 Jun 2027"),
 ];
 
 /// (time, who, event, from, hash)
@@ -1073,5 +1068,79 @@ pub const NEEDS_ACTION: &[(&str, &str)] = &[
     (
         "14 firewalls reach end of support on 30 Nov",
         "they keep forwarding and keep receiving security fixes",
+    ),
+];
+
+/// The commit the mock box runs before the candidate is applied, and the one it becomes.
+pub const BASE_COMMIT: &str = "#2479";
+pub const NEXT_COMMIT: &str = "#2480";
+
+// ───────────────────────────── Import report ─────────────────────────────
+
+pub const IMPORT_FILE: &str = "config-fw-par-02.xml";
+pub const IMPORT_SOURCE: &str = "pfSense 2.7.2 backup";
+/// (count, label)
+pub const IMPORT_TOTALS: &[(&str, &str)] = &[
+    ("1,231", "translated one to one (95.9%)"),
+    ("41", "changed: works, but differs"),
+    ("12", "unsupported: manual step needed"),
+];
+/// (pfSense item, what it became)
+pub const IMPORT_CHANGED: &[(&str, &str)] = &[
+    (
+        "Floating rule \"Block bogons\" on WAN",
+        "3 zone-pair rules: wan → lan, wan → dmz, wan → self",
+    ),
+    (
+        "Interface group \"LANS\" (igb1, igb2.20, igb2.30)",
+        "Zone \"lans\" with the same three interfaces",
+    ),
+    (
+        "Gateway group WAN_FAILOVER, probe every 500 ms",
+        "Health probe every 1 s, the 1.0 minimum",
+    ),
+    (
+        "Alias \"OFFICE_NETS\" with a hostname entry",
+        "Address group resolved by Unbound, refreshed every 5 min",
+    ),
+];
+/// (pfSense item, manual step)
+pub const IMPORT_UNSUPPORTED: &[(&str, &str)] = &[
+    (
+        "Package pfBlockerNG-devel, 6 IP feeds",
+        "move DNS lists to per-zone blocklists; IP feeds to an address set",
+    ),
+    (
+        "OpenVPN server \"RoadWarrior\", remote access",
+        "set up the WireGuard portal with OIDC login",
+    ),
+    (
+        "Captive portal zone \"guest\"",
+        "not in 1.0; keep the old box for guest Wi-Fi or drop the portal",
+    ),
+    (
+        "Limiter \"VoIP_up\" with a custom FQ-CoDel quantum",
+        "use a CAKE tier on the zone; quantum is not exposed",
+    ),
+];
+/// (flow, pfSense verdict, Netoxide verdict, why)
+pub const IMPORT_DIFFS: &[(&str, &str, &str, &str)] = &[
+    (
+        "10.40.2.5:51022 → 8.8.8.8:53 udp",
+        "pass",
+        "drop",
+        "a floating \"quick\" rule matched first; the zone-pair rule follows the DNS redirect policy",
+    ),
+    (
+        "10.40.9.12 → 192.168.1.1 icmp",
+        "drop",
+        "pass",
+        "implicit anti-lockout rule on LAN became an explicit rule on lans → self",
+    ),
+    (
+        "203.0.113.7:443 → 10.40.0.10:8443 tcp",
+        "pass",
+        "drop",
+        "port forward used \"Filter rule association: Pass\"; now NAT plus a rule needing review",
     ),
 ];

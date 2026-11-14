@@ -1,0 +1,22 @@
+[package]
+name = "oxd"
+description = "The Netoxide daemon: owns the config and applies it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+ox-explain.workspace = true
+ox-libnft.workspace = true
+ox-nft.workspace = true
+ox-plan.workspace = true
+ox-schema.workspace = true
+ox-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

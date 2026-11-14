@@ -229,6 +229,13 @@ pub fn page(w: u16, h: u16) -> String {
             "Fleet controller: drift, approvals, tunnels, support expiry, rollout rings.",
         ),
         (
+            "Migrate",
+            "i Import",
+            Screen::Import,
+            "",
+            "pfSense import report: translated, changed, unsupported, and flows whose verdict differs.",
+        ),
+        (
             "Fleet",
             "Help · press ?",
             Screen::Fleet,

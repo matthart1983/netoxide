@@ -12,7 +12,7 @@ Rust earns its place twice. Against pfSense and OPNsense, it gives a control pla
 
 Three limits shape the scope. Netgate announced on 29 October 2026 that pfSense 26.10 makes all features free, so "pfSense is closing" is no longer a pitch. The evidence does not support competing with Fortinet or Palo Alto on application identification and threat feeds. And the segment size, willingness to pay and every performance comparison rest on thin data, which the roadmap's first phase pays to fix.
 
-The full research report is at `/home/matt/reports/Rust firewall market gap.md`.
+The full research report is at [`docs/research/market-gap.md`](research/market-gap.md).
 
 ## Market research
 
@@ -389,7 +389,7 @@ Open questions for you.
 
 ## Sources
 
-The research report with all citations and a claim-by-claim confidence table is at `/home/matt/reports/Rust firewall market gap.md`. The notes behind it are in `/home/matt/research_notes/Rust firewall market gap/`. Many pages were read through search summaries, and the report marks which.
+The research report with all citations and a claim-by-claim confidence table is at [`docs/research/market-gap.md`](research/market-gap.md). Many pages were read through search summaries, and the report marks which.
 
 - [Netgate, "pfSense at 20"](https://www.netgate.com/blog/pfsense-at-20), the 26.10 merger announcement
 - [IT-Connect on pfSense 26.10](https://www.it-connect.tech/pfsense-26-10-unifies-ce-and-plus-making-all-features-free/), reinstall-to-upgrade for free users

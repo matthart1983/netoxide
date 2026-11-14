@@ -1,0 +1,242 @@
+<?xml version="1.0"?>
+<!-- A hand-written pfSense backup for importer tests. It is not from a real box. -->
+<pfsense>
+  <version>23.3</version>
+  <system>
+    <hostname>fw-par-02</hostname>
+    <domain>example.net</domain>
+  </system>
+  <interfaces>
+    <wan>
+      <enable></enable>
+      <if>igb0</if>
+      <descr><![CDATA[WAN]]></descr>
+      <ipaddr>203.0.113.10</ipaddr>
+      <subnet>29</subnet>
+      <gateway>WANGW</gateway>
+      <ipaddrv6>2001:db8:4a00::1</ipaddrv6>
+      <subnetv6>64</subnetv6>
+      <gatewayv6>WANGW6</gatewayv6>
+    </wan>
+    <lan>
+      <enable></enable>
+      <if>igb1</if>
+      <descr><![CDATA[LAN]]></descr>
+      <ipaddr>10.40.0.1</ipaddr>
+      <subnet>16</subnet>
+      <ipaddrv6>2001:db8:4a00:1::1</ipaddrv6>
+      <subnetv6>64</subnetv6>
+    </lan>
+    <opt1>
+      <enable></enable>
+      <if>igb2.30</if>
+      <descr><![CDATA[DMZ]]></descr>
+      <ipaddr>10.30.0.1</ipaddr>
+      <subnet>24</subnet>
+    </opt1>
+    <opt2>
+      <enable></enable>
+      <if>igb2.50</if>
+      <descr><![CDATA[Guest WiFi]]></descr>
+      <ipaddr>10.50.0.1</ipaddr>
+      <subnet>22</subnet>
+    </opt2>
+  </interfaces>
+  <aliases>
+    <alias>
+      <name>FINANCE_PCS</name>
+      <type>network</type>
+      <address>10.40.4.0/24 10.40.5.17</address>
+      <descr><![CDATA[Finance desktops]]></descr>
+    </alias>
+    <alias>
+      <name>FILE_SERVERS</name>
+      <type>host</type>
+      <address>10.30.0.8 10.30.0.9</address>
+    </alias>
+    <alias>
+      <name>WEB_PORTS</name>
+      <type>port</type>
+      <address>80 443 8000:8010</address>
+    </alias>
+    <alias>
+      <name>OFFICE_NETS</name>
+      <type>host</type>
+      <address>10.40.9.9 vpn.example.net</address>
+    </alias>
+    <alias>
+      <name>BOGONS_FEED</name>
+      <type>urltable</type>
+      <url>https://example.net/bogons.txt</url>
+    </alias>
+  </aliases>
+  <filter>
+    <rule>
+      <tracker>1700000001</tracker>
+      <type>block</type>
+      <interface>wan,lan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <floating>yes</floating>
+      <quick>yes</quick>
+      <direction>in</direction>
+      <source><address>192.0.2.0/24</address></source>
+      <destination><any></any></destination>
+      <descr><![CDATA[Block test-net]]></descr>
+    </rule>
+    <rule>
+      <tracker>1700000002</tracker>
+      <type>pass</type>
+      <interface>lan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp</protocol>
+      <source><address>FINANCE_PCS</address></source>
+      <destination><address>FILE_SERVERS</address><port>445</port></destination>
+      <descr><![CDATA[Finance to file servers]]></descr>
+      <log></log>
+    </rule>
+    <rule>
+      <tracker>1700000003</tracker>
+      <type>block</type>
+      <interface>lan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp/udp</protocol>
+      <source><network>lan</network></source>
+      <destination><network>opt1</network><port>137-139</port></destination>
+      <descr><![CDATA[No NetBIOS to the DMZ]]></descr>
+    </rule>
+    <rule>
+      <tracker>1700000004</tracker>
+      <type>pass</type>
+      <interface>lan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp</protocol>
+      <source><network>lan</network></source>
+      <destination><network>opt1</network><port>WEB_PORTS</port></destination>
+      <descr><![CDATA[LAN to DMZ web]]></descr>
+    </rule>
+    <rule>
+      <tracker>1700000005</tracker>
+      <type>pass</type>
+      <interface>lan</interface>
+      <ipprotocol>inet46</ipprotocol>
+      <source><network>lan</network></source>
+      <destination><any></any></destination>
+      <descr><![CDATA[Default allow LAN to any rule]]></descr>
+    </rule>
+    <rule>
+      <tracker>1700000006</tracker>
+      <type>pass</type>
+      <interface>opt2</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp</protocol>
+      <source><network>opt2</network></source>
+      <destination><not></not><network>lan</network><port>443</port></destination>
+      <descr><![CDATA[Guests to anything but LAN]]></descr>
+    </rule>
+    <rule>
+      <tracker>1700000007</tracker>
+      <type>pass</type>
+      <interface>opt2</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>udp</protocol>
+      <source><network>opt2</network></source>
+      <destination><network>opt2ip</network><port>53</port></destination>
+      <descr><![CDATA[Guest DNS to the firewall]]></descr>
+    </rule>
+    <rule>
+      <tracker>1700000008</tracker>
+      <type>pass</type>
+      <interface>opt2</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp</protocol>
+      <source><address>OFFICE_NETS</address></source>
+      <destination><any></any></destination>
+      <descr><![CDATA[Office hostnames]]></descr>
+    </rule>
+    <rule>
+      <tracker>1700000009</tracker>
+      <type>pass</type>
+      <interface>wan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp</protocol>
+      <source><any></any></source>
+      <destination><address>10.30.0.10</address><port>443</port></destination>
+      <descr><![CDATA[NAT Public web]]></descr>
+      <associated-rule-id>nat_web_1</associated-rule-id>
+    </rule>
+    <rule>
+      <tracker>1700000010</tracker>
+      <type>pass</type>
+      <interface>wan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>icmp</protocol>
+      <source><any></any></source>
+      <destination><network>wanip</network></destination>
+      <descr><![CDATA[Ping the firewall]]></descr>
+    </rule>
+    <rule>
+      <tracker>1700000011</tracker>
+      <type>pass</type>
+      <interface>lan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp</protocol>
+      <source><network>lan</network></source>
+      <destination><any></any><port>22</port></destination>
+      <descr><![CDATA[Disabled SSH out]]></descr>
+      <disabled></disabled>
+    </rule>
+    <rule>
+      <tracker>1700000012</tracker>
+      <type>pass</type>
+      <interface>wan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>esp</protocol>
+      <source><any></any></source>
+      <destination><network>wanip</network></destination>
+      <descr><![CDATA[IPsec ESP]]></descr>
+    </rule>
+  </filter>
+  <nat>
+    <rule>
+      <interface>wan</interface>
+      <protocol>tcp</protocol>
+      <source><any></any></source>
+      <destination><network>wanip</network><port>443</port></destination>
+      <target>10.30.0.10</target>
+      <local-port>443</local-port>
+      <descr><![CDATA[Public web]]></descr>
+      <associated-rule-id>nat_web_1</associated-rule-id>
+    </rule>
+    <rule>
+      <interface>wan</interface>
+      <protocol>tcp</protocol>
+      <source><any></any></source>
+      <destination><network>wanip</network><port>8443</port></destination>
+      <target>10.30.0.11</target>
+      <local-port>443</local-port>
+      <descr><![CDATA[Admin portal]]></descr>
+      <associated-rule-id>pass</associated-rule-id>
+    </rule>
+    <outbound>
+      <mode>automatic</mode>
+    </outbound>
+  </nat>
+  <openvpn>
+    <openvpn-server>
+      <description><![CDATA[RoadWarrior]]></description>
+      <mode>server_user</mode>
+    </openvpn-server>
+  </openvpn>
+  <captiveportal>
+    <guest><zone>guest</zone></guest>
+  </captiveportal>
+  <installedpackages>
+    <package><name>pfBlockerNG-devel</name></package>
+  </installedpackages>
+  <staticroutes>
+    <route><network>10.99.0.0/16</network><gateway>LANGW</gateway></route>
+  </staticroutes>
+  <gateways>
+    <gateway_group><name>WAN_FAILOVER</name></gateway_group>
+  </gateways>
+</pfsense>
