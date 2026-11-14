@@ -1,0 +1,17 @@
+[package]
+name = "ox-setup"
+description = "Guided setup and plain-language actions that write ordinary Netoxide config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ipnet.workspace = true
+nix.workspace = true
+ox-explain.workspace = true
+ox-nft.workspace = true
+ox-schema.workspace = true
+
+[lints]
+workspace = true
