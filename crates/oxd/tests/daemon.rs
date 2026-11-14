@@ -316,7 +316,12 @@ fn dns_and_dhcp_follow_the_commits() {
     );
     let status = d.ok("GET", "/v1/status", "");
     assert_eq!(status["lockdown"], false);
-    assert_eq!(status["services"][0], json!(["dnsmasq", "running"]));
+    assert!(
+        status["services"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(["dnsmasq", "running"]))
+    );
     assert!(!d.kernel_has("lockdown") && d.kernel_has("r-services"));
     for (server, kind, want) in [
         ("192.168.10.1", "A", "192.168.10.5"),
@@ -367,7 +372,21 @@ fn dns_and_dhcp_follow_the_commits() {
         r#"{"reason":"no services"}"#,
     );
     assert_eq!(dig(&d, "192.168.10.1", "nas.home.arpa", "A"), None);
-    assert_eq!(d.ok("GET", "/v1/status", "")["services"], json!([]));
+    let services = d.ok("GET", "/v1/status", "")["services"].clone();
+    assert!(
+        services
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s[0] != "dnsmasq"),
+        "{services}"
+    );
+    // The branch example names interfaces this namespace does not have. That
+    // is reported, not fatal.
+    assert!(
+        services.to_string().contains("interface wan0"),
+        "{services}"
+    );
 
     drop(d);
     std::fs::remove_dir_all(&dir).unwrap();
@@ -794,6 +813,271 @@ fn the_web_ui_endpoints_work_and_the_page_is_locked_down() {
     }
 
     drop(d);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+const ROUTER: &str = include_str!("../../../examples/router.toml");
+
+/// Three namespaces joined by two virtual cables: a client inside, the box
+/// in the middle, a server outside. The box's interfaces start with no
+/// address and down, and the daemon has to bring them up from the config.
+struct Lab {
+    daemon: Daemon,
+    client: u32,
+    server: u32,
+    helpers: Vec<Child>,
+}
+
+impl Lab {
+    fn start(dir: &Path) -> Option<Lab> {
+        let _ = std::fs::remove_file(dir.join("oxd.sock"));
+        // Test scaffolding: a shell builds the lab, then becomes the daemon.
+        let setup = format!(
+            "ip link set lo up \
+             && (unshare -n sleep 600 & echo $! > {dir}/client) \
+             && (unshare -n sleep 600 & echo $! > {dir}/server) \
+             && sleep 0.3 \
+             && ip link add eth1 type veth peer name c0 && ip link set c0 netns $(cat {dir}/client) \
+             && ip link add eth0 type veth peer name s0 && ip link set s0 netns $(cat {dir}/server) \
+             && nsenter -t $(cat {dir}/client) -n sh -c 'ip link set lo up; ip addr add 192.168.10.50/24 dev c0; \
+                  ip -6 addr add 2001:db8:2::50/64 dev c0 nodad; ip link set c0 up; \
+                  ip route add default via 192.168.10.1; ip -6 route add default via 2001:db8:2::1' \
+             && nsenter -t $(cat {dir}/server) -n sh -c 'ip link set lo up; ip addr add 203.0.113.9/24 dev s0; ip link set s0 up' \
+             && exec \"$@\"",
+            dir = dir.display()
+        );
+        let child = Command::new("unshare")
+            .args(["-Urn", "sh", "-c", &setup, "sh", env!("CARGO_BIN_EXE_oxd")])
+            .arg("--state-dir")
+            .arg(dir.join("state"))
+            .arg("--socket")
+            .arg(dir.join("oxd.sock"))
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let mut daemon = Daemon {
+            child,
+            dir: dir.to_path_buf(),
+        };
+        let start = Instant::now();
+        loop {
+            if UnixStream::connect(daemon.socket()).is_ok() {
+                break;
+            }
+            if daemon.child.try_wait().ok().flatten().is_some()
+                || start.elapsed() > Duration::from_secs(8)
+            {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let pid = |name: &str| -> Option<u32> {
+            std::fs::read_to_string(dir.join(name))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        };
+        Some(Lab {
+            client: pid("client")?,
+            server: pid("server")?,
+            daemon,
+            helpers: vec![],
+        })
+    }
+
+    /// A command inside one of the lab's namespaces.
+    fn cmd(&self, ns: u32, program: &str) -> Command {
+        let mut c = Command::new("nsenter");
+        c.arg(format!("--user=/proc/{}/ns/user", self.daemon.child.id()))
+            .arg(format!("--net=/proc/{ns}/ns/net"))
+            .args(["--preserve-credentials", program]);
+        c
+    }
+
+    /// Serves a one-line page on a port, so a fetch proves who answered.
+    fn serve(&mut self, ns: u32, bind: &str, port: u16, dir: &Path, text: &str) {
+        let root = dir.join(format!("www-{ns}-{port}"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.html"), text).unwrap();
+        let child = self
+            .cmd(ns, "python3")
+            .args([
+                "-I",
+                "-m",
+                "http.server",
+                &port.to_string(),
+                "--bind",
+                bind,
+                "--directory",
+            ])
+            .arg(&root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        self.helpers.push(child);
+    }
+
+    /// Fetches a URL from a namespace. `None` when nothing answers in time.
+    fn fetch(&self, ns: u32, url: &str) -> Option<String> {
+        let out = self
+            .cmd(ns, "curl")
+            .args(["-s", "--max-time", "2", url])
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    fn ping(&self, ns: u32, target: &str) -> bool {
+        self.cmd(ns, "ping")
+            .args(["-c", "1", "-W", "2", target])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    /// What the daemon's explain says about a packet from the client.
+    fn explain(&self, dst: &str, proto: &str, dport: Option<u16>) -> String {
+        let src = if dst.contains(':') {
+            "2001:db8:2::50"
+        } else {
+            "192.168.10.50"
+        };
+        let body = json!({ "src": src, "dst": dst, "proto": proto, "dport": dport, "in": "eth1" });
+        self.daemon.ok("POST", "/v1/explain", &body.to_string())["running"]["verdict"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    }
+}
+
+impl Drop for Lab {
+    fn drop(&mut self) {
+        for h in &mut self.helpers {
+            let _ = h.kill();
+            let _ = h.wait();
+        }
+        for pid in [self.client, self.server] {
+            let _ = Command::new("kill").arg(pid.to_string()).output();
+        }
+    }
+}
+
+/// Real packets through the firewall. The kernel's behaviour is compared
+/// with what `explain` says for the same packets.
+#[test]
+fn packets_cross_the_box_as_the_config_and_explain_say() {
+    if !(have("curl", "--version")
+        && have("python3", "--version")
+        && have("nsenter", "--version")
+        && have("ping", "-V"))
+    {
+        skip("needs curl, python3, nsenter and ping");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("oxd-lab-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let Some(mut lab) = Lab::start(&dir) else {
+        skip("needs unshare(1), unprivileged user namespaces and libnftables");
+        return;
+    };
+    let (client, server) = (lab.client, lab.server);
+    lab.serve(server, "203.0.113.9", 80, &dir, "outside web");
+    lab.serve(server, "203.0.113.9", 8081, &dir, "outside other");
+    lab.serve(client, "192.168.10.50", 80, &dir, "inside web");
+    std::thread::sleep(Duration::from_millis(600));
+
+    // No config: the box's interfaces are down and have no address.
+    assert_eq!(lab.fetch(client, "http://203.0.113.9/"), None);
+
+    lab.daemon.ok("PUT", "/v1/candidates/router", ROUTER);
+    lab.daemon.ok(
+        "POST",
+        "/v1/candidates/router/commit",
+        r#"{"reason":"lab"}"#,
+    );
+    // The daemon has put the addresses on eth0 and eth1 and turned on forwarding.
+
+    // Allowed: web and ping from inside to outside. The server has no route
+    // back to 192.168.10.0/24, so an answer proves the source was rewritten.
+    assert_eq!(
+        lab.fetch(client, "http://203.0.113.9/").as_deref(),
+        Some("outside web")
+    );
+    assert!(lab.ping(client, "203.0.113.9"));
+    assert_eq!(lab.explain("203.0.113.9", "tcp", Some(80)), "ACCEPT");
+    assert_eq!(lab.explain("203.0.113.9", "icmp", None), "ACCEPT");
+
+    // Not allowed: another port outside.
+    assert_eq!(lab.fetch(client, "http://203.0.113.9:8081/"), None);
+    assert_eq!(lab.explain("203.0.113.9", "tcp", Some(8081)), "DROP");
+
+    // The box itself: ping yes, anything else no, in both address families.
+    assert!(lab.ping(client, "192.168.10.1"));
+    assert_eq!(lab.explain("192.168.10.1", "icmp", None), "ACCEPT");
+    let mut v6 = false;
+    for _ in 0..10 {
+        // A new IPv6 address takes a moment to finish duplicate detection.
+        v6 = lab.ping(client, "2001:db8:2::1");
+        if v6 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert!(v6, "ping to the box over IPv6");
+    assert_eq!(lab.explain("2001:db8:2::1", "icmpv6", None), "ACCEPT");
+    assert_eq!(lab.fetch(client, "http://192.168.10.1:8443/"), None);
+    assert_eq!(lab.explain("192.168.10.1", "tcp", Some(8443)), "DROP");
+
+    // Inbound: the forwarded port reaches the inside server, nothing else does.
+    assert_eq!(
+        lab.fetch(server, "http://203.0.113.10:8080/").as_deref(),
+        Some("inside web")
+    );
+    assert_eq!(lab.fetch(server, "http://203.0.113.10:80/"), None);
+
+    // The kernel counted those packets against the right rules.
+    let (_, metrics) = lab.daemon.call("GET", "/metrics", "");
+    let packets = |rule: &str| -> u64 {
+        metrics
+            .lines()
+            .find(|l| l.starts_with(&format!("netoxide_rule_packets_total{{rule=\"{rule}\"}}")))
+            .and_then(|l| l.rsplit(' ').next()?.parse().ok())
+            .unwrap_or(0)
+    };
+    for rule in [
+        "r-web",
+        "r-ping-box",
+        "r-fwd-web",
+        "n-fwd-web",
+        "n-out",
+        "default lan-wan",
+    ] {
+        assert!(packets(rule) > 0, "{rule} counted no packets:\n{metrics}");
+    }
+    let hygiene = lab.daemon.ok("GET", "/v1/hygiene", "");
+    assert_eq!(hygiene, json!([]), "every rule has now seen traffic");
+
+    // A change with a confirm window that is not kept: the block goes away again.
+    let blocked = ROUTER.replace("service = [\"web\", \"ping\"]", "service = [\"ping\"]");
+    lab.daemon.ok("PUT", "/v1/candidates/no-web", &blocked);
+    lab.daemon.ok(
+        "POST",
+        "/v1/candidates/no-web/commit",
+        r#"{"confirm_secs":10,"reason":"test"}"#,
+    );
+    assert_eq!(lab.fetch(client, "http://203.0.113.9/"), None);
+    assert_eq!(lab.explain("203.0.113.9", "tcp", Some(80)), "DROP");
+    std::thread::sleep(Duration::from_secs(12));
+    assert_eq!(
+        lab.fetch(client, "http://203.0.113.9/").as_deref(),
+        Some("outside web")
+    );
+
+    drop(lab);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

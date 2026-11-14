@@ -42,7 +42,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
-ProtectKernelTunables=yes
+# Not ProtectKernelTunables: the daemon turns on packet forwarding in /proc/sys.
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
