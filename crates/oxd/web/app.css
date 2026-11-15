@@ -173,10 +173,33 @@ pre { margin: 0; white-space: pre-wrap; font-family: var(--mono); font-size: 13p
 ul.plain { margin: 0; padding-left: 18px; }
 ul.plain li { margin-bottom: 4px; }
 
-input[type="checkbox"] { width: auto; margin-right: 6px; }
+input[type="checkbox"], input[type="radio"] { width: auto; margin-right: 6px; }
 
 /* A QR code drawn from rows of squares. Always black on white, whatever the theme, so a camera can read it. */
 .qr { display: inline-block; background: #fff; line-height: 0; }
 .qr div { display: flex; }
 .qr span { width: 4px; height: 4px; }
 .qr span.on { background: #000; }
+
+/* The simple layer. */
+h3 { font-size: 14px; margin: 14px 0 6px; }
+button.link { border: 0; background: none; padding: 0 2px; color: var(--accent); text-decoration: underline; }
+.top button.link { padding: 2px 6px; }
+.panel.waiting { border-color: var(--warn); }
+.panel.waiting .row { align-items: center; }
+.row .grow { flex: 1 1 auto; }
+.panel.status h2 { font-size: 18px; }
+.facts { margin-top: 12px; gap: 8px 24px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.facts p { margin: 2px 0 0; }
+.setup { max-width: 640px; margin: 6vh auto; }
+.setup h2 { margin-top: 18px; }
+.indent { margin: 0 0 8px 26px; }
+.switch { align-items: flex-start; margin-top: 12px; }
+.switch label { display: block; }
+.switch label .dim { display: block; }
+.switch .tag { margin-left: 8px; }
+.headline li { font-size: 16px; font-weight: 600; }
+details > summary { cursor: pointer; color: var(--accent); margin: 8px 0; }
+details.panel > summary { margin: 0; font-weight: 600; }
+details.panel[open] > summary { margin-bottom: 10px; }
+.answer { margin-top: 14px; }

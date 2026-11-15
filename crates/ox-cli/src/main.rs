@@ -587,6 +587,12 @@ fn daemon(cli: &Cli) -> Result<()> {
             for svc in s["services"].as_array().into_iter().flatten() {
                 out!("service     {} {}", text(&svc[0]), text(&svc[1]));
             }
+            if let Some(code) = s["setup_code"].as_str() {
+                out!("setup       code {code}");
+                out!(
+                    "            open the box's web interface from the inside network and enter it, or run `ox init` here"
+                );
+            }
             if s["https"].is_object() {
                 out!("https       {}", text(&s["https"]["listen"]));
                 out!(

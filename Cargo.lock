@@ -1294,6 +1294,7 @@ dependencies = [
  "ox-schema",
  "qrcode",
  "rqrr",
+ "serde",
 ]
 
 [[package]]

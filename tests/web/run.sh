@@ -1,0 +1,29 @@
+#!/bin/sh
+# Runs the browser walk-through against a fresh daemon, in a private network
+# namespace with two ports, so it touches nothing on this machine.
+#
+#   tests/web/run.sh [out-dir]
+#
+# Needs Node 22 or later, Chrome (set CHROME to its path if it is not
+# `google-chrome`), unshare(1) and unprivileged user namespaces. The daemon
+# runs with --dry-run. Pictures of every step are left in the out directory.
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+out=${1:-$(mktemp -d)}
+work=$(mktemp -d)
+[ -x "$repo/target/debug/oxd" ] || (cd "$repo" && cargo build -p oxd)
+cat >"$work/inside.sh" <<INSIDE
+set -eu
+ip link set lo up
+ip link add eth0 type veth peer name isp0 && ip link set eth0 up && ip link set isp0 up
+ip link add eth1 type veth peer name cli0 && ip addr add 192.168.10.1/24 dev eth1
+ip link set eth1 up && ip link set cli0 up
+"$repo/target/debug/oxd" --state-dir "$work/state" --socket "$work/oxd.sock" \\
+    --listen-http 127.0.0.1:8098 --dry-run 2>"$work/oxd.log" &
+daemon=\$!
+trap 'kill \$daemon 2>/dev/null' EXIT
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$work/state/setup-code" ] && break; sleep 0.3; done
+CHROME_ARGS=--no-sandbox HOME="$work" node "$here/drive.mjs" http://127.0.0.1:8098 "\$(cat "$work/state/setup-code")" "$out"
+INSIDE
+unshare -Urn sh "$work/inside.sh"

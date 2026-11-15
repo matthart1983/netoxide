@@ -6,6 +6,7 @@
 //! change the result like any other config.
 
 mod detect;
+mod simple;
 
 use std::{
     collections::BTreeSet,
@@ -22,6 +23,26 @@ use ox_schema::{
 };
 
 pub use detect::{Detected, detect};
+pub use simple::{
+    Cell, Grid, LetIn, Network, grid, headline, interface_for, plain_changes, set_access,
+};
+
+/// Lets the inside network reach the box's web interface on `port`, by
+/// adding it to the starter's management rule.
+pub fn allow_admin(config: &mut Config, port: u16) -> Result<(), String> {
+    let spec: PortSpec = format!("tcp/{port}").parse()?;
+    config.services.insert("admin".into(), vec![spec]);
+    let rule = config
+        .policies
+        .iter_mut()
+        .filter(|p| p.to == SELF_ZONE)
+        .flat_map(|p| p.rules.iter_mut())
+        .find(|r| r.id == "r-manage")
+        .ok_or("the starter config has no management rule to add the web interface to")?;
+    rule.service.push(ServiceRef::Named("admin".into()));
+    rule.name = "Manage the box from inside: web interface, SSH and ping".into();
+    Ok(())
+}
 
 /// One port of the box, as chosen in the guided setup.
 #[derive(Debug, Clone, PartialEq, Eq)]

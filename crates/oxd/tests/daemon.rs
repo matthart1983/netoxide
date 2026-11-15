@@ -1632,6 +1632,249 @@ fn vlans_are_made_carry_traffic_and_are_removed() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A box with no config is set up from a browser with the setup code, and
+/// the simple view then reads and changes who can reach what.
+#[test]
+fn first_run_setup_and_the_simple_view() {
+    if !(have("curl", "--version") && have("nsenter", "--version")) {
+        skip("needs curl and nsenter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("oxd-setup-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let Some(d) = start_home(&dir, &["--listen", "127.0.0.1:8443", "--dry-run"]) else {
+        skip("needs unshare(1) and unprivileged user namespaces");
+        return;
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    // A request as the setup page makes it: a code, no token.
+    let setup =
+        |method: &str, path: &str, code: Option<&str>, body: Option<&str>| -> (u16, Value) {
+            let mut cmd = Command::new("nsenter");
+            cmd.args(["--user", "--net", "--preserve-credentials", "-t"])
+                .arg(d.child.id().to_string())
+                .args(["curl", "-sk", "-X", method, "-w", "\n%{http_code}"])
+                .arg(format!("https://127.0.0.1:8443{path}"));
+            if let Some(c) = code {
+                cmd.args(["-H", &format!("X-Setup-Code: {c}")]);
+            }
+            if let Some(b) = body {
+                cmd.args(["-H", "Content-Type: application/json", "--data-binary", b]);
+            }
+            let out = cmd.output().expect("curl runs");
+            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            let (body, status) = text.rsplit_once('\n').unwrap_or(("", "0"));
+            (
+                status.trim().parse().unwrap_or(0),
+                serde_json::from_str(body).unwrap_or(Value::String(body.to_string())),
+            )
+        };
+
+    // The page may ask whether setup is needed, and learns nothing else.
+    assert_eq!(
+        setup("GET", "/v1/setup", None, None),
+        (200, json!({ "needed": true }))
+    );
+    // The code is on the box: in its state directory and in `ox status` there.
+    let code = std::fs::read_to_string(dir.join("state/setup-code")).unwrap();
+    assert_eq!(d.ok("GET", "/v1/status", "")["setup_code"], json!(code));
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(dir.join("state/setup-code"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "the code file is private");
+
+    // Without the code, or with a wrong one, nothing is shown.
+    let (status, body) = setup("GET", "/v1/setup/ports", None, None);
+    assert_eq!(status, 401, "{body}");
+    let (status, body) = setup("GET", "/v1/setup/ports", Some("AAAA-AAAA"), None);
+    assert_eq!(status, 401, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("tries left"),
+        "{body}"
+    );
+
+    // With it, typed loosely: the machine's ports.
+    let loose = code.to_lowercase().replace('-', " ");
+    let (status, body) = setup("GET", "/v1/setup/ports", Some(&loose), None);
+    assert_eq!(status, 200, "{body}");
+    let ports = body["ports"].as_array().unwrap();
+    let eth1 = ports
+        .iter()
+        .find(|p| p["name"] == "eth1")
+        .expect("eth1 is listed");
+    assert!(
+        eth1["addresses"].to_string().contains("192.168.10.1/24"),
+        "{eth1}"
+    );
+    assert!(!ports.iter().any(|p| p["name"] == "lo"));
+
+    // A preview says what would happen and changes nothing.
+    let choice = r#"{"internet":"cli0","inside":[{"port":"eth1"}],"name":"homebox"}"#;
+    let (status, body) = setup("POST", "/v1/setup/preview", Some(&code), Some(choice));
+    assert_eq!(status, 200, "{body}");
+    let lines = body["describe"].to_string();
+    assert!(
+        lines.contains("eth1 is in zone lan") && lines.contains("192.168.10.1/24"),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("asks the network there for its IPv4 address"),
+        "{lines}"
+    );
+    assert!(d.ok("GET", "/v1/status", "")["running"].is_null());
+    let (status, body) = setup(
+        "POST",
+        "/v1/setup/preview",
+        Some(&code),
+        Some(r#"{"internet":"nope0","inside":[{"port":"eth1"}]}"#),
+    );
+    assert_eq!(status, 422, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("no port called nope0"),
+        "{body}"
+    );
+
+    // Applying it starts the box with an undo timer and hands back a token.
+    let (status, body) = setup("POST", "/v1/setup/apply", Some(&code), Some(choice));
+    assert_eq!(status, 200, "{body}");
+    let token = body["token"].as_str().unwrap().to_string();
+    let get = |path: &str| -> Value {
+        let (status, text) = https(&d, "GET", path, Some(&token), None);
+        assert_eq!(status, 200, "{path}: {text}");
+        serde_json::from_str(&text).unwrap()
+    };
+    let post = |path: &str, body: &str| -> (u16, Value) {
+        let (status, text) = https(&d, "POST", path, Some(&token), Some(body));
+        (
+            status,
+            serde_json::from_str(&text).unwrap_or(Value::String(text)),
+        )
+    };
+    let status_now = get("/v1/status");
+    assert!(
+        status_now["reverts_in"].as_u64().is_some_and(|s| s > 200),
+        "{status_now}"
+    );
+    assert!(
+        status_now.get("setup_code").is_none(),
+        "a token never sees the code"
+    );
+    assert_eq!(get("/v1/whoami")["role"], "admin");
+    // The web interface's port is open from inside in the config it wrote.
+    let running =
+        String::from_utf8_lossy(&d.call("GET", "/v1/running", "").1.into_bytes()).to_string();
+    assert!(
+        running.contains("tcp/8443") && running.contains("\"admin\""),
+        "{running}"
+    );
+
+    // Setup is shut while a config runs, even with the code.
+    assert_eq!(
+        setup("GET", "/v1/setup", None, None).1,
+        json!({ "needed": false })
+    );
+    assert_eq!(
+        setup("POST", "/v1/setup/apply", Some(&code), Some(choice)).0,
+        409
+    );
+    assert_eq!(post("/v1/confirm", "").0, 200);
+    assert!(d.ok("GET", "/v1/status", "").get("setup_code").is_none());
+
+    // ── the simple view ─────────────────────────────────────────────────
+    let home = get("/v1/home");
+    let names: Vec<&str> = home["networks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Inside network", "Internet"], "{home}");
+    let cell = |home: &Value, from: usize, to: usize| {
+        home["cells"][from][to]["state"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(cell(&home, 0, 1), "allowed");
+    assert_eq!(cell(&home, 1, 0), "blocked");
+    assert_eq!(cell(&home, 0, 0), "same");
+    assert_eq!(home["networks"][0]["reaches"], "Internet");
+
+    // Blocking the inside from the internet: a candidate, read back as
+    // sentences, applied, and seen in the grid.
+    let (status, body) = post(
+        "/v1/actions/access",
+        r#"{"from":"lan","to":"wan","allow":false}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+    let candidate = body["candidate"].as_str().unwrap().to_string();
+    assert!(
+        body["done"][0]
+            .as_str()
+            .unwrap()
+            .contains("can no longer reach Internet"),
+        "{body}"
+    );
+    let plan = post(&format!("/v1/candidates/{candidate}/plan"), "").1;
+    assert!(plan["stops"].to_string().contains("lan → wan"), "{plan}");
+    assert_eq!(
+        post(
+            &format!("/v1/candidates/{candidate}/commit"),
+            r#"{"confirm_secs":120}"#
+        )
+        .0,
+        200
+    );
+    assert_eq!(post("/v1/confirm", "").0, 200);
+    assert_eq!(cell(&get("/v1/home"), 0, 1), "blocked");
+    // And back.
+    let (status, body) = post(
+        "/v1/actions/access",
+        r#"{"from":"lan","to":"wan","allow":true}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+    let candidate = body["candidate"].as_str().unwrap().to_string();
+    assert_eq!(
+        post(&format!("/v1/candidates/{candidate}/commit"), "{}").0,
+        200
+    );
+    assert_eq!(cell(&get("/v1/home"), 0, 1), "allowed");
+    // The internet is never let in as a whole.
+    let (status, body) = post(
+        "/v1/actions/access",
+        r#"{"from":"wan","to":"lan","allow":true}"#,
+    );
+    assert_eq!(status, 422, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("port forward"),
+        "{body}"
+    );
+
+    // "Is something blocked?" needs no interface name: the box works out
+    // which network the device is on.
+    let (status, body) = post(
+        "/v1/explain",
+        r#"{"src":"192.168.10.50","dst":"198.51.100.9","proto":"tcp","dport":443}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["running"]["verdict"], "ACCEPT", "{body}");
+    assert!(body["packet"].as_str().unwrap().contains("eth1"), "{body}");
+    let (_, body) = post(
+        "/v1/explain",
+        r#"{"src":"198.51.100.9","dst":"192.168.10.50","proto":"tcp","dport":22}"#,
+    );
+    assert_eq!(body["running"]["verdict"], "DROP", "{body}");
+
+    drop(d);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Notes a test that cannot run here. With OX_REQUIRE_KERNEL_TESTS set, as
 /// in CI, a skip is a failure, so these tests cannot silently stop running.
 fn skip(why: &str) {

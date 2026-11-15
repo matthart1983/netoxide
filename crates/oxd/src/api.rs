@@ -55,7 +55,11 @@ fn user_name(uid: Option<u32>) -> String {
 }
 
 /// Who is calling. Extracting this is what authenticates a request.
-pub struct Caller(pub Identity);
+pub struct Caller(pub Identity, pub Local);
+
+/// True when the caller is on the box itself, through the Unix socket.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Local(pub bool);
 
 impl Caller {
     /// Refuses the request unless the caller's role allows the action.
@@ -121,10 +125,13 @@ impl FromRequestParts<Shared> for Caller {
     async fn from_request_parts(parts: &mut Parts, state: &Shared) -> Result<Caller, ApiError> {
         // A connection on the Unix socket carries the peer's user ID.
         if let Some(ConnectInfo(Peer(uid))) = parts.extensions.get::<ConnectInfo<Peer>>() {
-            return Ok(Caller(Identity {
-                name: user_name(*uid),
-                role: Role::admin(),
-            }));
+            return Ok(Caller(
+                Identity {
+                    name: user_name(*uid),
+                    role: Role::admin(),
+                },
+                Local(true),
+            ));
         }
         let secret = parts
             .headers
@@ -141,7 +148,7 @@ impl FromRequestParts<Shared> for Caller {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .identify(secret, now())
-            .map(Caller)
+            .map(|identity| Caller(identity, Local(false)))
             .ok_or_else(|| {
                 ApiError(
                     StatusCode::UNAUTHORIZED,
@@ -230,19 +237,34 @@ pub fn router(shared: Shared, lease_file: PathBuf, state_dir: PathBuf) -> Router
         .route("/v1/tokens/{name}", axum::routing::delete(revoke_token))
         .route("/v1/roles", get(roles).post(create_role))
         .route("/v1/roles/{name}", axum::routing::delete(delete_role))
-        .route(
-            "/v1/leases",
+        .route("/v1/leases", {
+            let path = lease_file.clone();
             get(move |caller: Caller| {
-                let path = lease_file.clone();
+                let path = path.clone();
                 async move { leases(&caller, path) }
+            })
+        })
+        .route(
+            "/v1/home",
+            get(move |state: State<Shared>, caller: Caller| {
+                let path = lease_file.clone();
+                async move { home(state, caller, path) }
             }),
         )
+        .route("/v1/actions/access", post(action_access))
+        .merge(crate::setup::routes())
         .merge(web::routes())
         .with_state(shared)
 }
 
 /// An error as the API returns it: a status and `{"error": "..."}`.
 pub struct ApiError(StatusCode, String);
+
+impl ApiError {
+    pub fn new(status: StatusCode, message: &str) -> ApiError {
+        ApiError(status, message.to_string())
+    }
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -292,6 +314,13 @@ async fn status(State(s): State<Shared>, caller: Caller) -> Api<Response> {
     let mut v = serde_json::to_value(e.status(now())?).expect("status is plain JSON");
     v["four_eyes"] = json!(e.settings()?.four_eyes);
     v["https"] = HTTPS.get().cloned().unwrap_or_default();
+    v["version"] = json!(env!("CARGO_PKG_VERSION"));
+    // The setup code is for someone at the box, never for a token.
+    if caller.1 == Local(true)
+        && let Some(code) = crate::setup::code_for_local(v["running"].is_object())
+    {
+        v["setup_code"] = json!(code);
+    }
     Ok(Json(v).into_response())
 }
 
@@ -460,6 +489,64 @@ fn action_vpn_peer(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AccessBody {
+    /// The network the traffic comes from, by zone name.
+    from: String,
+    to: String,
+    allow: bool,
+}
+
+/// Lets one network reach another, or stops it, as a candidate.
+async fn action_access(
+    State(s): State<Shared>,
+    caller: Caller,
+    Json(body): Json<AccessBody>,
+) -> Api<Response> {
+    caller.may(Action::Edit)?;
+    let name = ox_setup::candidate_name(
+        if body.allow { "allow" } else { "block" },
+        &format!("{}-{}", body.from, body.to),
+    );
+    act(&s, &caller, &name, |c| {
+        ox_setup::set_access(c, &body.from, &body.to, body.allow)
+    })
+}
+
+/// The simple view of the running config: the networks, who can reach
+/// what, what is let in from the internet, and how many devices each
+/// network has handed an address to.
+fn home(State(s): State<Shared>, caller: Caller, lease_file: PathBuf) -> Api<Response> {
+    caller.may(Action::Read)?;
+    let text = s
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .running_config()?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "there is no commit yet".into()))?;
+    let config = Config::from_toml(&text).map_err(invalid)?;
+    let grid = ox_setup::grid(&config);
+    let leases =
+        ox_services::parse_leases(&std::fs::read_to_string(lease_file).unwrap_or_default());
+    let devices: Vec<usize> = grid
+        .networks
+        .iter()
+        .map(|n| {
+            leases
+                .iter()
+                .filter_map(|l| l.address.parse::<IpAddr>().ok())
+                .filter(|a| {
+                    ox_setup::interface_for(&config, *a).is_some_and(|i| n.interfaces.contains(&i))
+                        && !n.internet
+                })
+                .count()
+        })
+        .collect();
+    let mut v = serde_json::to_value(&grid).expect("the grid is plain JSON");
+    v["devices"] = json!(devices);
+    Ok(Json(v).into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BlockBody {
     address: String,
     #[serde(default)]
@@ -584,6 +671,13 @@ struct PlanView {
     flows_checked: Option<usize>,
     /// Flows whose verdict the candidate changes.
     impact: Vec<String>,
+    /// The change in plain sentences: what the box starts doing.
+    starts: Vec<String>,
+    /// And what it stops doing.
+    stops: Vec<String>,
+    /// The change in a few sentences about networks. Empty when it has
+    /// no such sentence.
+    headline: Vec<String>,
 }
 
 /// The body, if any, is a JSON Lines file of observed flows.
@@ -605,6 +699,9 @@ async fn plan(
         changes: vec![],
         flows_checked: None,
         impact: vec![],
+        starts: vec![],
+        stops: vec![],
+        headline: vec![],
     };
     if let Some(text) = running_text {
         let (old, old_rs) = load(&text)?;
@@ -612,6 +709,8 @@ async fn plan(
             .iter()
             .map(ToString::to_string)
             .collect();
+        (view.starts, view.stops) = ox_setup::plain_changes(&old, &new);
+        view.headline = ox_setup::headline(&old, &new);
         if !body.trim().is_empty() {
             let flows = ox_plan::parse_flows(&body).map_err(invalid)?;
             let hits = ox_plan::impact(&old_rs, &new_rs, &flows).map_err(invalid)?;
@@ -699,8 +798,10 @@ struct ExplainBody {
     proto: FlowProto,
     #[serde(default)]
     dport: Option<u16>,
-    #[serde(rename = "in")]
-    iif: String,
+    /// The interface the packet arrives on. Left out, it is worked out
+    /// from the source address: the network it is on, else the internet side.
+    #[serde(default, rename = "in")]
+    iif: Option<String>,
     /// Also evaluate against this candidate.
     #[serde(default)]
     candidate: Option<String>,
@@ -756,12 +857,22 @@ async fn explain_packet(
                 .transpose()?,
         )
     };
+    let iif = match body.iif.filter(|i| !i.trim().is_empty()) {
+        Some(iif) => iif,
+        None => running_text
+            .as_deref()
+            .and_then(|text| Config::from_toml(text).ok())
+            .and_then(|config| ox_setup::interface_for(&config, body.src))
+            .ok_or_else(|| {
+                invalid("cannot tell which network that address is on; say which interface the packet arrives on")
+            })?,
+    };
     let packet = Packet {
         src: body.src,
         dst: body.dst,
         l4: body.proto.into(),
         dport: body.dport,
-        iif: body.iif,
+        iif,
         // What the machine has now, so an address the provider assigned
         // counts as the box's own, as it does for the kernel.
         box_addrs: nix::ifaddrs::getifaddrs()

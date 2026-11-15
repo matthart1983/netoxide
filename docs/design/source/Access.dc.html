@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Netoxide — Who can reach what</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0A5FA8}a:hover{color:#074579}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #F5F6F8; font-family: Inter, system-ui, sans-serif; color: #16181D; font-size: 15px; line-height: 1.5">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #E2E5EA">
+    <div style="max-width: 1080px; margin: 0 auto; padding: 0 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px">
+      <div style="display: flex; align-items: center; gap: 28px; flex-wrap: wrap">
+        <span style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px">
+          <svg width="26" height="26" viewBox="0 0 28 28" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="7" fill="#16181D"></rect><path d="M8 19V10m4 9V8m4 11V8m4 11v-9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path></svg>Netoxide</span>
+        <nav aria-label="Main" style="display: flex; gap: 4px">
+          <a href="Main.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; color: #3A3F4B; text-decoration: none">Home</a>
+          <a href="Access.dc.html" aria-current="page" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; background: #E7EFF8; color: #0A5FA8; font-weight: 600; text-decoration: none">Access</a>
+          <a href="Settings.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; color: #3A3F4B; text-decoration: none">Settings</a>
+        </nav>
+      </div>
+      <span style="font-size: 13px; color: #5B6170">Harbour Dental · Sydney office</span>
+    </div>
+  </header>
+
+  <main style="max-width: 1080px; margin: 0 auto; padding: 32px 24px 56px; display: flex; flex-direction: column; gap: 24px">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <h1 style="margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.01em">Who can reach what</h1>
+      <span style="color: #5B6170">Click a square to allow or block. Nothing changes until you review and apply.</span>
+    </div>
+
+    <sc-if value="{{dirty}}" hint-placeholder-val="{{true}}">
+      <a href="Review.dc.html" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-radius: 12px; background: #FDF0DF; border: 1px solid #F1C98F; color: #6B3403; text-decoration: none">
+        <span><strong>{{changeCount}} waiting</strong> · nothing has changed on the network yet</span>
+        <span style="font-weight: 600">Review and apply →</span>
+      </a>
+    </sc-if>
+
+    <section aria-labelledby="mx-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 16px">
+      <h2 id="mx-h" style="margin: 0; font-size: 18px; font-weight: 600">Between your networks</h2>
+      <div style="overflow-x: auto">
+        <table style="width: 100%; min-width: 640px; border-collapse: separate; border-spacing: 8px">
+          <thead>
+            <tr>
+              <th scope="col" style="text-align: left; font-size: 13px; font-weight: 500; color: #5B6170; padding: 0 4px">From ↓ · can reach →</th>
+              <sc-for list="{{cols}}" as="c" hint-placeholder-count="4">
+                <th scope="col" style="text-align: center; font-size: 14px; font-weight: 600; padding: 0 4px">{{c}}</th>
+              </sc-for>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
+              <tr>
+                <th scope="row" style="text-align: left; font-size: 14px; font-weight: 600; padding: 0 4px; white-space: nowrap">{{r.name}}</th>
+                <sc-for list="{{r.cells}}" as="cell" hint-placeholder-count="4">
+                  <td style="padding: 0">
+                    <sc-if value="{{cell.toggle}}" hint-placeholder-val="{{true}}">
+                      <button type="button" aria-label="{{cell.aria}}" onClick="{{cell.flip}}" style="{{cell.style}}">{{cell.label}}</button>
+                    </sc-if>
+                    <sc-if value="{{cell.fixed}}" hint-placeholder-val="{{false}}">
+                      <div style="display: flex; align-items: center; justify-content: center; min-height: 52px; border-radius: 10px; background: #F5F6F8; color: #5B6170; font-size: 13px; text-align: center; padding: 0 8px">{{cell.label}}</div>
+                    </sc-if>
+                  </td>
+                </sc-for>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin: 0; font-size: 13px; color: #5B6170">Anything not allowed here is blocked and logged. New networks start with internet only.</p>
+    </section>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start">
+      <section aria-labelledby="pub-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 4px">
+        <h2 id="pub-h" style="margin: 0 0 8px; font-size: 18px; font-weight: 600">Reachable from the internet</h2>
+        <sc-for list="{{published}}" as="p" hint-placeholder-count="3">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid #EEF0F3">
+            <div style="display: flex; flex-direction: column">
+              <span style="font-weight: 600">{{p.name}}</span>
+              <span style="font-size: 14px; color: #5B6170">{{p.detail}}</span>
+            </div>
+            <button type="button" style="flex: none; min-height: 40px; padding: 0 14px; border: 1px solid #CDD2DA; border-radius: 8px; background: #FFFFFF; font: inherit; font-size: 14px; cursor: pointer">Edit</button>
+          </div>
+        </sc-for>
+        <button type="button" style="align-self: flex-start; margin-top: 8px; min-height: 44px; padding: 0 16px; border: 1px dashed #A9B0BC; border-radius: 8px; background: #FFFFFF; font: inherit; font-weight: 500; cursor: pointer">+ Let something in</button>
+      </section>
+
+      <section aria-labelledby="ex-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 4px">
+        <h2 id="ex-h" style="margin: 0 0 8px; font-size: 18px; font-weight: 600">Exceptions</h2>
+        <sc-for list="{{exceptions}}" as="e" hint-placeholder-count="3">
+          <div style="display: flex; flex-direction: column; gap: 2px; padding: 12px 0; border-top: 1px solid #EEF0F3">
+            <span style="font-weight: 500">{{e.text}}</span>
+            <span style="font-size: 13px; color: {{e.noteColor}}">{{e.note}}</span>
+          </div>
+        </sc-for>
+      </section>
+    </div>
+
+    <section aria-labelledby="add-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 14px">
+      <h2 id="add-h" style="margin: 0; font-size: 18px; font-weight: 600">Add an exception</h2>
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px">
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <label for="ex-who" style="font-size: 13px; color: #5B6170">Who</label>
+          <select id="ex-who" style="min-height: 44px; padding: 0 12px; border: 1px solid #CDD2DA; border-radius: 8px; background: #FFFFFF; font: inherit"><option>Front desk PCs</option><option>Staff</option><option>Guest Wi-Fi</option><option>A device…</option></select>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <label for="ex-can" style="font-size: 13px; color: #5B6170">Can</label>
+          <select id="ex-can" style="min-height: 44px; padding: 0 12px; border: 1px solid #CDD2DA; border-radius: 8px; background: #FFFFFF; font: inherit"><option>can't reach</option><option>can reach</option></select>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <label for="ex-what" style="font-size: 13px; color: #5B6170">What</label>
+          <select id="ex-what" style="min-height: 44px; padding: 0 12px; border: 1px solid #CDD2DA; border-radius: 8px; background: #FFFFFF; font: inherit"><option>Social media</option><option>Servers</option><option>A website…</option><option>A device…</option></select>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <label for="ex-when" style="font-size: 13px; color: #5B6170">When</label>
+          <select id="ex-when" style="min-height: 44px; padding: 0 12px; border: 1px solid #CDD2DA; border-radius: 8px; background: #FFFFFF; font: inherit"><option>during work hours</option><option>always</option></select>
+        </div>
+        <button type="button" style="min-height: 44px; padding: 0 18px; border: none; border-radius: 8px; background: {{accent}}; color: #FFFFFF; font: inherit; font-weight: 600; cursor: pointer">Add</button>
+      </div>
+      <p style="margin: 0; font-size: 13px; color: #5B6170">Need ports, address groups or rule order? Turn on the full rule editor in <a href="Settings.dc.html">Settings</a>.</p>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#0A5FA8","options":["#0A5FA8","#16181D","#0F766E"]},"$preview":{"width":1440,"height":1120}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.base = {
+      'Staff>Internet': 'yes', 'Staff>Servers': 'yes', 'Staff>Guest Wi-Fi': 'no',
+      'Servers>Internet': 'yes', 'Servers>Staff': 'no', 'Servers>Guest Wi-Fi': 'no',
+      'Guest Wi-Fi>Internet': 'yes', 'Guest Wi-Fi>Staff': 'no', 'Guest Wi-Fi>Servers': 'no',
+      'Remote staff>Staff': 'yes', 'Remote staff>Servers': 'yes', 'Remote staff>Guest Wi-Fi': 'no',
+      'Internet>Staff': 'no', 'Internet>Servers': 'some', 'Internet>Guest Wi-Fi': 'no'
+    };
+    this.state = { grid: { ...this.base } };
+  }
+  renderVals() {
+    const accent = this.props.accent ?? '#0A5FA8';
+    const cols = ['Internet', 'Staff', 'Servers', 'Guest Wi-Fi'];
+    const from = ['Staff', 'Servers', 'Guest Wi-Fi', 'Remote staff', 'Internet'];
+    const g = this.state.grid;
+    const base = 'width: 100%; min-height: 52px; border-radius: 10px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; ';
+    const looks = {
+      yes: base + 'background: #E6F4EC; color: #11502F; border: 1px solid #A9D7BD',
+      no: base + 'background: #FFFFFF; color: #7A1A14; border: 1px solid #E8C3C0',
+      some: base + 'background: #FDF0DF; color: #6B3403; border: 1px solid #F1C98F'
+    };
+    const changed = (k) => g[k] !== this.base[k];
+    const rows = from.map(f => ({
+      name: f,
+      cells: cols.map(c => {
+        const k = f + '>' + c;
+        if (f === c) return { fixed: true, toggle: false, label: 'same network' };
+        if (f === 'Remote staff' && c === 'Internet') return { fixed: true, toggle: false, label: 'uses their own' };
+        if (f === 'Internet' && c === 'Internet') return { fixed: true, toggle: false, label: '—' };
+        const v = g[k];
+        const label = (v === 'yes' ? 'Allowed' : v === 'no' ? 'Blocked' : '2 services') + (changed(k) ? ' •' : '');
+        return {
+          fixed: false, toggle: true, label,
+          style: looks[v] + (changed(k) ? '; outline: 2px solid ' + accent + '; outline-offset: 2px' : ''),
+          aria: f + ' to ' + c + ': ' + label + '. Click to change.',
+          flip: () => this.setState({ grid: { ...g, [k]: v === 'yes' ? 'no' : 'yes' } })
+        };
+      })
+    }));
+    const n = Object.keys(g).filter(changed).length + 1;
+    return {
+      accent, cols, rows,
+      dirty: true,
+      changeCount: n === 1 ? '1 change' : n + ' changes',
+      published: [
+        { name: 'Website', detail: 'Secure web (HTTPS) → web server' },
+        { name: 'Email', detail: 'Mail from partners → mail relay' },
+        { name: 'Lab remote login', detail: 'SSH on port 2222 → lab PC · ends 30 Nov' }
+      ],
+      exceptions: [
+        { text: 'Staff can\'t use old Windows file sharing (SMB) to reach Servers', note: 'Waiting to be applied', noteColor: '#8A4204' },
+        { text: 'Backup agents can reach the storage box, 1–5 am only', note: 'Last used 6 hours ago', noteColor: '#5B6170' },
+        { text: 'IT admins can manage this firewall', note: 'Always on, can\'t be removed by accident', noteColor: '#5B6170' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
