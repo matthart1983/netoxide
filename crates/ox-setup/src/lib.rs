@@ -24,6 +24,72 @@ use ox_schema::{
 
 pub use detect::{Detected, detect};
 #[cfg(test)]
+mod block_name_tests {
+    use super::*;
+
+    const HOME: &str = include_str!("../../../examples/home.toml");
+
+    #[test]
+    fn a_website_is_blocked_by_name_and_unblocked() {
+        let start = Config::from_toml(HOME).unwrap();
+        let mut config = start.clone();
+        // Pasted as an address, it is reduced to the name.
+        let done = block_name(&mut config, " https://www.Example.com/watch?v=1 ", true).unwrap();
+        assert!(
+            done[0].starts_with("example.com and names under it are blocked"),
+            "{done:?}"
+        );
+        assert!(done[1].contains("another DNS server"), "{done:?}");
+        assert_eq!(config.dns.as_ref().unwrap().blocked, ["example.com"]);
+        let conf = ox_services::dnsmasq_conf(&config).unwrap();
+        assert!(conf.contains("address=/example.com/#"), "{conf}");
+        assert!(
+            describe(&config)
+                .iter()
+                .any(|l| l.contains("refuses to look up example.com"))
+        );
+        assert!(Config::from_toml(&config.to_toml()).is_ok());
+        assert_eq!(
+            headline(&start, &config),
+            ["example.com is blocked for every device"]
+        );
+
+        assert!(
+            block_name(&mut config, "example.com", true)
+                .unwrap_err()
+                .contains("already blocked")
+        );
+        block_name(&mut config, "example.com", false).unwrap();
+        assert_eq!(
+            config, start,
+            "unblocking takes away exactly what blocking added"
+        );
+        assert_eq!(headline(&config, &start), Vec::<String>::new());
+        assert!(
+            block_name(&mut config, "example.com", false)
+                .unwrap_err()
+                .contains("not blocked")
+        );
+        for bad in ["", "localhost", "not a name", "exa_mple.com"] {
+            assert!(
+                block_name(&mut config, bad, true)
+                    .unwrap_err()
+                    .contains("not a website name"),
+                "{bad}"
+            );
+        }
+        // The box's own local domain cannot be blocked from under it.
+        assert!(block_name(&mut config, "arpa", true).is_err());
+        assert!(
+            block_name(&mut config, "home.arpa", true)
+                .unwrap_err()
+                .contains("local names")
+        );
+        assert_eq!(config, start);
+    }
+}
+
+#[cfg(test)]
 mod network_tests {
     use super::*;
 
@@ -492,6 +558,7 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
             dnssec: true,
             domain: serve.domain.clone(),
             hosts: vec![],
+            blocked: vec![],
         });
         for lan in &a.lans {
             let own = lan.addrs.iter().find_map(|n| match n {
@@ -533,6 +600,61 @@ fn check(config: &Config) -> Result<(), String> {
             .join("; "));
     }
     compile(config).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Blocks a website by name for every device that uses the box for DNS,
+/// or lifts the block. `name` may be pasted as an address: `https://`,
+/// a path and a leading `www.` are dropped.
+pub fn block_name(config: &mut Config, name: &str, block: bool) -> Result<Vec<String>, String> {
+    let clean = site_name(name)?;
+    let clean = clean.as_str();
+    let mut next = config.clone();
+    let dns = next.dns.as_mut().ok_or(
+        "the box does not answer DNS, so it has no say in which names devices can look up",
+    )?;
+    let had = dns.blocked.iter().any(|b| b == clean);
+    let done = match (block, had) {
+        (true, true) => return Err(format!("{clean} is already blocked")),
+        (false, false) => return Err(format!("{clean} is not blocked")),
+        (true, false) => {
+            dns.blocked.push(clean.to_string());
+            dns.blocked.sort();
+            vec![
+                format!("{clean} and names under it are blocked for every device that uses the box for DNS"),
+                "a device set to use another DNS server, or a browser with its own secure DNS turned on, is not affected".to_string(),
+            ]
+        }
+        (false, true) => {
+            dns.blocked.retain(|b| b != clean);
+            vec![format!("{clean} is no longer blocked")]
+        }
+    };
+    check(&next)?;
+    *config = next;
+    Ok(done)
+}
+
+/// A website's name from what someone typed or pasted: `https://`, a path
+/// and a leading `www.` are dropped.
+pub fn site_name(name: &str) -> Result<String, String> {
+    let mut clean = name.trim().to_lowercase();
+    for prefix in ["https://", "http://"] {
+        if let Some(rest) = clean.strip_prefix(prefix) {
+            clean = rest.to_string();
+        }
+    }
+    let clean = clean.split(['/', ':', '?']).next().unwrap_or("");
+    let clean = clean
+        .strip_prefix("www.")
+        .unwrap_or(clean)
+        .trim_end_matches('.');
+    if !ox_schema::is_hostname(clean) || !clean.contains('.') {
+        return Err(format!(
+            "'{}' is not a website name; write one such as example.com",
+            name.trim()
+        ));
+    }
+    Ok(clean.to_string())
 }
 
 /// A new network of its own, such as one for guests or cameras.
@@ -873,6 +995,11 @@ pub fn describe(config: &Config) -> Vec<String> {
         ));
         if let Some(d) = &dns.domain {
             out.push(format!("local names end in .{d}"));
+        }
+        for name in &dns.blocked {
+            out.push(format!(
+                "the box refuses to look up {name} and names under it"
+            ));
         }
     }
     for name in &config.ipv6_autoconfig {

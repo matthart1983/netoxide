@@ -65,6 +65,13 @@
       "additionalProperties": false,
       "description": "A DNS resolver for the box's networks. It forwards to `upstream` and\nanswers for the local names in `hosts` and for DHCP clients.",
       "properties": {
+        "blocked": {
+          "description": "Names the resolver refuses to look up, such as `ads.example.com`.\nA name covers everything under it too. Devices that use the box for\nDNS get no address for them. A device that uses another resolver is\nnot affected.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "dnssec": {
           "description": "Validate answers with DNSSEC. On by default.",
           "type": "boolean"

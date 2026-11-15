@@ -46,6 +46,7 @@ Daemon commands. All take `--socket <path>` or the `OX_SOCKET` variable. The def
 | `ox kernel` | The Netoxide table as the kernel holds it |
 | `ox forward --name <text> --port tcp/443 --to <host>[:port] [--address <outside address>]` | Forward a port to an inside host; saved as a candidate |
 | `ox block <address> [--name <text>]` | Drop everything a device sends; saved as a candidate |
+| `ox block <website>` / `ox unblock <website>` | Make the box's DNS refuse a name and everything under it, or lift that. `https://`, a path and `www.` are dropped |
 
 Commands that need no daemon:
 
@@ -115,6 +116,7 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `GET /v1/running/json` | | The running config as JSON, with what it does in sentences |
 | `POST /v1/check` | TOML | Validates a config without storing it |
 | `POST /v1/actions/forward`, `/v1/actions/block`, `/v1/actions/vpn-peer` | JSON | One-step actions; each saves a candidate |
+| `POST /v1/actions/block-site` | `{"name", "block"}` | Blocks a website by name in the box's DNS, or lifts the block; saves a candidate |
 | `GET /v1/wireguard` | | Tunnels of the running config with each peer's state |
 | `GET /v1/wireguard/{interface}/key` | | This box's public key for a tunnel; makes the key pair if there is none |
 | `GET /v1/candidates/{name}/meta` | | Author and approval of a candidate |

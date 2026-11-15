@@ -319,7 +319,7 @@ pub fn diff(running: &Config, candidate: &Config) -> Vec<Change> {
     };
     named(&mut out, "dns", &dns(running), &dns(candidate), |d| {
         format!(
-            "answers {}; forwards to {}; DNSSEC {}; {}{} local name(s)",
+            "answers {}; forwards to {}; DNSSEC {}; {}{} local name(s); {} blocked name(s)",
             list(&d.zones),
             list(&d.upstream),
             if d.dnssec { "on" } else { "off" },
@@ -327,7 +327,8 @@ pub fn diff(running: &Config, candidate: &Config) -> Vec<Change> {
                 .as_ref()
                 .map(|x| format!("domain {x}; "))
                 .unwrap_or_default(),
-            d.hosts.len()
+            d.hosts.len(),
+            d.blocked.len()
         )
     });
     named(&mut out, "dhcp pool", &running.dhcp, &candidate.dhcp, |p| {

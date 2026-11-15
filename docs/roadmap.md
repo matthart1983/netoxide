@@ -42,13 +42,23 @@ Done:
 - Everyday commands in `ox --help`.
 - The same two layers in the terminal UI.
 - Adding a network (a VLAN with its own address pool) as one step.
+- Blocking a website by name.
+- An install script, and steps for a VM on Proxmox.
+- The browser walk-through in Firefox as well as Chrome.
 
 Next, in this order:
 
-1. A VM image, with steps for Proxmox.
-2. DNS blocklists.
+1. A ready-made VM image, so there is no Linux to install first.
+2. Downloaded DNS blocklists, kept up to date.
 3. Dynamic DNS.
 4. Bridge interfaces, PPPoE and IPv6 prefix delegation.
+
+Needs people, not code:
+
+- A run on real hardware.
+- Someone new setting a box up while being watched.
+- A phone scanning the VPN QR code, and the official WireGuard apps connecting.
+- The Proxmox steps followed on Proxmox.
 
 Ends when 25 people outside the project have run it for 30 days and said how it went, and the first outside security report has been handled in public.
 

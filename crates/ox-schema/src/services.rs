@@ -34,6 +34,12 @@ pub struct Dns {
     /// Local names with fixed addresses.
     #[serde(default, rename = "host", skip_serializing_if = "Vec::is_empty")]
     pub hosts: Vec<DnsHost>,
+    /// Names the resolver refuses to look up, such as `ads.example.com`.
+    /// A name covers everything under it too. Devices that use the box for
+    /// DNS get no address for them. A device that uses another resolver is
+    /// not affected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

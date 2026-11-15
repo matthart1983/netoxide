@@ -25,6 +25,10 @@ impl fmt::Display for Problem {
     }
 }
 
+/// How many names the resolver may be told to refuse. Longer lists belong
+/// in a blocklist file, which is not built yet.
+const MAX_BLOCKED: usize = 5000;
+
 /// Linux limits interface names to 15 bytes.
 const IFNAMSIZ: usize = 15;
 
@@ -638,6 +642,33 @@ impl Checker<'_> {
     fn services(&mut self) {
         let c = self.config;
         if let Some(dns) = &c.dns {
+            if dns.blocked.len() > MAX_BLOCKED {
+                self.add(
+                    "dns",
+                    format!(
+                        "{} names are blocked; the limit is {MAX_BLOCKED}",
+                        dns.blocked.len()
+                    ),
+                );
+            }
+            for (i, name) in dns.blocked.iter().enumerate() {
+                let at = format!("dns, blocked name '{name}'");
+                if !crate::is_hostname(name) || !name.contains('.') || *name != name.to_lowercase()
+                {
+                    self.add(
+                        &at,
+                        "write a full name in lowercase, such as ads.example.com",
+                    );
+                } else if dns.blocked[..i].contains(name) {
+                    self.add(&at, "it is listed twice");
+                } else if dns
+                    .domain
+                    .as_ref()
+                    .is_some_and(|d| d == name || d.ends_with(&format!(".{name}")))
+                {
+                    self.add(&at, "this would block the box's own local names");
+                }
+            }
             if dns.zones.is_empty() {
                 self.add("dns", "zones is empty, so nobody could use the resolver");
             }

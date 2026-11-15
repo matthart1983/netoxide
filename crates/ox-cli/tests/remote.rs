@@ -706,6 +706,32 @@ fn ox_manages_a_box_from_another_machine() {
     );
     good(&b.ox(&["-r", "home", "keep"]));
     assert!(good(&b.ox(&["-r", "six", "access"])).contains("Guest Wi-Fi"));
+    // One command blocks a device by address or a website by name.
+    let site = b.ox(&["-r", "home", "block", "https://www.example.com/page"]);
+    assert!(
+        good(&site).contains("example.com and names under it are blocked"),
+        "{}",
+        site.out
+    );
+    good(&b.ox(&["-r", "home", "apply", "block-example-com"]));
+    good(&b.ox(&["-r", "home", "keep"]));
+    assert!(good(&b.ox(&["-r", "six", "running"])).contains("blocked = [\"example.com\"]"));
+    refused(
+        &b.ox(&["-r", "home", "block", "example.com"]),
+        "already blocked",
+    );
+    let lifted = b.ox(&["-r", "home", "unblock", "example.com"]);
+    assert!(
+        good(&lifted).contains("no longer blocked"),
+        "{}",
+        lifted.out
+    );
+    good(&b.ox(&["-r", "home", "apply", "unblock-example-com"]));
+    good(&b.ox(&["-r", "home", "keep"]));
+    refused(
+        &b.ox(&["-r", "home", "unblock", "192.168.10.66"]),
+        "removing its rule",
+    );
     // Explain needs no interface name: the box places the device itself.
     let why = b.ox(&[
         "-r",

@@ -357,11 +357,33 @@ pub fn forward(
     })
 }
 
-pub fn block(oxd: &Client, address: &str, name: Option<&str>) -> Result<()> {
-    let who: Net = address.parse()?;
-    let name = name.unwrap_or(address);
-    edit(oxd, &candidate_name("block", name), |c| {
-        ox_setup::block(c, who, name)
+/// Blocks a device, given its address, or a website, given its name.
+pub fn block(oxd: &Client, what: &str, name: Option<&str>) -> Result<()> {
+    match what.parse::<Net>() {
+        Ok(who) => {
+            let name = name.unwrap_or(what);
+            edit(oxd, &candidate_name("block", name), |c| {
+                ox_setup::block(c, who, name)
+            })
+        }
+        // Not an address, so it is taken as the name of a website.
+        Err(_) => {
+            let site = ox_setup::site_name(what)?;
+            edit(oxd, &candidate_name("block", &site), |c| {
+                ox_setup::block_name(c, &site, true)
+            })
+        }
+    }
+}
+
+/// Lifts the block on a website.
+pub fn unblock(oxd: &Client, name: &str) -> Result<()> {
+    if name.parse::<Net>().is_ok() {
+        return Err("a blocked device is unblocked by removing its rule; run `ox more` for the commands that edit the config".into());
+    }
+    let site = ox_setup::site_name(name)?;
+    edit(oxd, &candidate_name("unblock", &site), |c| {
+        ox_setup::block_name(c, &site, false)
     })
 }
 
