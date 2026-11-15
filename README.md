@@ -58,7 +58,7 @@ Run `oxd` outside a namespace only on a box you mean to turn into a firewall: it
 
 ## Install on a box
 
-On a Linux machine with systemd:
+On an x86-64 Linux machine with systemd, download the archive from the [latest release](https://github.com/matthart1983/netoxide/releases), unpack it, and run in its directory:
 
 ```sh
 sudo sh dist/install.sh --packages

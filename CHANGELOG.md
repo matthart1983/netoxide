@@ -2,13 +2,14 @@
 
 Releases are listed newest first. Versions follow [semantic versioning](https://semver.org). Before 1.0, a minor version may change the config schema, the API or the command line; each such change is listed under "Changed" with what to do about it.
 
-## 0.1.0 (not yet released)
+## 0.1.0 (15 November 2026)
 
 The first preview. A single-box firewall and router that passes its tests in network namespaces and in a virtual machine under systemd. It has not run on hardware and has had no outside security audit. See [docs/status.md](docs/status.md) for the limits.
 
 ### What is in it
 
 - **Licence.** MIT.
+- **No unsafe code.** The daemon loads rules by running the `nft` program with a fixed argument list and the ruleset on standard input. Nothing links libnftables.
 
 - **Config.** One typed TOML or JSON document per box, schema version 1, with a published JSON Schema. Zones, interfaces, address groups, services, zone-pair rules, port forwards, outbound NAT, DNS, DHCP and WireGuard tunnels. IPv4 and IPv6 in the same rules.
 - **Compiler.** A config becomes one nftables ruleset built from sets and verdict maps, loaded as an atomic transaction.

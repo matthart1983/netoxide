@@ -2,13 +2,6 @@
 
 How a version goes out. The workflow in `.github/workflows/release.yml` does the building; a person does the deciding.
 
-## Before the first release
-
-The licence is MIT and the name is settled. What is left before 0.1.0 is tagged:
-
-1. Make the repository public, then turn on private vulnerability reporting and require CI on `master`. Neither can be switched on while it is private.
-2. Run the checks below on the commit to release.
-
 ## Each release
 
 1. Run the full checks on the commit you mean to release:
@@ -22,7 +15,7 @@ The licence is MIT and the name is settled. What is left before 0.1.0 is tagged:
    ```
 
 2. Set the version in the workspace `Cargo.toml` and run `cargo build` so `Cargo.lock` follows.
-3. In `CHANGELOG.md`, replace "(not yet released)" with the date, and check the list against `git log` since the last tag.
+3. In `CHANGELOG.md`, give the new version's section its date, and check the list against `git log` since the last tag.
 4. Read `docs/status.md`. Every limit there must still be true, and every new limit must be there.
 5. Commit, merge to `master`, then tag that commit and push the tag:
 
