@@ -145,7 +145,7 @@ if ((await tabs()).join(',') !== 'Home,Access,Settings') await fail('a new box s
 await shot('home-pending');
 await click('Keep it');
 await see('Kept. The change is now permanent.');
-await see('Dry run');
+await see(process.env.OX_WEB_KERNEL === '1' ? 'The firewall is running' : 'Dry run');
 await see('Inside network');
 await see('Can reach: Internet');
 await see('Save your access token now');
@@ -211,6 +211,30 @@ for (const tab of ['NAT', 'Network', 'Changes', 'Explain', 'Audit', 'Admin']) {
 }
 await see('Access tokens');
 await shot('advanced-admin');
+
+// Back to the simple layer: the advanced tabs go away again, and Home is
+// as a returning owner sees it.
+for (const id of ['nat', 'network', 'changes', 'explain', 'audit', 'admin']) {
+  await click('Settings');
+  await flip(id);
+}
+if ((await tabs()).join(',') !== 'Home,Access,Settings') await fail('with every switch off, only the simple tabs remain, got ' + (await tabs()));
+// Allow the inside network out again, the same way it was blocked.
+await click('Access');
+await click('allow');
+await see('Inside network can reach Internet');
+await click('Apply safely');
+await see('Applied. Check things still work');
+await click('Keep it');
+await see('Kept.');
+await click('Access');
+await see('block');
+await shot('access-allowed');
+await click('Home');
+await see('Common tasks');
+await see('Can reach: Internet');
+await notSee('Save your access token now');
+await shot('home-clean');
 
 if (errors.length) await fail('the page reported errors: ' + errors.join(' | '));
 console.log('ok: setup, Home, Access, Review, Settings and every advanced screen; ' + step + ' pictures in ' + out);

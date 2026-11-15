@@ -591,6 +591,93 @@ fn ox_manages_a_box_from_another_machine() {
     let running = b.ox(&["-r", "six", "running"]);
     assert!(good(&running).contains("tablet") && running.out.contains("phone"));
 
+    // ── the everyday commands ───────────────────────────────────────────
+    // The short help lists a dozen commands and points at the rest.
+    let help = b.ox(&["--help"]);
+    assert!(
+        good(&help).contains("apply") && help.out.contains("ox more"),
+        "{}",
+        help.out
+    );
+    assert!(
+        !help.out.contains("rollback  "),
+        "advanced commands stay out of the short help"
+    );
+    assert!(good(&b.ox(&["more"])).contains("rollback"));
+    // Who can reach what, as a grid, then changed in plain words.
+    let grid = b.ox(&["-r", "six", "access"]);
+    assert!(
+        good(&grid).contains("Inside network") && grid.out.contains("Allowed"),
+        "{}",
+        grid.out
+    );
+    refused(
+        &b.ox(&["-r", "six", "access", "block", "lan", "wan"]),
+        "may not save",
+    );
+    let blocked = b.ox(&["-r", "home", "access", "block", "lan", "wan"]);
+    assert!(
+        good(&blocked).contains("can no longer reach Internet"),
+        "{}",
+        blocked.out
+    );
+    assert!(
+        blocked.out.contains("ox apply block-lan-wan"),
+        "{}",
+        blocked.out
+    );
+    // Apply it without naming it is refused while other changes wait too.
+    let which = b.ox(&["-r", "home", "apply"]);
+    assert!(
+        !which.ok && which.err.contains("say which"),
+        "{}{}",
+        which.out,
+        which.err
+    );
+    let applied = b.ox(&["-r", "home", "apply", "block-lan-wan"]);
+    assert!(
+        good(&applied).contains("can no longer reach Internet"),
+        "{}",
+        applied.out
+    );
+    assert!(applied.out.contains("ox keep"), "{}", applied.out);
+    // What the inside network may do towards the internet, from the grid.
+    let inside_to_internet = || -> String {
+        let grid = b.ox(&["-r", "six", "access"]);
+        good(&grid)
+            .lines()
+            .find(|l| l.starts_with("Inside network") && !l.contains("zone "))
+            .and_then(|l| l.split_whitespace().last())
+            .expect("the grid has a row for the inside network")
+            .to_string()
+    };
+    assert_eq!(inside_to_internet(), "Blocked");
+    // Undone, the grid is as before; applied again and kept, it stays.
+    good(&b.ox(&["-r", "home", "undo"]));
+    assert_eq!(inside_to_internet(), "Allowed");
+    good(&b.ox(&["-r", "home", "apply", "block-lan-wan"]));
+    good(&b.ox(&["-r", "home", "keep"]));
+    assert_eq!(inside_to_internet(), "Blocked");
+    good(&b.ox(&["-r", "home", "access", "allow", "lan", "wan"]));
+    good(&b.ox(&["-r", "home", "apply", "allow-lan-wan"]));
+    good(&b.ox(&["-r", "home", "keep"]));
+    assert_eq!(inside_to_internet(), "Allowed");
+    // Explain needs no interface name: the box places the device itself.
+    let why = b.ox(&[
+        "-r",
+        "six",
+        "explain",
+        "--src",
+        "192.168.10.50",
+        "--dst",
+        "1.1.1.1",
+        "--proto",
+        "tcp",
+        "--dport",
+        "443",
+    ]);
+    assert!(good(&why).contains("ACCEPT"), "{}", why.out);
+
     // ── backup and restore ──────────────────────────────────────────────
     // A backup holds private keys: only an admin may take one, and the file
     // is private. A second box restored from it has the same VPN identity.

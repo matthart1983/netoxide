@@ -41,13 +41,16 @@ sudo ox status
 sudo ox init --save starter        # answer the questions: which port faces the
                                    # internet, whether the provider assigns its
                                    # address, which ports face inside
-sudo ox plan starter
-sudo ox commit starter --confirm 5m
-sudo ox confirm                    # only once you have checked you still have access
+sudo ox apply starter              # applied with a two-minute undo timer
+sudo ox keep                       # only once you have checked you still have access
 ```
 
-`ox commit --confirm` is what keeps you from locking yourself out: if you lose
-access, do nothing, and the box goes back by itself.
+`ox apply` is what keeps you from locking yourself out: if you lose access, do
+nothing, and the box goes back by itself after two minutes. For a longer
+window use `ox commit starter --confirm 5m` and `ox confirm`.
+
+Or skip the command line: turn on the web interface as described below and
+set the box up from a browser.
 
 The socket is `/run/netoxide/oxd.sock`. Whoever can open it is an admin, so it
 belongs to root. To let a group use `ox` without sudo, change the socket's
@@ -61,16 +64,23 @@ Put the listener option in `/etc/netoxide/oxd.env`:
 OXD_ARGS=--listen 0.0.0.0:8443
 ```
 
-Restart the daemon, allow the port from where you manage the box (a rule in
-the inside zone's policy to `self` for `tcp/8443`), then make a token:
+Restart the daemon and open `https://<box>:8443/` from a device on the inside
+network. The daemon makes its own certificate on first start, so the browser
+will warn. Give it a real one with `--tls-cert` and `--tls-key`.
+
+**On a box with no config, the page offers setup.** It asks for the setup
+code, which `sudo ox status` shows on the box, then which port goes to the
+internet and which are yours. It applies the result with a five-minute undo
+timer and gives you an admin access token. Save the token: it is how you sign
+in afterwards. Setup opens the web interface's port from the inside network
+for you.
+
+**On a box you set up with `ox init`**, allow the port yourself (a rule in the
+inside zone's policy to `self` for `tcp/8443`) and make a token:
 
 ```sh
 sudo ox token create laptop --role operator --days 90
 ```
-
-Open `https://<box>:8443/` and sign in with the token. The daemon makes its
-own certificate on first start, so the browser will warn. Give it a real one
-with `--tls-cert` and `--tls-key`.
 
 ## From another machine
 
@@ -96,9 +106,8 @@ main README, for example `ox role create helpdesk --can edit,commit --sections v
 
 ```sh
 sudo ox vpn add laptop --endpoint home.example.net
-sudo ox plan vpn-laptop
-sudo ox commit vpn-laptop --confirm 5m
-sudo ox confirm
+sudo ox apply vpn-laptop
+sudo ox keep
 ```
 
 The first command sets the VPN up if there is none (a WireGuard tunnel, the

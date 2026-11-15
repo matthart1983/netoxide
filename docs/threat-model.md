@@ -14,6 +14,7 @@ What Netoxide is built to resist, what it relies on, and what it does not defend
 |---|---|---|
 | The internet side | Only what a rule from that zone allows. By default nothing | The compiled ruleset. A forwarded port reaches the one inside address and port it names |
 | A device on an inside network | The box's DNS and DHCP if allowed, the HTTPS listener if a rule allows the port | Rules to `self`. Without an access token the listener serves only the sign-in page and its three static files |
+| A device on a nearby network, while the box has no config | The first-run setup routes | A setup code only someone on the box can read, ten tries, and the routes shut once a config runs. Setup never answers a public address |
 | Someone holding an access token | What the token's role allows | Role checks on every route. A role held to sections cannot save, approve, commit, keep or undo a change outside them |
 | A local user on the box | The daemon's Unix socket, if the file's permissions let them open it | File permissions on the socket. Whoever can open it is an administrator |
 | Root on the box | Everything | Nothing. Root can load its own rules, read the keys and rewrite the state directory |
@@ -34,6 +35,7 @@ What Netoxide is built to resist, what it relies on, and what it does not defend
 - **A clock that jumps backwards.** Token expiry and the undo timer follow the wall clock, so both are extended.
 - **Flooding.** The HTTPS listener caps connections per address and in total and drops quiet ones. Someone with many addresses can still keep others out of it while they try. There is no protection against traffic floods through the firewall beyond what the kernel does.
 - **Malicious traffic that the rules allow.** There is no intrusion detection and no inspection of content.
+- **Someone on your network racing you to set the box up.** Until the first config runs, anyone on a private address who also learns the setup code can set the box up. The code is on the console and in the journal. Set a new box up promptly, on a network you trust.
 - **Physical access.** There is no disk encryption and no verified boot. Keys for the VPN and for TLS sit in the state directory, readable by root.
 - **A hostile box, from the client's side.** `ox` strips control characters from what a daemon sends before printing it. It otherwise trusts a box whose fingerprint matches.
 

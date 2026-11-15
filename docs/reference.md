@@ -30,6 +30,11 @@ Daemon commands. All take `--socket <path>` or the `OX_SOCKET` variable. The def
 | `ox token create <name> --role <role> [--days N]` / `list` / `revoke <name>` | Access tokens for the HTTPS API and the web UI |
 | `ox role list` / `create <name> --can <actions> [--sections <sections>]` / `delete <name>` | Roles: what a token may do and in which parts of the config |
 | `ox remote add <name> <url>` / `list` / `remove <name>` | Boxes to manage from this machine with `ox --remote <name>` |
+| `ox access` | The networks and who can reach what, as a grid |
+| `ox access allow <from> <to>` / `block <from> <to>` | Let one network reach another, or stop it. Uses zone names. Refused for a pair with rules of its own |
+| `ox apply [change]` | Commit a waiting change with a two-minute undo timer. The name is not needed when one change is waiting |
+| `ox keep` / `ox undo` | Keep or undo the change just applied. The same as `ox confirm` and `ox revert` |
+| `ox more` | List every command. `ox --help` shows the everyday ones |
 | `ox backup --out <file>` | Save the running config, the VPN keys, the roles made here and the four-eyes setting. Admins only; the file holds private keys |
 | `ox restore <file>` | Put a backup's keys, roles and setting in place and save its config as the candidate `restore` |
 | `ox whoami` | Who the daemon thinks you are, and what your role allows |
@@ -92,11 +97,15 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `POST /v1/confirm` | | The confirmed commit |
 | `POST /v1/revert` | | The reverted commit |
 | `POST /v1/rollback` | `{"steps": 1, "confirm_secs": null, "reason": "..."}` | The new commit |
-| `POST /v1/explain` | `{"src", "dst", "proto", "dport", "in", "candidate"}` | Verdict, steps and text for running and candidate |
+| `POST /v1/explain` | `{"src", "dst", "proto", "dport", "in", "candidate"}` (`in` may be left out) | Verdict, steps and text for running and candidate |
 | `GET /v1/leases` | | Addresses DHCP has handed out |
 | `GET /v1/audit` | | All entries. Fails if the hash chain is broken |
 | `GET /v1/hygiene` | | Findings about rules in the running config |
 | `GET /metrics` | | Prometheus metrics |
+| `GET /v1/home` | | The simple view: networks, the grid of who can reach what, what is let in, device counts |
+| `POST /v1/actions/access` | `{"from", "to", "allow"}` | Lets one network reach another or stops it; saves a candidate |
+| `GET /v1/setup` | | `{"needed": true}` while a box with no config can be set up from a browser. No token |
+| `GET /v1/setup/ports`, `POST /v1/setup/preview`, `POST /v1/setup/apply` | `{"internet", "inside": [{"port", "address"}], "name"}` | First-run setup. No token; needs the `X-Setup-Code` header and a caller on a private or local address |
 | `GET /v1/backup` | | The backup document. Needs `manage` |
 | `POST /v1/restore` | The backup document | What was put in place, and the candidate to commit. Needs `manage` |
 | `GET /v1/whoami` | | The caller's name and role, with the role's actions and sections |

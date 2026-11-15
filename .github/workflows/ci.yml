@@ -36,6 +36,23 @@ jobs:
         run: cargo test --workspace
       - name: Web UI syntax
         run: node --check crates/oxd/web/app.js
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Web UI in a browser
+        # Sets a blank box up from the setup code and walks every screen in
+        # a headless Chrome, inside a private network namespace.
+        # OX_WEB_KERNEL=1: the daemon loads real rules and runs dnsmasq there.
+        env:
+          OX_WEB_KERNEL: "1"
+        run: tests/web/run.sh "$RUNNER_TEMP/web-pictures"
+      - name: Keep the pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-pictures
+          path: ${{ runner.temp }}/web-pictures
+          if-no-files-found: ignore
 
   deny:
     runs-on: ubuntu-24.04

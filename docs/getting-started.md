@@ -79,18 +79,27 @@ This config will do the following:
   devices on eth1 get an address from 192.168.10.100 to 192.168.10.199, kept for 12h
   wan → lan: no rules, so everything is dropped
 
-Saved as candidate starter. Nothing has been applied.
-Next: ox plan starter  then  ox commit starter --confirm 5m
+Saved as starter. Nothing has been applied.
+Apply it with: ox apply starter
+It undoes itself after 2 minutes unless you run `ox keep`, so a mistake cannot lock you out.
 ```
+
+The same setup is in the web interface: a box with no config shows it when you open its page. See [interfaces.md](interfaces.md#getting-in).
 
 In short: the inside network can reach the internet and is hidden behind the box's address, devices inside get an address and DNS from the box, the box can be managed over SSH from inside only, and everything arriving from the internet is dropped. DNS and DHCP need `dnsmasq` installed; `ox init --no-services` leaves them out. Pass `--wan` and `--lan` to skip the questions, and `--out <file>` to write a file instead of saving a candidate. `ox init` only reads the machine. It changes nothing until you commit.
 
-Two everyday changes are single commands. Each reads the running config, makes the change, and saves the result as a candidate for you to commit:
+Everyday changes are single commands. Each reads the running config, makes the change, and saves the result for you to apply:
 
 ```sh
 ox forward --name "Home Assistant" --port tcp/443 --to 192.168.10.20:8123
 ox block 192.168.10.66 --name "Smart TV"
+ox access                          # who can reach what, as a grid
+ox access block lan wan            # stop one network reaching another
+ox apply                           # apply the waiting change, with a two-minute undo timer
+ox keep                            # or `ox undo`
 ```
+
+`ox --help` lists these everyday commands. `ox more` lists every command, including named candidates, plan, commit with a timer of your choice, rollback and the audit log.
 
 `ox forward` adds the port forward and the filter rule it needs, then checks with the explain engine that a packet from outside is accepted by that rule. If an earlier rule would have decided the packet first, it places the new rule ahead of it and says so. `ox block` drops and logs everything the device sends, to other networks and to the box.
 

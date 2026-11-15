@@ -30,16 +30,25 @@ Ends when the repository can be opened and someone could legally run a release.
 
 The first public release. It is for testers, not for the edge of a network you depend on.
 
-Built in this order:
+The rule for this phase is **simple by default, advanced by opt-in**. Someone new sees three screens and a dozen commands. Everything else is there and stays out of the way until asked for. A feature that is not built does not appear, switched off or otherwise.
 
-1. VLAN interfaces. **Done.**
-2. Bridge interfaces.
-3. A VM image, with steps for Proxmox.
-4. Backup and restore, including the VPN keys. **Done.**
-5. DNS blocklists.
-6. Dynamic DNS.
-7. A QR code for adding a phone to the VPN. **Done.** Preshared keys.
-8. PPPoE and IPv6 prefix delegation.
+Done:
+
+- VLAN interfaces.
+- Backup and restore, including the VPN keys.
+- A QR code for adding a phone to the VPN.
+- Setup from a browser, with a code shown on the box.
+- The simple layer of the web interface: Home, Access, Review, Settings, with the detailed screens as switches.
+- Everyday commands in `ox --help`.
+
+Next, in this order:
+
+1. The same two layers in the terminal UI.
+2. A VM image, with steps for Proxmox.
+3. Adding a network (a VLAN with its own address pool) as one step.
+4. DNS blocklists.
+5. Dynamic DNS.
+6. Bridge interfaces, PPPoE and IPv6 prefix delegation.
 
 Ends when 25 people outside the project have run it for 30 days and said how it went, and the first outside security report has been handled in public.
 
