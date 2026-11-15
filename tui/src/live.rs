@@ -4,13 +4,19 @@
 //! Screens the daemon cannot back yet (VPN, IPS, HA, Fleet, Import) exist
 //! only in the mock prototype.
 
-use std::{collections::BTreeMap, net::IpAddr, path::Path};
+use std::{
+    collections::BTreeMap,
+    net::IpAddr,
+    path::{Path, PathBuf},
+};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ipnet::IpNet;
 use ox_client::Client;
 use ox_schema::{AddrRef, Config, PortSpec, Rule, SELF_ZONE, ServiceRef};
 use serde_json::{Value, json};
+
+use crate::tasks::{self, Choice, Device, Form, MENU, Saved, Task};
 
 /// A commit as the daemon reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,11 +42,18 @@ pub struct PlanView {
     pub first_commit: bool,
     pub summary: String,
     pub changes: Vec<String>,
+    /// The change in a few sentences about networks. Empty when it has none.
+    pub headline: Vec<String>,
+    /// What the box starts and stops doing, in sentences.
+    pub starts: Vec<String>,
+    pub stops: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplainSide {
     pub verdict: String,
+    /// The rule that decided, if one did.
+    pub rule: Option<String>,
     /// The explanation, one line per row.
     pub lines: Vec<String>,
 }
@@ -109,6 +122,12 @@ pub trait Backend {
     fn revert(&self) -> Res<u64>;
     fn explain(&self, q: &Query, candidate: Option<&str>) -> Res<ExplainResult>;
     fn audit(&self) -> Res<Vec<AuditRow>>;
+    /// How many devices each network of the grid has handed an address to.
+    fn devices(&self) -> Res<Vec<usize>>;
+    /// Runs one plain-language task. It saves a waiting change and applies nothing.
+    fn action(&self, path: &str, body: &Value) -> Res<Saved>;
+    /// Throws a waiting change away.
+    fn discard(&self, candidate: &str) -> Res<()>;
 }
 
 pub struct SocketBackend(Client);
@@ -178,6 +197,7 @@ pub fn parse_hits(dump: &Value) -> BTreeMap<String, u64> {
 fn parse_side(v: &Value) -> Option<ExplainSide> {
     Some(ExplainSide {
         verdict: v["verdict"].as_str()?.to_string(),
+        rule: v["rule"].as_str().map(String::from),
         lines: v["text"]
             .as_str()?
             .lines()
@@ -208,15 +228,15 @@ impl Backend for SocketBackend {
         let v = self
             .0
             .json("POST", &format!("/v1/candidates/{candidate}/plan"), None)?;
+        let list =
+            |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().map(s).collect() };
         Ok(PlanView {
             first_commit: v["first_commit"] == true,
             summary: s(&v["summary"]),
-            changes: v["changes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(s)
-                .collect(),
+            changes: list(&v["changes"]),
+            headline: list(&v["headline"]),
+            starts: list(&v["starts"]),
+            stops: list(&v["stops"]),
         })
     }
 
@@ -288,11 +308,38 @@ impl Backend for SocketBackend {
             })
             .collect())
     }
+
+    fn devices(&self) -> Res<Vec<usize>> {
+        let v = self.0.json("GET", "/v1/home", None)?;
+        Ok(v["devices"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|n| n.as_u64().unwrap_or(0) as usize)
+            .collect())
+    }
+
+    fn action(&self, path: &str, body: &Value) -> Res<Saved> {
+        Ok(tasks::parse_saved(&self.0.json(
+            "POST",
+            path,
+            Some(body),
+        )?))
+    }
+
+    fn discard(&self, candidate: &str) -> Res<()> {
+        self.0
+            .send("DELETE", &format!("/v1/candidates/{candidate}"), None)
+            .map(|_| ())
+    }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Screen {
     Home,
+    Access,
+    Review,
+    Settings,
     Policy,
     Nat,
     Interfaces,
@@ -302,8 +349,11 @@ pub enum Screen {
 }
 
 impl Screen {
-    pub const ALL: [Screen; 7] = [
+    pub const ALL: [Screen; 10] = [
         Screen::Home,
+        Screen::Access,
+        Screen::Review,
+        Screen::Settings,
         Screen::Policy,
         Screen::Nat,
         Screen::Interfaces,
@@ -315,6 +365,9 @@ impl Screen {
     pub fn title(self) -> &'static str {
         match self {
             Screen::Home => "Home",
+            Screen::Access => "Access",
+            Screen::Review => "Review",
+            Screen::Settings => "Settings",
             Screen::Policy => "Policy",
             Screen::Nat => "NAT",
             Screen::Interfaces => "Interfaces",
@@ -334,13 +387,80 @@ impl Screen {
 /// Confirm windows the Changes screen offers, in seconds.
 pub const WINDOWS: [u64; 4] = [30, 120, 300, 600];
 
-/// The screens everyone sees. The rest appear when advanced is switched on.
-pub const SIMPLE: [Screen; 2] = [Screen::Home, Screen::Changes];
+/// The screens everyone sees.
+pub const SIMPLE: [Screen; 4] = [
+    Screen::Home,
+    Screen::Access,
+    Screen::Review,
+    Screen::Settings,
+];
+
+/// The detailed screens. Each is a switch on Settings, off to begin with,
+/// and a switch only shows or hides a tab.
+pub const DETAILED: [(Screen, &str, &str); 6] = [
+    (
+        Screen::Policy,
+        "The full rule list",
+        "every rule, with packet counts",
+    ),
+    (
+        Screen::Nat,
+        "Address translation",
+        "port forwards and outbound, line by line",
+    ),
+    (
+        Screen::Interfaces,
+        "Ports and addresses",
+        "each port and its addresses",
+    ),
+    (
+        Screen::Changes,
+        "The full plan",
+        "the technical plan, a reason, your own timer",
+    ),
+    (
+        Screen::Explain,
+        "The packet tracer",
+        "any packet, step by step",
+    ),
+    (Screen::Audit, "The audit log", "who did what and when"),
+];
+
+/// How long the simple layer gives you to keep a change, in seconds.
+pub const SAFE_SECS: u64 = 120;
+
+/// The answer to "is something blocked?".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checked {
+    pub packet: String,
+    pub allowed: bool,
+    pub why: String,
+}
 
 pub struct LiveApp {
     pub screen: Screen,
-    /// Show the detailed screens as well. Off to begin with.
-    pub advanced: bool,
+    /// The detailed screens that are switched on. None to begin with.
+    pub detailed: Vec<Screen>,
+    /// Where the switches are kept between runs, if anywhere.
+    pub prefs: Option<PathBuf>,
+    /// The selected line of the Home menu.
+    pub menu: usize,
+    /// The selected cell of the Access grid: from, to.
+    pub cell: (usize, usize),
+    /// The selected switch on Settings.
+    pub switch: usize,
+    /// The task being filled in, when one is open.
+    pub form: Option<Form>,
+    /// The screen a task was started from.
+    pub back: Screen,
+    pub checked: Option<Result<Checked, String>>,
+    /// A VPN device's settings, on show until dismissed.
+    pub device: Option<Device>,
+    /// Show the settings as text when the code and the text do not both fit.
+    pub device_text: bool,
+    /// Set after one press of d on Review; a second press discards.
+    pub discarding: bool,
+    pub devices: Vec<usize>,
     pub running: bool,
     pub show_help: bool,
 
@@ -376,7 +496,18 @@ impl LiveApp {
     pub fn new(backend: &dyn Backend) -> LiveApp {
         let mut app = LiveApp {
             screen: Screen::Home,
-            advanced: false,
+            detailed: vec![],
+            prefs: None,
+            menu: 0,
+            cell: (0, 1),
+            switch: 0,
+            form: None,
+            back: Screen::Home,
+            checked: None,
+            device: None,
+            device_text: false,
+            discarding: false,
+            devices: vec![],
             running: true,
             show_help: false,
             status: Status::default(),
@@ -430,6 +561,7 @@ impl LiveApp {
             ),
         };
         self.hits = backend.hits().unwrap_or_default();
+        self.devices = backend.devices().unwrap_or_default();
         self.audit = backend.audit()?;
         self.candidate = self
             .candidate
@@ -439,6 +571,7 @@ impl LiveApp {
         self.pair = self.pair.min(pairs.saturating_sub(1));
         self.rule = self.rule.min(self.rules().len().saturating_sub(1));
         self.audit_row = self.audit_row.min(self.audit.len().saturating_sub(1));
+        self.menu = self.menu.min(self.menu_items().len().saturating_sub(1));
         Ok(())
     }
 
@@ -519,6 +652,20 @@ impl LiveApp {
             self.show_help = false;
             return;
         }
+        // A VPN device's settings stay up until they are dismissed on purpose.
+        if self.device.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.device = None;
+                    self.device_text = false;
+                }
+                KeyCode::Tab => self.device_text = !self.device_text,
+                _ => {}
+            }
+            return;
+        }
+        let again = self.discarding;
+        self.discarding = false;
         // The reason prompt takes every key until it is answered.
         if let Some(reason) = &mut self.reason {
             match key.code {
@@ -564,6 +711,12 @@ impl LiveApp {
             return;
         }
 
+        // And a task form.
+        if self.form.is_some() {
+            self.on_form_key(key.code, backend);
+            return;
+        }
+
         let pending = self.status.reverts_in.is_some();
         match key.code {
             KeyCode::Char('q') => self.running = false,
@@ -582,31 +735,50 @@ impl LiveApp {
                 };
                 self.screen = tabs[(at + step) % tabs.len()];
             }
-            KeyCode::Char(c @ '1'..='9') => {
-                if let Some(screen) = self.tabs().get(c as usize - '1' as usize) {
+            KeyCode::Char(c @ '0'..='9') => {
+                // 0 is the tenth tab.
+                let at = (c as usize - '0' as usize + 9) % 10;
+                if let Some(screen) = self.tabs().get(at) {
                     self.screen = *screen;
                 }
             }
             // The detailed screens are a switch, as in the web interface.
             // It shows or hides tabs and changes nothing on the box.
             KeyCode::Char('A') => {
-                self.advanced = !self.advanced;
-                if !self.tabs().contains(&self.screen) {
-                    self.screen = Screen::Home;
-                }
+                self.detailed = if self.detailed.is_empty() {
+                    DETAILED.iter().map(|d| d.0).collect()
+                } else {
+                    vec![]
+                };
+                self.switched();
             }
             // From Home, straight to the waiting change.
-            KeyCode::Char('a') if self.screen == Screen::Home => self.screen = Screen::Changes,
-            // A pending commit can be kept or undone from any screen.
+            KeyCode::Char('a') if self.screen == Screen::Home => self.screen = Screen::Review,
+            // An applied change can be kept or undone from any screen.
             KeyCode::Char('y') if pending => {
-                let result = backend.confirm().map(|id| format!("kept #{id}"));
+                let result = backend
+                    .confirm()
+                    .map(|id| format!("Kept. Change #{id} stays."));
                 self.act(backend, result);
             }
             KeyCode::Char('r') if pending => {
-                let result = backend
-                    .revert()
-                    .map(|id| format!("undone #{id}; the candidate is kept"));
+                let result = backend.revert().map(|id| {
+                    format!("Undone. The box is as it was before change #{id}, and the change is still waiting if you want it.")
+                });
                 self.act(backend, result);
+            }
+            KeyCode::Char('d') if self.screen == Screen::Review => {
+                let Some(name) = self.selected_candidate().map(String::from) else {
+                    return;
+                };
+                if again {
+                    let result = backend
+                        .discard(&name)
+                        .map(|()| "Discarded. Nothing was changed.".to_string());
+                    self.act(backend, result);
+                } else {
+                    self.discarding = true;
+                }
             }
             code => self.on_screen_key(code, backend, pending),
         }
@@ -614,10 +786,251 @@ impl LiveApp {
 
     /// The screens that have a tab right now.
     pub fn tabs(&self) -> Vec<Screen> {
-        if self.advanced {
-            Screen::ALL.to_vec()
-        } else {
-            SIMPLE.to_vec()
+        Screen::ALL
+            .into_iter()
+            .filter(|s| SIMPLE.contains(s) || self.detailed.contains(s))
+            .collect()
+    }
+
+    /// After a switch changed: never leave the user on a hidden screen, and
+    /// remember the choice.
+    fn switched(&mut self) {
+        self.detailed.sort();
+        if !self.tabs().contains(&self.screen) {
+            self.screen = Screen::Home;
+        }
+        if let Some(path) = &self.prefs {
+            let text: String = self
+                .detailed
+                .iter()
+                .map(|s| format!("{}\n", s.title()))
+                .collect();
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            // Losing this costs one key press next time, so a failure is not reported.
+            let _ = std::fs::write(path, text);
+        }
+    }
+
+    /// Reads the switches kept by an earlier run.
+    pub fn load_prefs(&mut self, path: PathBuf) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            self.detailed = DETAILED
+                .iter()
+                .map(|d| d.0)
+                .filter(|s| text.lines().any(|l| l.trim() == s.title()))
+                .collect();
+        }
+        self.prefs = Some(path);
+    }
+
+    /// How many changes wait to be reviewed. One that is applied and not
+    /// kept yet is past that point, though the box holds it until it is kept.
+    pub fn waiting(&self) -> usize {
+        let applied = self
+            .status
+            .running
+            .as_ref()
+            .filter(|c| c.pending)
+            .map(|c| c.source.as_str());
+        self.status
+            .candidates
+            .iter()
+            .filter(|c| applied != Some(format!("candidate {c}").as_str()))
+            .count()
+    }
+
+    /// The Home menu as it stands: the review line only when a change waits.
+    pub fn menu_items(&self) -> Vec<(Choice, &'static str)> {
+        let waiting = self.waiting();
+        MENU.into_iter()
+            .filter(|(c, _)| *c != Choice::Review || waiting > 0)
+            .map(|(c, label)| match (c, waiting) {
+                (Choice::Review, n) if n > 1 => (c, "Review and apply the waiting changes"),
+                _ => (c, label),
+            })
+            .collect()
+    }
+
+    fn start_task(&mut self, task: Task) {
+        let Some(config) = &self.config else {
+            self.message = Some(
+                "refused: the box is not set up yet. Run `ox init --save starter` then `ox apply starter` on it first."
+                    .into(),
+            );
+            return;
+        };
+        self.form = Some(Form::new(task, config));
+        self.back = self.screen;
+        self.message = None;
+    }
+
+    /// The name someone gave a rule or a port forward, by its ID.
+    fn rule_name(&self, id: &str) -> Option<String> {
+        let config = self.config.as_ref()?;
+        config
+            .policies
+            .iter()
+            .flat_map(|p| p.rules.iter())
+            .find(|r| r.id == id)
+            .map(|r| r.name.clone())
+            .or_else(|| {
+                config
+                    .nat
+                    .forward
+                    .iter()
+                    .find(|f| f.id == id || f.rule == id)
+                    .map(|f| f.name.clone())
+            })
+    }
+
+    fn on_form_key(&mut self, code: KeyCode, backend: &dyn Backend) {
+        let Some(form) = &mut self.form else {
+            return;
+        };
+        match code {
+            KeyCode::Esc => {
+                self.form = None;
+                self.screen = self.back;
+            }
+            KeyCode::Tab | KeyCode::Down => form.step(true),
+            KeyCode::BackTab | KeyCode::Up => form.step(false),
+            KeyCode::Left => form.turn(false),
+            KeyCode::Right => form.turn(true),
+            KeyCode::Backspace => form.backspace(),
+            KeyCode::Char(c) => form.type_char(c),
+            KeyCode::Enter => self.send_form(backend),
+            _ => {}
+        }
+    }
+
+    fn send_form(&mut self, backend: &dyn Backend) {
+        let Some(form) = &mut self.form else {
+            return;
+        };
+        if form.task == Task::Check {
+            let (src, dst, proto, dport) = match form.connection() {
+                Ok(c) => c,
+                Err(e) => {
+                    form.error = Some(e);
+                    return;
+                }
+            };
+            let query = Query {
+                src,
+                dst,
+                proto,
+                dport,
+                iif: String::new(),
+            };
+            let answer = backend.explain(&query, None).and_then(|r| {
+                let side = r
+                    .running
+                    .ok_or("The box is not set up yet, so nothing decides this.")?;
+                let allowed = side.verdict == "ACCEPT";
+                let why = match &side.rule {
+                    Some(id) => format!(
+                        "{} {}.",
+                        if allowed {
+                            "It is allowed by"
+                        } else {
+                            "It is stopped by"
+                        },
+                        self.rule_name(id)
+                            .map_or(format!("rule {id}"), |n| format!("\"{n}\""))
+                    ),
+                    None if allowed => "Nothing stands in its way.".to_string(),
+                    None => "Nothing allows it, and anything not allowed is blocked.".to_string(),
+                };
+                Ok(Checked {
+                    packet: r.packet,
+                    allowed,
+                    why,
+                })
+            });
+            match answer {
+                Err(e) => {
+                    if let Some(form) = &mut self.form {
+                        form.error = Some(e);
+                    }
+                }
+                ok => {
+                    self.checked = Some(ok);
+                    self.form = None;
+                    self.screen = Screen::Home;
+                }
+            }
+            return;
+        }
+        let sent = form
+            .request()
+            .and_then(|(path, body)| backend.action(path, &body));
+        match sent {
+            Err(e) => form.error = Some(e),
+            Ok(saved) => {
+                self.form = None;
+                self.saved(backend, saved);
+            }
+        }
+    }
+
+    /// A task saved a waiting change: show it for review.
+    fn saved(&mut self, backend: &dyn Backend, saved: Saved) {
+        self.device = saved.device;
+        self.device_text = false;
+        self.refresh(backend);
+        if let Some(at) = self
+            .status
+            .candidates
+            .iter()
+            .position(|c| *c == saved.candidate)
+        {
+            self.candidate = at;
+            self.plan = Some(backend.plan(&saved.candidate));
+        }
+        self.screen = Screen::Review;
+        // What it does is on the Review screen in full, so the banner stays short.
+        self.message = Some("Ready to review. Nothing is applied yet.".to_string());
+    }
+
+    /// Lets the selected network reach the other, or stops it.
+    fn flip_access(&mut self, backend: &dyn Backend, pending: bool) {
+        let Some(config) = &self.config else {
+            return;
+        };
+        let grid = ox_setup::grid(config);
+        let (i, j) = self.cell;
+        let (Some(from), Some(to)) = (grid.networks.get(i), grid.networks.get(j)) else {
+            return;
+        };
+        let refuse = |why: &str| Some(format!("refused: {why}"));
+        let allow = match &grid.cells[i][j] {
+            _ if pending => {
+                self.message =
+                    refuse("a change is waiting to be kept or undone. Deal with that first.");
+                return;
+            }
+            ox_setup::Cell::Same => return,
+            _ if from.internet => {
+                self.message = refuse(
+                    "the internet is let in one service at a time. On Home, choose \"Let something in from the internet\".",
+                );
+                return;
+            }
+            ox_setup::Cell::Custom { .. } => {
+                self.message = refuse(
+                    "this pair has rules of its own, so it is not changed here by accident. Switch on the full rule list under Settings to see them.",
+                );
+                return;
+            }
+            ox_setup::Cell::Allowed => false,
+            ox_setup::Cell::Blocked => true,
+        };
+        let body = json!({ "from": from.zone, "to": to.zone, "allow": allow });
+        match backend.action("/v1/actions/access", &body) {
+            Ok(saved) => self.saved(backend, saved),
+            Err(e) => self.act(backend, Err(e)),
         }
     }
 
@@ -635,7 +1048,63 @@ impl LiveApp {
             matches!(code, KeyCode::Up | KeyCode::Char('k')),
             matches!(code, KeyCode::Down | KeyCode::Char('j')),
         );
+        let networks = self
+            .config
+            .as_ref()
+            .map_or(0, |c| ox_setup::grid(c).networks.len());
         match self.screen {
+            Screen::Home => match code {
+                _ if up || down => self.menu = step(self.menu, self.menu_items().len(), down),
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    match self.menu_items().get(self.menu).map(|m| m.0) {
+                        Some(Choice::Review) => self.screen = Screen::Review,
+                        Some(Choice::Access) => self.screen = Screen::Access,
+                        Some(Choice::Task(task)) => self.start_task(task),
+                        None => {}
+                    }
+                }
+                _ => {}
+            },
+            Screen::Access => match code {
+                _ if up || down => self.cell.0 = step(self.cell.0, networks, down),
+                KeyCode::Left | KeyCode::Char('h') => {
+                    self.cell.1 = step(self.cell.1, networks, false);
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    self.cell.1 = step(self.cell.1, networks, true);
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => self.flip_access(backend, pending),
+                _ => {}
+            },
+            Screen::Review => match code {
+                _ if up || down => {
+                    self.candidate = step(self.candidate, self.status.candidates.len(), down);
+                    self.plan = self.selected_candidate().map(|name| backend.plan(name));
+                }
+                KeyCode::Enter | KeyCode::Char('a') if !pending => {
+                    if let Some(name) = self.selected_candidate().map(String::from) {
+                        let result = backend.commit(&name, SAFE_SECS, "").map(|_| {
+                            "Applied. Check things still work, then press y to keep it.".to_string()
+                        });
+                        self.act(backend, result);
+                    }
+                }
+                _ => {}
+            },
+            Screen::Settings => match code {
+                _ if up || down => self.switch = step(self.switch, DETAILED.len(), down),
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    let screen = DETAILED[self.switch].0;
+                    match self.detailed.iter().position(|s| *s == screen) {
+                        Some(at) => {
+                            self.detailed.remove(at);
+                        }
+                        None => self.detailed.push(screen),
+                    }
+                    self.switched();
+                }
+                _ => {}
+            },
             Screen::Policy => {
                 let pairs = self.config.as_ref().map_or(0, |c| c.policies.len());
                 match code {
@@ -769,6 +1238,12 @@ pub mod fixture {
         pub applied: bool,
         pub pending: bool,
         pub commits: Vec<(String, u64, String)>,
+        /// The tasks the TUI asked for: route and body.
+        pub actions: Vec<(String, Value)>,
+        /// Waiting changes those tasks saved.
+        pub saved: Vec<String>,
+        /// True once the candidate that was there to begin with is discarded.
+        pub discarded: bool,
         pub explained: Vec<(Query, Option<String>)>,
     }
 
@@ -797,11 +1272,14 @@ pub mod fixture {
                     pending: s.pending,
                 }),
                 reverts_in: s.pending.then_some(287),
-                candidates: if s.applied && !s.pending {
+                candidates: if s.discarded || (s.applied && !s.pending) {
                     vec![]
                 } else {
                     vec!["block-legacy-smb".into()]
-                },
+                }
+                .into_iter()
+                .chain(s.saved.iter().cloned())
+                .collect(),
                 applier: "kernel".into(),
             })
         }
@@ -827,7 +1305,13 @@ pub mod fixture {
             .collect())
         }
         fn plan(&self, _: &str) -> Res<PlanView> {
+            let old = Config::from_toml(BRANCH).map_err(|e| e.to_string())?;
+            let new = Config::from_toml(CANDIDATE).map_err(|e| e.to_string())?;
+            let (starts, stops) = ox_setup::plain_changes(&old, &new);
             Ok(PlanView {
+                headline: ox_setup::headline(&old, &new),
+                starts,
+                stops,
                 first_commit: false,
                 summary: "9 rules in 5 zone pairs → 19 nftables rules, 27 sets, 2 verdict maps, longest chain 6".into(),
                 changes: vec![
@@ -842,6 +1326,7 @@ pub mod fixture {
                 .push((candidate.to_string(), confirm_secs, reason.to_string()));
             s.applied = true;
             s.pending = true;
+            s.saved.retain(|c| c != candidate);
             Ok(2)
         }
         fn confirm(&self) -> Res<u64> {
@@ -864,6 +1349,7 @@ pub mod fixture {
             }
             let side = |verdict: &str, rule: &str| ExplainSide {
                 verdict: verdict.into(),
+                rule: rule.split(' ').next().map(String::from),
                 lines: vec![
                     " 1 ingress    lan0.20 → zone lan".into(),
                     " 2 route      out lan0.30 → zone dmz".into(),
@@ -875,6 +1361,34 @@ pub mod fixture {
                 running: Some(side("ACCEPT", "r-0388 accept · Finance to file servers")),
                 candidate: candidate.map(|_| side("DROP", "r-0412 drop · Drop SMB and NetBIOS")),
             })
+        }
+        fn devices(&self) -> Res<Vec<usize>> {
+            Ok(vec![14, 3, 0, 0, 0, 0])
+        }
+        fn action(&self, path: &str, body: &Value) -> Res<Saved> {
+            let mut s = self.0.borrow_mut();
+            s.actions.push((path.to_string(), body.clone()));
+            if body["name"] == "refuse me" {
+                return Err("the daemon said no".into());
+            }
+            let candidate = format!("task-{}", s.actions.len());
+            s.saved.push(candidate.clone());
+            Ok(Saved {
+                candidate,
+                done: vec!["Did what was asked".into()],
+                device: path.ends_with("vpn-peer").then(|| Device {
+                    config: "[Interface]\nPrivateKey = not-a-real-key\nAddress = 10.99.0.2/32\n\n[Peer]\nPublicKey = also-not-real\nEndpoint = home.example.net:51820\n".into(),
+                    key_made_here: true,
+                }),
+            })
+        }
+        fn discard(&self, candidate: &str) -> Res<()> {
+            let mut s = self.0.borrow_mut();
+            if candidate == "block-legacy-smb" {
+                s.discarded = true;
+            }
+            s.saved.retain(|c| c != candidate);
+            Ok(())
         }
         fn audit(&self) -> Res<Vec<AuditRow>> {
             let row = |seq, who: &str, event: &str, detail: &str| AuditRow {

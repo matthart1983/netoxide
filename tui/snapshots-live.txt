@@ -1,29 +1,76 @@
 ── Home ──
- Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Home  2 Changes
-╭ status ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ✓ The firewall is running                                                                                                                                    │
-│   1 thing is let in from the internet. Everything else is blocked.                                                                                           │
-│   1 change is waiting. Press a to review and apply it.                                                                                                       │
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
+╭ status ────────────────────────────────────────────────────────────────────────────────────────────────────╮╭ what would you like to do? ────────────────────╮
+│ ✓ The firewall is running                                                                                  ││▸ Review and apply the waiting change           │
+│   1 thing is let in from the internet. Everything else is blocked.                                         ││  Add a network, such as one for guests         │
+│   1 change is waiting. Nothing is applied until you review it.                                             ││  Let something in from the internet            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯│  Give a phone or laptop remote access          │
+╭ your networks ─────────────────────────────────────────────────────────────────────────────────────────────╮│  Block a device or a website                   │
+│network        devices     can reach                       port and address                                 ││  Change which networks can reach each other    │
+│Servers        14 devices  Nothing                         lan0.30  10.30.0.1/24, 2001:db8:4a00:2::1/64     ││  Check whether something is blocked            │
+│Guest Wi-Fi    3 devices   Parts of Internet               lan0.50  10.50.0.1/22                            ││                                                │
+│Staff network  0 devices   Parts of Servers and Internet   lan0.20  10.20.0.1/16, 2001:db8:4a00:1::1/64     ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+│                                                                                                            ││                                                │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯
+  ↑↓  choose   enter  open   tab  next screen   ?  help   q  quit
+── Access ──
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
+╭ who can reach what · anything not allowed is blocked ────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│from ↓  to →   Servers                 Guest Wi-Fi             Staff network           Internet                                                               │
+│Servers         —                       Blocked                 Blocked                 Blocked                                                               │
+│Guest Wi-Fi     Blocked                 —                       Blocked                 Only dns, http, https                                                 │
+│Staff network   3 rules                 Blocked                 —                       1 rule                                                                │
+│Internet        1 service let in        Blocked                 Blocked                 —                                                                     │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭ your networks ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│network        can reach                         ports and addresses                                                                                          │
-│Servers        Nothing                           lan0.30  10.30.0.1/24, 2001:db8:4a00:2::1/64                                                                 │
-│Guest Wi-Fi    Parts of Internet                 lan0.50  10.50.0.1/22                                                                                        │
-│Staff network  Parts of Servers and Internet     lan0.20  10.20.0.1/16, 2001:db8:4a00:1::1/64                                                                 │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭ who can reach what ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│from ↓  to →   Servers               Guest Wi-Fi           Staff network         Internet                                                                     │
-│Servers        —                     Blocked               Blocked               Blocked                                                                      │
-│Guest Wi-Fi    Blocked               —                     Blocked               Only dns, http, https                                                        │
-│Staff network  3 rules               Blocked               —                     1 rule                                                                       │
-│Internet       1 service let in      Blocked               Blocked               —                                                                            │
+╭ selected ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Servers to Guest Wi-Fi: Blocked.                                                                                                                              │
+│Press enter to allow it. You see the change before anything is applied.                                                                                       │
 │                                                                                                                                                              │
-╰ anything not allowed is blocked · yellow has rules of its own (A for the detailed screens) ──────────────────────────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭ let in from the internet ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│Public web              tcp/443     goes to 10.30.0.10                                                                                                        │
+│Public web                tcp/443     goes to 10.30.0.10                                                                                                      │
 │                                                                                                                                                              │
-│Change things with ox on the box: ox access, ox forward, ox block, ox vpn add. Then press a here, or run ox apply.                                            │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 │                                                                                                                                                              │
@@ -44,10 +91,104 @@
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  a  review and apply   tab  screens   A  advanced   R  reload   ?  help   q  quit
+  ↑↓←→  move   enter  allow or block   tab  next screen   ?  help   q  quit
+── Review ──
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
+╭ what will change ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│• What Staff network can reach on Servers changes (4 rules)                                                                                                   │
+│                                                                                                                                                              │
+│In detail                                                                                                                                                     │
+│The box will start doing this:                                                                                                                                │
+│  + lan → dmz: smb, netbios from anyone to anywhere is dropped (r-0412)                                                                                       │
+│  + lan → dmz: https from @finance-pcs to @finance-file-servers is allowed (r-0388)                                                                           │
+│The box will stop doing this:                                                                                                                                 │
+│  - lan → dmz: smb, netbios, https from @finance-pcs to @finance-file-servers is allowed (r-0388)                                                             │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ apply safely ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│You get 2 minutes to check things still work. If you do not keep the change, it undoes itself, so a mistake cannot lock you out.                              │
+│                                                                                                                                                              │
+│enter applies it safely.  d discards it. Nothing changes until you choose.                                                                                    │
+│                                                                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  enter  apply safely   d  discard   tab  next screen   ?  help   q  quit
+── Settings ──
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
+╭ basics ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│box name        syd-br-014-a                                                                                                                                  │
+│changes         applied safely: each undoes itself after 2 minutes unless kept                                                                                │
+│rules           loaded into the kernel of this box                                                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ detailed screens · each adds a tab ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│▸ [ ] The full rule list   every rule, with packet counts                                                                                                     │
+│  [ ] Address translation  port forwards and outbound, line by line                                                                                           │
+│  [ ] Ports and addresses  each port and its addresses                                                                                                        │
+│  [ ] The full plan        the technical plan, a reason, your own timer                                                                                       │
+│  [ ] The packet tracer    any packet, step by step                                                                                                           │
+│  [ ] The audit log        who did what and when                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰ a switch shows or hides a screen and never changes what the box does ────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑↓  choose   enter  switch on or off   tab  next screen   ?  help   q  quit
 ── Policy ──
- Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Home  2 Changes
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
 ╭ zone pairs ──────────────╮╭ lan → dmz · 3 rules · first match wins ──────────────────────────────────────────────────────────────────────────────────────────╮
 │▸ lan → dmz            3  ││ #  rule                                                                                                 action packets    log    │
 │  lan → wan            1  ││▸1  r-0388 Finance to file servers                                                                       accept       1204        │
@@ -91,10 +232,10 @@
 │                          ││reason          Open file share for finance, CHG-1984                                                                             │
 │                          ││state           enabled, in the kernel                                                                                            │
 ╰ 8 rules · 5 pairs ───────╯╰ packets are kernel counters since the last load ─────────────────────────────────────────────────────────────────────────────────╯
-  ←→  zone pair   ↑↓  rule   x  explain   tab  screens   A  advanced   R  reload   ?  help   q  quit
+  ←→  zone pair   ↑↓  rule   x  explain   R  reload   tab  next screen   ?  help   q  quit
 ── NAT ──
- Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Home  2 Changes
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
 ╭ port forwards · 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │id           name                                from zone  match                                translate to                        filter rule    packets   │
 │n-0010       Public web                          wan        203.0.113.10 tcp/443                 10.30.0.10                          r-0200             512880│
@@ -138,10 +279,10 @@
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  tab  screens   A  advanced   R  reload   ?  help   q  quit
+  R  reload   tab  next screen   ?  help   q  quit
 ── Interfaces ──
- Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Home  2 Changes
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
 ╭ interfaces · 4 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │interface        zone         zone description                      addresses                                                                   route         │
 │lan0.20          lan          Staff network                         10.20.0.1/16, 2001:db8:4a00:1::1/64                                                       │
@@ -185,10 +326,10 @@
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 ╰ from the running config; link state is not read yet ─────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  tab  screens   A  advanced   R  reload   ?  help   q  quit
+  R  reload   tab  next screen   ?  help   q  quit
 ── Changes ──
- Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Home  2 Changes
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
 ╭ candidates ──────────────────────────────────────────────────────────────────────────────────╮╭ running ─────────────────────────────────────────────────────╮
 │▸ block-legacy-smb                                                                            ││#1  confirmed                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────╯│by              ana                                           │
@@ -232,10 +373,10 @@
 │                                                                                              ││                                                              │
 │                                                                                              ││                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
-  ↑↓  candidate   c  commit   w  confirm window   tab  screens   A  advanced   R  reload   ?  help   q  quit
+  ↑↓  candidate   c  commit   w  confirm window   R  reload   tab  next screen   ?  help   q  quit
 ── Explain ──
- Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Home  2 Changes
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
 ╭ why did this packet do that? ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │src —   dst —   proto tcp   dport —   in —                                                                                                                    │
 │                                                                                                                                                              │
@@ -279,10 +420,10 @@
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  e  edit packet   enter  explain   m  compare candidate   tab  screens   A  advanced   R  reload   ?  help   q  quit
+  e  edit packet   enter  explain   m  compare candidate   R  reload   tab  next screen   ?  help   q  quit
 ── Audit ──
- Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Home  2 Changes
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Access  3 Review  4 Settings
 ╭ audit log · 4 entries · hash chain verified by oxd ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ #    time (UTC)          who          event             detail                                                                                    hash       │
 │▸   4 2026-11-14 10:56:03 jun          candidate saved   block-legacy-smb sha256 762941b3                                                          049f3ca1e0…│
@@ -326,4 +467,4 @@
 │hash 049f3ca1e041d27b9cc07a3f122be890d477e1c5aae4f912bd0a9915cf22                                                                                             │
 │                                                                                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  ↑↓  entry   tab  screens   A  advanced   R  reload   ?  help   q  quit
+  ↑↓  entry   R  reload   tab  next screen   ?  help   q  quit

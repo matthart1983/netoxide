@@ -40,7 +40,7 @@ The crates, the design rules, and what the tests cover.
 | `ox-services` | Renders the config's DNS and DHCP settings as a dnsmasq config |
 | `ox-setup` | Interface detection, the starter config, and the one-step actions |
 | `ox-client` | The HTTP client for the daemon's socket, shared by `ox` and the TUI |
-| `tui/` | The terminal UI prototype |
+| `tui/` | The terminal UI: live mode against the daemon, and a mock mode with sample data |
 
 What the kernel gets, for the example config:
 
@@ -80,7 +80,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 179 tests. Fourteen of them run a daemon inside a private, rootless network namespace, most of those against the real kernel:
+There are 189 tests. Fourteen of them run a daemon inside a private, rootless network namespace, most of those against the real kernel:
 
 - The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
 - The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.
@@ -103,4 +103,6 @@ A separate test boots a virtual machine and checks the installed daemon under sy
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 
-The TUI tests compare every mock screen with `tui/snapshots.txt` and every live screen, drawn against a test fixture, with `tui/snapshots-live.txt`.
+The TUI tests compare every mock screen with `tui/snapshots.txt` and every live screen, drawn against a test fixture, with `tui/snapshots-live.txt`. They also replay keys through each task and check the request the daemon would get, and draw every plain screen and form at 80×24.
+
+`tests/tui/run.sh` is separate from `cargo test`. It starts a daemon in a namespace and walks the terminal UI through setup, a new network, the access grid, a port forward, blocking, a check and a VPN device, 33 screens in all, checking each result with `ox`. CI runs it with real rules.

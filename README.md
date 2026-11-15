@@ -19,19 +19,31 @@ It is meant for two groups: home-lab users who want one box that is quick to set
 
 ## In the terminal
 
-`netoxide-tui` is a full-screen terminal interface. Everything on screen comes from the daemon and is read again once a second.
+`netoxide-tui` is a full-screen terminal interface with the same four plain screens as the browser. It fits a terminal as it opens, 80 columns by 24 lines, so it works over SSH on the box.
 
-![Home: the firewall is running, the networks and what each can reach, a grid of who can reach what, and what is let in from the internet](docs/images/tui-home.png)
+![A recording: adding a guest network from the Home menu, applying it safely and keeping it, allowing the inside network to reach it on the Access grid, then asking whether a guest device can reach an inside one](docs/images/tui-demo.gif)
 
-It opens on Home: whether the firewall is running, your networks, and who can reach what. A pair with hand-written rules shows what they do in yellow. Press `a` to go to a waiting change.
+The recording is a real daemon with real rules, in a network namespace. [`tests/tui/demo.sh`](tests/tui/demo.sh) makes it.
 
-![Changes: a candidate, its plan with two changes, the running commit and the commit panel with an undo timer](docs/images/tui-changes.png)
+Home says whether the firewall is running, lists your networks, and offers the things you can do as a menu. There are no keys to learn beyond the arrows and enter.
 
-Changes shows what a waiting change would do before you apply it. A commit from here always has an undo timer: press `y` to keep it, or do nothing and the box goes back by itself.
+![Home: the firewall is running, an answer saying a connection is blocked and why, two networks with what each can reach, and a menu of six tasks](docs/images/tui-home.png)
 
-Press `A` for the detailed screens: Policy with the kernel's packet counter beside each rule, NAT, Interfaces, Explain and Audit. Like the switches in the web interface, `A` only shows or hides screens.
+A task is a few lines to fill in. Nothing is applied when you send it. You see the change first.
 
-The same tool works over SSH on the box or from your own machine with `--remote`. The command line tool `ox` follows the same idea. `ox --help` lists a dozen everyday commands, and `ox more` lists the rest:
+![Add a network: what it is for, which port, the VLAN number, the box's address, and whether it can reach the internet](docs/images/tui-task.png)
+
+Review says what will change in a sentence, then in detail. Enter applies it with a two-minute undo timer. Press `y` to keep it, or do nothing and the box goes back by itself.
+
+![Review: a new network called Guest Wi-Fi that can reach the internet, the detail underneath, and Apply safely](docs/images/tui-review.png)
+
+Access is the grid of who can reach what. Move to a pair and press enter to allow or block it. A pair with hand-written rules shows what they do in yellow and is not changed from here.
+
+![Access: a grid of three networks with Allowed and Blocked cells, the selected pair in a sentence, and what is let in from the internet](docs/images/tui-access.png)
+
+Settings has a switch for each detailed screen: the full rule list with the kernel's packet counter beside each rule, address translation, ports, the full plan, the packet tracer and the audit log. A switch only shows or hides a screen. The detailed screens need a bigger terminal, 132 by 34.
+
+The same tool works from your own machine with `--remote`. The command line tool `ox` follows the same idea. `ox --help` lists a dozen everyday commands, and `ox more` lists the rest:
 
 ```sh
 ox init --save starter                 # guided setup: which port faces the internet?
@@ -71,7 +83,7 @@ The web interface is simple by default. Everyone sees three screens: Home, Acces
 
 **Advanced, when you want it.** The full rule list, address translation, interfaces, candidates and the config editor, the packet tracer, the audit log, and tokens and roles are each a switch. A switch only shows or hides a screen. It never changes what the box does.
 
-The interface is three static files compiled into the daemon, with no build step and nothing loaded from elsewhere. A script drives all of the above in headless Chrome and Firefox on every change ([`tests/web/`](tests/web/run.sh)); the pictures here come from it.
+The interface is three static files compiled into the daemon, with no build step and nothing loaded from elsewhere. A script drives all of the above in headless Chrome and Firefox on every change, and another walks the terminal interface against a real daemon ([`tests/tui/`](tests/tui/run.sh)) ([`tests/web/`](tests/web/run.sh)); the pictures here come from it.
 
 ## What it does
 
@@ -162,7 +174,7 @@ The short version. The full list is in [docs/status.md](docs/status.md#limits-to
 
 Most of the code, tests and documentation here were written by an AI coding assistant, Claude, working under the direction of one human maintainer who decides what gets built and merges it. Commits made that way carry a `Co-Authored-By` trailer.
 
-A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 179 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
+A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 189 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
 
 There is no AI on the box. The firewall does not call a model, send data anywhere, or include an assistant.
 

@@ -15,7 +15,7 @@ decision. This file gives you what you need to start working.
 | --- | --- | --- |
 | Spec | `docs/spec.md` | Complete draft; open questions at the end |
 | Web UI design | `docs/design/` | 11 screens as Claude Design source, mock data |
-| TUI | `tui/` | ratatui 0.29. Live mode (`--socket`): 6 screens backed by `oxd`. Mock mode: the 11 designed screens with sample data |
+| TUI | `tui/` | ratatui 0.29. Live mode (`--socket`, `--live`, `--remote`): four plain screens (Home, Access, Review, Settings) that fit 80×24 and do the web UI's tasks, and six detailed screens as switches. Mock mode: the 11 designed screens with sample data |
 | Config schema | `crates/ox-schema` | Schema 1: zones, interfaces, groups, services, filter policy, NAT, DNS resolver, DHCP pools |
 | Rule compiler | `crates/ox-nft` | Config → `Ruleset` → libnftables JSON |
 | Explain | `crates/ox-explain` | One packet against a ruleset: forward, route, zone pair, rule, source NAT |
@@ -77,10 +77,12 @@ Matt's rule for adoption. It overrides any reading of the spec that puts
 expert screens first.
 
 - **Default layer:** Setup, Home, Access, Review and Settings in the web UI;
-  a dozen everyday commands in `ox --help`. Plain words: networks, Allowed,
+  Home, Access, Review and Settings in the terminal UI, with the same tasks
+  as a menu; a dozen everyday commands in `ox --help`. Plain words: networks, Allowed,
   Blocked, apply safely, keep, undo.
 - **Advanced layer:** each detailed screen is a switch in Settings
-  (`ADVANCED` in `app.js`), kept in the browser. A switch only shows or hides
+  (`ADVANCED` in `app.js`, kept in the browser; `DETAILED` in `tui/src/live.rs`,
+  kept in `~/.config/netoxide/tui-screens`). A switch only shows or hides
   a screen and never changes traffic. Advanced commands are `hide = true` in
   clap and listed by `ox more`.
 - **In use stays on:** a screen the box depends on is shown whatever the
@@ -119,9 +121,10 @@ When a feature lands, update `docs/status.md`,
 `docs/reference.md` and `CHANGELOG.md`; touch the README only if the front
 page is now wrong.
 
-The pictures in `docs/images/` are made by hand: `netoxide-tui --socket <s>
---snapshot <screen> --size 132x34 --html-out <file>` writes a live screen as a
-page, and the web pictures are browser captures of a `--dry-run` daemon loaded
+The terminal pictures and the demo in `docs/images/` come from
+`tests/tui/demo.sh`, except `tui-policy.png`: `netoxide-tui --socket <s>
+--snapshot policy --keys A --size 132x34 --html-out <file>` writes that screen
+as a page to capture in a browser. The web pictures are browser captures of a `--dry-run` daemon loaded
 with `examples/branch.toml` and `examples/branch-candidate.toml`. Retake them
 when a screen changes.
 
@@ -197,7 +200,7 @@ Proposed next, not decided, roughly in this order:
 
 1. Run it on real hardware with SELinux enforcing, and a first watched deployment. DHCPv6 prefix delegation for the inside network. VLAN and PPPoE interfaces.
 2. Services as sandboxed systemd units instead of direct children of `oxd`; Unbound and Kea renderers beside dnsmasq. The schema must stay backend-neutral.
-3. More one-step actions (add a guest network, allow a service) in `ox-setup`, the same actions in the TUI, rule editing there, and `ox trace`.
+3. Rule editing and first-run setup in the TUI, more one-step actions (allow one service between networks) in `ox-setup`, and `ox trace`.
 4. IPsec (strongSwan over VICI; not installed on Matt's machine). WireGuard follow-ups: full-tunnel peers (needs policy routing), preshared keys, a test against the official `wg` tools.
 5. OIDC sign-in (needs an outbound HTTPS client and JWT checks in the daemon, and a test identity provider). Roles held to one zone pair or interface.
 6. Multi-WAN, FRR, CAKE, Suricata.
@@ -243,7 +246,7 @@ nftables table.
 
 ```sh
 cd tui
-cargo run --release -- --socket /path/to/oxd.sock    # live mode; needs ≥ 132×34
+cargo run --release -- --socket /path/to/oxd.sock    # live mode; 80×24 for the plain screens, 132×34 for the detailed ones
 cargo run --release                                  # mock mode: the 11 designed screens
 cargo run -- --socket S --snapshot all --size 160x46 # print live screens as text
 cargo run -- --socket S --snapshot changes --keys c  # replay keys first
@@ -254,8 +257,13 @@ cargo run -- --html preview.html                     # coloured static preview o
 Live mode:
 
 - `src/live.rs` holds the `Backend` trait, the socket implementation, state and keys. Everything the screens show comes through `Backend`. The test fixture in the same file implements it in memory.
-- `src/live_ui.rs` draws the six live screens: Policy, NAT, Interfaces, Changes, Explain, Audit.
+- `src/tasks.rs` holds the plain-language tasks: each is a `Form` that ends in one request to an `/v1/actions/...` route the web UI also uses. Add a task there and in `MENU`, never as a new key to learn.
+- `src/live_ui.rs` draws the screens. The plain ones (`SIMPLE`) must fit 80×24, footer keys included; a test draws every screen and every line of every form at that size. The detailed ones need 132×34.
+- Plain screens use plain words: change, apply safely, keep, undo. "Candidate", "commit" and rule IDs belong to the detailed screens. A test checks Home for them.
+- A change that is applied and not kept yet is past review: `waiting()` leaves it out, and Review offers keep or undo.
 - Never put sample data in a live screen. If the daemon cannot back something, leave the screen out of live mode.
+- `tests/tui/run.sh` walks the plain screens against a real daemon in a namespace (`OX_TUI_KERNEL=1` for real rules) and checks each result with `ox`. Run it after changing `live.rs`, `tasks.rs` or a route a task calls. `--keys` takes a tab for Tab and an escape character for Esc.
+- `tests/tui/demo.sh` records `docs/images/tui-demo.gif` and the README's still pictures with vhs, from `tests/tui/demo.tape`. Record again when a plain screen changes: `OX_TUI_KERNEL=1 OX_TUI_INSIDE=tests/tui/demo.sh tests/tui/run.sh docs/images`.
 
 Mock mode is the design reference and has not changed role:
 

@@ -13,7 +13,8 @@ use ratatui::{
 
 use ox_schema::Action;
 
-use crate::live::{LiveApp, Query, Screen, WINDOWS, addrs, services};
+use crate::live::{DETAILED, LiveApp, Query, SAFE_SECS, SIMPLE, Screen, WINDOWS, addrs, services};
+use crate::tasks::{Choice, Form, Kind, Task};
 use crate::ui::{
     ACCENT, BAD, DIM, MIN_H, MIN_W, OK, WARN, centered, header, kv, mmss, panel, sel_style,
 };
@@ -61,13 +62,46 @@ fn empty(f: &mut Frame, area: Rect, title: &str, text: &str) {
 
 const NO_COMMIT: &str = "There is no commit yet, so nothing is loaded. Save a candidate with `ox candidate save <name> <file>`, then commit it on the Changes screen.";
 
+const NOT_SET_UP: &str = "This box is not set up yet. Run `ox init --save starter` then `ox apply starter` on the box, or open its web page and enter the setup code.";
+
+/// The plain screens fit a terminal as it opens. The detailed ones need more.
+pub const SIMPLE_W: u16 = 80;
+pub const SIMPLE_H: u16 = 24;
+
+/// Text cut to fit, with a mark where it was cut.
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+fn dim(text: impl Into<String>) -> Line<'static> {
+    Line::from(Span::styled(text.into(), Style::new().fg(DIM)))
+}
+
 pub fn draw(f: &mut Frame, app: &mut LiveApp) {
     let a = f.area();
-    if a.width < MIN_W || a.height < MIN_H {
-        let msg = format!(
-            "Netoxide needs at least {MIN_W}×{MIN_H}; this terminal is {}×{}. Enlarge it or press q.",
-            a.width, a.height
-        );
+    let plain = SIMPLE.contains(&app.screen);
+    let (need_w, need_h) = if plain {
+        (SIMPLE_W, SIMPLE_H)
+    } else {
+        (MIN_W, MIN_H)
+    };
+    if a.width < need_w || a.height < need_h {
+        let msg = if plain {
+            format!(
+                "Netoxide needs at least {need_w}×{need_h}; this terminal is {}×{}. Enlarge it or press q.",
+                a.width, a.height
+            )
+        } else {
+            format!(
+                "This detailed screen needs at least {need_w}×{need_h}; this terminal is {}×{}. Enlarge it, or press tab for the next screen.",
+                a.width, a.height
+            )
+        };
         f.render_widget(
             Paragraph::new(msg)
                 .wrap(Wrap { trim: true })
@@ -80,10 +114,9 @@ pub fn draw(f: &mut Frame, app: &mut LiveApp) {
     let banner: Option<(String, Color)> = if let Some(e) = &app.error {
         Some((format!("oxd: {e}"), BAD))
     } else if let Some(left) = app.status.reverts_in {
-        let id = app.status.running.as_ref().map_or(0, |c| c.id);
         Some((
             format!(
-                "Commit #{id} is applied and reverts in {} unless you press y. Press r to undo it now.",
+                "Your change is applied. It undoes itself in {} unless you keep it: y keeps it, r undoes it now.",
                 mmss(left)
             ),
             WARN,
@@ -115,7 +148,7 @@ pub fn draw(f: &mut Frame, app: &mut LiveApp) {
         .enumerate()
         .map(|(i, s)| {
             Line::from(vec![
-                Span::styled(format!("{} ", i + 1), Style::new().fg(DIM)),
+                Span::styled(format!("{} ", (i + 1) % 10), Style::new().fg(DIM)),
                 Span::raw(s.title()),
             ])
         })
@@ -142,16 +175,26 @@ pub fn draw(f: &mut Frame, app: &mut LiveApp) {
         draw_footer(f, app, foot);
         return;
     }
-    match app.screen {
-        Screen::Home => draw_home(f, app, body),
-        Screen::Policy => draw_policy(f, app, body),
-        Screen::Nat => draw_nat(f, app, body),
-        Screen::Interfaces => draw_interfaces(f, app, body),
-        Screen::Changes => draw_changes(f, app, body),
-        Screen::Explain => draw_explain(f, app, body),
-        Screen::Audit => draw_audit(f, app, body),
+    if let Some(form) = &app.form {
+        draw_form(f, form, body);
+    } else {
+        match app.screen {
+            Screen::Home => draw_home(f, app, body),
+            Screen::Access => draw_access(f, app, body),
+            Screen::Review => draw_review(f, app, body),
+            Screen::Settings => draw_settings(f, app, body),
+            Screen::Policy => draw_policy(f, app, body),
+            Screen::Nat => draw_nat(f, app, body),
+            Screen::Interfaces => draw_interfaces(f, app, body),
+            Screen::Changes => draw_changes(f, app, body),
+            Screen::Explain => draw_explain(f, app, body),
+            Screen::Audit => draw_audit(f, app, body),
+        }
     }
     draw_footer(f, app, foot);
+    if app.device.is_some() {
+        draw_device(f, app);
+    }
     if app.show_help {
         draw_help(f);
     }
@@ -162,7 +205,7 @@ fn draw_top(f: &mut Frame, app: &LiveApp, area: Rect) {
     let host = app
         .config
         .as_ref()
-        .map_or("no config", |c| c.hostname.as_str());
+        .map_or("not set up", |c| c.hostname.as_str());
     let mut spans = vec![
         Span::styled(
             " Netoxide ",
@@ -172,6 +215,27 @@ fn draw_top(f: &mut Frame, app: &LiveApp, area: Rect) {
         Span::styled(host.to_string(), Style::new().bold()),
         sep(),
     ];
+    let n = app.status.candidates.len();
+    let dry = !app.status.applier.is_empty() && app.status.applier != "kernel";
+    // With no detailed screen switched on, the top line uses plain words too.
+    if app.detailed.is_empty() {
+        let n = app.waiting();
+        let (text, color) = match (&app.status.running, dry) {
+            (None, _) => ("nothing is running yet", WARN),
+            (Some(_), true) => ("dry run: nothing is loaded", WARN),
+            (Some(c), false) if c.pending => ("applied, not kept yet", WARN),
+            (Some(_), false) => ("the firewall is running", OK),
+        };
+        spans.push(Span::styled(text, Style::new().fg(color)));
+        spans.push(sep());
+        spans.push(Span::raw(match n {
+            0 => "no changes waiting".to_string(),
+            1 => "1 change waiting".to_string(),
+            _ => format!("{n} changes waiting"),
+        }));
+        f.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
     match &app.status.running {
         Some(c) => {
             spans.push(Span::raw("running "));
@@ -183,7 +247,6 @@ fn draw_top(f: &mut Frame, app: &LiveApp, area: Rect) {
         None => spans.push(Span::styled("no commit yet", Style::new().fg(WARN))),
     }
     spans.push(sep());
-    let n = app.status.candidates.len();
     spans.push(Span::raw(match n {
         0 => "no candidates".to_string(),
         1 => format!("candidate {}", app.status.candidates[0]),
@@ -191,10 +254,10 @@ fn draw_top(f: &mut Frame, app: &LiveApp, area: Rect) {
     }));
     if !app.status.applier.is_empty() {
         spans.push(sep());
-        let (text, color) = if app.status.applier == "kernel" {
-            ("applying to the kernel", DIM)
-        } else {
+        let (text, color) = if dry {
             ("dry run: nothing is loaded", WARN)
+        } else {
+            ("applying to the kernel", DIM)
         };
         spans.push(Span::styled(text, Style::new().fg(color)));
     }
@@ -203,7 +266,11 @@ fn draw_top(f: &mut Frame, app: &LiveApp, area: Rect) {
 
 fn draw_footer(f: &mut Frame, app: &LiveApp, area: Rect) {
     let pending = app.status.reverts_in.is_some();
-    let mut keys: Vec<(&str, &str)> = if app.reason.is_some() {
+    let waiting = !app.status.candidates.is_empty();
+    let typing = app.reason.is_some() || app.editing.is_some() || app.form.is_some();
+    let mut keys: Vec<(&str, &str)> = if app.device.is_some() {
+        vec![("tab", "code or text"), ("esc", "close for good")]
+    } else if app.reason.is_some() {
         vec![("enter", "commit"), ("esc", "cancel")]
     } else if app.editing.is_some() {
         vec![
@@ -211,9 +278,29 @@ fn draw_footer(f: &mut Frame, app: &LiveApp, area: Rect) {
             ("enter", "explain"),
             ("esc", "stop editing"),
         ]
+    } else if let Some(form) = &app.form {
+        let mut keys = vec![("tab", "next")];
+        if matches!(form.fields[form.at].kind, Kind::Pick(_)) {
+            keys.push(("←→", "change"));
+        }
+        keys.push((
+            "enter",
+            if form.task == Task::Check {
+                "check"
+            } else {
+                "see the change first"
+            },
+        ));
+        keys.push(("esc", "cancel"));
+        keys
     } else {
         match app.screen {
-            Screen::Home => vec![("a", "review and apply")],
+            Screen::Home => vec![("↑↓", "choose"), ("enter", "open")],
+            Screen::Access => vec![("↑↓←→", "move"), ("enter", "allow or block")],
+            Screen::Review if pending => vec![("y", "keep"), ("r", "undo")],
+            Screen::Review if waiting => vec![("enter", "apply safely"), ("d", "discard")],
+            Screen::Review => vec![],
+            Screen::Settings => vec![("↑↓", "choose"), ("enter", "switch on or off")],
             Screen::Policy => vec![("←→", "zone pair"), ("↑↓", "rule"), ("x", "explain")],
             Screen::Changes if pending => vec![("↑↓", "candidate")],
             Screen::Changes => vec![
@@ -230,24 +317,15 @@ fn draw_footer(f: &mut Frame, app: &LiveApp, area: Rect) {
             Screen::Nat | Screen::Interfaces => vec![],
         }
     };
-    if app.reason.is_none() && app.editing.is_none() {
-        if pending {
-            keys.extend([("y", "keep commit"), ("r", "undo commit")]);
+    if !typing && app.device.is_none() {
+        // The plain screens name the few keys they need. The rest are in the help.
+        if !SIMPLE.contains(&app.screen) {
+            if pending {
+                keys.extend([("y", "keep commit"), ("r", "undo commit")]);
+            }
+            keys.push(("R", "reload"));
         }
-        keys.extend([
-            ("tab", "screens"),
-            (
-                "A",
-                if app.advanced {
-                    "hide advanced"
-                } else {
-                    "advanced"
-                },
-            ),
-            ("R", "reload"),
-            ("?", "help"),
-            ("q", "quit"),
-        ]);
+        keys.extend([("tab", "next screen"), ("?", "help"), ("q", "quit")]);
     }
     let mut spans = vec![Span::raw(" ")];
     for (k, v) in keys {
@@ -261,27 +339,26 @@ fn draw_footer(f: &mut Frame, app: &LiveApp, area: Rect) {
 }
 
 fn draw_help(f: &mut Frame) {
-    let area = centered(f.area(), 66, 19);
+    let area = centered(f.area(), 72, 20);
     f.render_widget(Clear, area);
     let lines = vec![
-        Line::from("Navigation".bold()),
-        kv("1 … 9, tab", "screens"),
-        kv("A", "show or hide the detailed screens"),
+        Line::from("Getting around".bold()),
+        kv("tab, 1 … 9", "the next screen, or a screen by its number"),
+        kv("↑↓ ←→", "move the selection"),
+        kv("enter", "open, switch, or send what is selected"),
+        kv("esc", "leave a form without changing anything"),
+        Line::from(""),
+        Line::from("Changes".bold()),
         kv("a", "home: go to the waiting change"),
-        kv("↑↓ or j k", "move the selection"),
-        kv("←→ or h l", "zone pair on Policy"),
-        kv("R", "read everything from the daemon again"),
+        kv("y, r", "keep or undo an applied change, on any screen"),
+        kv("d", "review: discard the waiting change"),
         Line::from(""),
-        Line::from("Actions".bold()),
-        kv("x", "policy: explain a packet the rule is about"),
-        kv("c, w", "changes: commit the candidate; cycle the window"),
-        kv("y, r", "keep or undo an unconfirmed commit, anywhere"),
-        kv("e, enter, m", "explain: edit, run, compare with candidate"),
+        Line::from("More".bold()),
+        kv("A", "show or hide all the detailed screens"),
+        kv("R", "read everything from the box again"),
+        kv("q", "quit; the box carries on as it is"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Everything shown comes from oxd. Any key closes this.",
-            Style::new().fg(DIM),
-        )),
+        dim("Nothing is applied until you review it. Any key closes this."),
     ];
     f.render_widget(
         Paragraph::new(lines).block(panel("help").border_style(Style::new().fg(ACCENT))),
@@ -289,19 +366,14 @@ fn draw_help(f: &mut Frame) {
     );
 }
 
-/// The simple view: is the box running, the networks, and who can reach what.
+/// Home: is the box all right, the networks, and the things you can do.
 fn draw_home(f: &mut Frame, app: &mut LiveApp, area: Rect) {
     let Some(config) = &app.config else {
-        empty(
-            f,
-            area,
-            "home",
-            "This box is not set up yet. Run `ox init --save starter` then `ox apply starter` on the box, or open its web page and enter the setup code.",
-        );
+        empty(f, area, "home", NOT_SET_UP);
         return;
     };
     let grid = ox_setup::grid(config);
-    let waiting = app.status.candidates.len();
+    let waiting = app.waiting();
     let pending = app.status.reverts_in.is_some();
     let dry = !app.status.applier.is_empty() && app.status.applier != "kernel";
     let (mark, color, headline) = if dry {
@@ -311,11 +383,7 @@ fn draw_home(f: &mut Frame, app: &mut LiveApp, area: Rect) {
             "Dry run: the box keeps its config and loads nothing into the kernel",
         )
     } else if pending {
-        (
-            "!",
-            WARN,
-            "A change is waiting for you to keep it: y keeps it, r undoes it",
-        )
+        ("!", WARN, "A change is waiting for you to keep it")
     } else {
         ("✓", OK, "The firewall is running")
     };
@@ -329,121 +397,715 @@ fn draw_home(f: &mut Frame, app: &mut LiveApp, area: Rect) {
             Span::styled(format!(" {mark} "), Style::new().fg(color).bold()),
             Span::styled(headline, Style::new().bold()),
         ]),
-        Line::from(Span::styled(format!("   {let_in}"), Style::new().fg(DIM))),
+        dim(format!("   {let_in}")),
         Line::from(Span::styled(
             match waiting {
-                0 => "   No changes are waiting.".to_string(),
-                1 => "   1 change is waiting. Press a to review and apply it.".to_string(),
-                n => format!("   {n} changes are waiting. Press a to review and apply them."),
+                0 => format!(
+                    "   A change undoes itself after {} minutes unless you keep it.",
+                    SAFE_SECS / 60
+                ),
+                1 => "   1 change is waiting. Nothing is applied until you review it.".to_string(),
+                n => {
+                    format!("   {n} changes are waiting. Nothing is applied until you review them.")
+                }
             },
             Style::new().fg(if waiting == 0 { DIM } else { WARN }),
         )),
     ];
-    let inside: Vec<&ox_setup::Network> = grid.networks.iter().filter(|n| !n.internet).collect();
-    let rows = grid.networks.len() as u16;
-    let [top, nets, table, rest] = Layout::vertical([
-        Constraint::Length(5),
-        Constraint::Length(inside.len() as u16 + 3),
-        Constraint::Length(rows + 4),
-        Constraint::Min(0),
-    ])
-    .areas(area);
-    f.render_widget(Paragraph::new(status).block(panel("status")), top);
 
-    let wide = |text: &str| text.chars().count();
-    let name_w = grid
+    let inside: Vec<(usize, &ox_setup::Network)> = grid
         .networks
         .iter()
-        .map(|n| wide(&n.name))
+        .enumerate()
+        .filter(|(_, n)| !n.internet)
+        .collect();
+    let name_w = inside
+        .iter()
+        .map(|(_, n)| n.name.chars().count())
         .max()
         .unwrap_or(8)
-        .max(10)
+        .clamp(8, 20)
         + 2;
-    let mut lines = vec![Line::from(Span::styled(
-        format!(
-            "{:<name_w$}{:<34}{}",
-            "network", "can reach", "ports and addresses"
-        ),
-        Style::new().fg(DIM),
+    let reach_w = if area.width >= 100 { 32 } else { 26 };
+    let rest_w = usize::from(
+        area.width
+            .saturating_sub(if area.width >= 124 { 52 } else { 2 }),
+    )
+    .saturating_sub(name_w + 12 + reach_w);
+    let mut nets = vec![dim(format!(
+        "{:<name_w$}{:<12}{:<reach_w$}{}",
+        "network", "devices", "can reach", "port and address"
     ))];
-    for n in &inside {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{:<name_w$}", n.name), Style::new().bold()),
-            Span::raw(format!("{:<34}", n.reaches)),
+    for (i, n) in &inside {
+        let devices = match app.devices.get(*i).copied().unwrap_or(0) {
+            1 => "1 device".to_string(),
+            d => format!("{d} devices"),
+        };
+        nets.push(Line::from(vec![
             Span::styled(
-                format!("{}  {}", n.interfaces.join(", "), n.addresses.join(", ")),
+                format!("{:<name_w$}", clip(&n.name, name_w - 1)),
+                Style::new().bold(),
+            ),
+            Span::raw(format!("{devices:<12}")),
+            Span::raw(format!("{:<reach_w$}", clip(&n.reaches, reach_w - 1))),
+            Span::styled(
+                clip(
+                    &format!("{}  {}", n.interfaces.join(", "), n.addresses.join(", ")),
+                    rest_w,
+                ),
                 Style::new().fg(DIM),
             ),
         ]));
     }
-    f.render_widget(Paragraph::new(lines).block(panel("your networks")), nets);
 
-    // Who can reach what: the same grid the web interface shows.
-    let cell_w = name_w.max(22);
+    let items = app.menu_items();
+    let menu: Vec<ListItem> = items
+        .iter()
+        .map(|(choice, label)| {
+            let style = if *choice == Choice::Review {
+                Style::new().fg(WARN)
+            } else {
+                Style::new()
+            };
+            ListItem::new(Span::styled(label.to_string(), style))
+        })
+        .collect();
+    let mut selected = ListState::default();
+    selected.select(Some(app.menu));
+    let menu = List::new(menu)
+        .block(panel("what would you like to do?"))
+        .highlight_style(Style::new().fg(ACCENT).bold())
+        .highlight_symbol("▸ ");
+
+    let answer = app.checked.as_ref().map(|result| match result {
+        Err(e) => vec![Line::from(Span::styled(e.clone(), Style::new().fg(BAD)))],
+        Ok(c) => vec![
+            Line::from(vec![
+                Span::styled(
+                    if c.allowed { " Allowed " } else { " Blocked " },
+                    Style::new()
+                        .fg(Color::Black)
+                        .bg(if c.allowed { OK } else { BAD })
+                        .bold(),
+                ),
+                Span::raw(" "),
+                Span::raw(c.why.clone()),
+            ]),
+            dim(c.packet.clone()),
+        ],
+    });
+    let answer_h = answer.as_ref().map_or(0, |a| a.len() as u16 + 2);
+    let menu_h = items.len() as u16 + 2;
+    let nets_h = nets.len() as u16 + 2;
+
+    // Side by side when there is room, stacked when there is not.
+    let (top, mid, low, right) = if area.width >= 124 {
+        let [left, right] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(50)]).areas(area);
+        let [top, low, mid] = Layout::vertical([
+            Constraint::Length(5),
+            Constraint::Length(answer_h),
+            Constraint::Min(0),
+        ])
+        .areas(left);
+        (top, mid, low, right)
+    } else {
+        // The menu keeps its lines; the networks take what is left.
+        let [top, low, mid, menu] = Layout::vertical([
+            Constraint::Length(5),
+            Constraint::Length(answer_h),
+            Constraint::Max(nets_h),
+            Constraint::Min(menu_h),
+        ])
+        .areas(area);
+        (top, mid, low, menu)
+    };
+    f.render_widget(Paragraph::new(status).block(panel("status")), top);
+    f.render_widget(Paragraph::new(nets).block(panel("your networks")), mid);
+    if let Some(lines) = answer {
+        f.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(panel("is it blocked?")),
+            low,
+        );
+    }
+    f.render_stateful_widget(menu, right, &mut selected);
+}
+
+/// Access: who can reach what, one cell to move and flip.
+fn draw_access(f: &mut Frame, app: &mut LiveApp, area: Rect) {
+    let Some(config) = &app.config else {
+        empty(f, area, "access", NOT_SET_UP);
+        return;
+    };
+    let grid = ox_setup::grid(config);
+    let n = grid.networks.len();
+    let pending = app.status.reverts_in.is_some();
+    let name_w = grid
+        .networks
+        .iter()
+        .map(|n| n.name.chars().count())
+        .max()
+        .unwrap_or(8)
+        .clamp(12, 18)
+        + 2;
+    let room = usize::from(area.width.saturating_sub(2)).saturating_sub(name_w);
+    let cell_w = (room / n.max(1)).clamp(9, 24);
+    let (row, col) = app.cell;
+
     let mut lines = vec![Line::from(
         std::iter::once(Span::styled(
             format!("{:<name_w$}", "from ↓  to →"),
             Style::new().fg(DIM),
         ))
-        .chain(
-            grid.networks
-                .iter()
-                .map(|n| Span::styled(format!("{:<cell_w$}", n.name), Style::new().fg(DIM))),
-        )
+        .chain(grid.networks.iter().map(|n| {
+            Span::styled(
+                format!("{:<cell_w$}", clip(&n.name, cell_w - 1)),
+                Style::new().fg(DIM),
+            )
+        }))
         .collect::<Vec<_>>(),
     )];
     for (i, from) in grid.networks.iter().enumerate() {
         let mut spans = vec![Span::styled(
-            format!("{:<name_w$}", from.name),
+            format!("{:<name_w$}", clip(&from.name, name_w - 1)),
             Style::new().bold(),
         )];
-        for cell in &grid.cells[i] {
+        for (j, cell) in grid.cells[i].iter().enumerate() {
             let (text, style) = match cell {
                 ox_setup::Cell::Same => ("—".to_string(), Style::new().fg(DIM)),
                 ox_setup::Cell::Allowed => ("Allowed".to_string(), Style::new().fg(OK)),
                 ox_setup::Cell::Blocked => ("Blocked".to_string(), Style::new().fg(BAD)),
                 ox_setup::Cell::Custom { summary } => (summary.clone(), Style::new().fg(WARN)),
             };
-            let shown: String = text.chars().take(cell_w - 1).collect();
-            spans.push(Span::styled(format!("{shown:<cell_w$}"), style));
+            let text = clip(&text, cell_w - 2);
+            if (i, j) == (row, col) {
+                let pad = cell_w - 1 - text.chars().count();
+                spans.push(Span::styled(format!(" {text} "), style.reversed().bold()));
+                spans.push(Span::raw(" ".repeat(pad.saturating_sub(1))));
+            } else {
+                spans.push(Span::styled(format!(" {text:<w$}", w = cell_w - 1), style));
+            }
         }
         lines.push(Line::from(spans));
     }
-    f.render_widget(
-        Paragraph::new(lines).block(
-            panel("who can reach what").title_bottom(Span::styled(
-                " anything not allowed is blocked · yellow has rules of its own (A for the detailed screens) ",
-                Style::new().fg(DIM),
-            )),
-        ),
-        table,
-    );
 
-    let mut lines: Vec<Line> = grid
+    // The selected cell, in a sentence, and what enter would do.
+    let about = match (grid.networks.get(row), grid.networks.get(col)) {
+        (Some(from), Some(to)) => {
+            let pair = format!("{} to {}", from.name, to.name);
+            match &grid.cells[row][col] {
+                ox_setup::Cell::Same => vec![dim("A network always reaches itself.")],
+                _ if from.internet => vec![
+                    Line::from(format!("{pair}.")),
+                    dim("The internet is let in one service at a time: see the list below."),
+                ],
+                ox_setup::Cell::Custom { summary } => vec![
+                    Line::from(format!("{pair}: {summary}.")),
+                    dim(
+                        "This pair has rules of its own, for particular devices or services. It is not changed here, so nothing happens by accident.",
+                    ),
+                ],
+                cell => {
+                    let allowed = *cell == ox_setup::Cell::Allowed;
+                    vec![
+                        Line::from(format!(
+                            "{pair}: {}.",
+                            if allowed { "Allowed" } else { "Blocked" }
+                        )),
+                        if pending {
+                            dim("A change is waiting to be kept or undone. Deal with that first.")
+                        } else {
+                            dim(format!(
+                                "Press enter to {} it. You see the change before anything is applied.",
+                                if allowed { "block" } else { "allow" }
+                            ))
+                        },
+                    ]
+                }
+            }
+        }
+        _ => vec![],
+    };
+
+    let mut let_in: Vec<Line> = grid
         .let_in
         .iter()
         .map(|l| {
             Line::from(vec![
-                Span::styled(format!("{:<24}", l.name), Style::new().bold()),
+                Span::styled(format!("{:<26}", clip(&l.name, 25)), Style::new().bold()),
                 Span::raw(format!("{:<12}", l.service)),
                 Span::styled(format!("goes to {}", l.to), Style::new().fg(DIM)),
             ])
         })
         .collect();
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled("Nothing.", Style::new().fg(DIM))));
+    if let_in.is_empty() {
+        let_in.push(dim(
+            "Nothing. Everything arriving from the internet is blocked.",
+        ));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Change things with ox on the box: ox access, ox forward, ox block, ox vpn add. Then press a here, or run ox apply.",
-        Style::new().fg(DIM),
-    )));
+
+    let [table, selected, rest] = Layout::vertical([
+        Constraint::Length(n as u16 + 3),
+        Constraint::Length(5),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    f.render_widget(
+        Paragraph::new(lines).block(panel(
+            "who can reach what · anything not allowed is blocked",
+        )),
+        table,
+    );
+    f.render_widget(
+        Paragraph::new(about)
+            .wrap(Wrap { trim: true })
+            .block(panel("selected")),
+        selected,
+    );
+    f.render_widget(
+        Paragraph::new(let_in).block(panel("let in from the internet")),
+        rest,
+    );
+}
+
+/// Review: one waiting change in sentences, and one safe way to apply it.
+fn draw_review(f: &mut Frame, app: &mut LiveApp, area: Rect) {
+    let names = &app.status.candidates;
+    let pending = app.status.reverts_in.is_some();
+    // An applied change is past review. What is left is to keep it or undo it.
+    if pending {
+        let key = |k: &'static str| Span::styled(k, Style::new().fg(ACCENT).bold());
+        let lines = vec![
+            Line::from("Your change is applied. Check things still work.".bold()),
+            Line::from(""),
+            Line::from(vec![
+                key("y"),
+                Span::raw(" keeps it. It stays until you change it again."),
+            ]),
+            Line::from(vec![
+                key("r"),
+                Span::raw(" undoes it now. The box goes back to how it was."),
+            ]),
+            Line::from(""),
+            dim(
+                "Do nothing and it undoes itself when the time at the top runs out, so a mistake cannot lock you out.",
+            ),
+        ];
+        f.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(panel("keep it or undo it")),
+            area,
+        );
+        return;
+    }
+    if names.is_empty() {
+        empty(
+            f,
+            area,
+            "review",
+            "Nothing is waiting. A change you make on Home or Access shows up here first, and nothing is applied until you say so.",
+        );
+        return;
+    }
+    let several = names.len() > 1;
+    let [list, what, how] = Layout::vertical([
+        Constraint::Length(if several {
+            (names.len() as u16).min(5) + 2
+        } else {
+            0
+        }),
+        Constraint::Min(4),
+        Constraint::Length(6),
+    ])
+    .areas(area);
+    if several {
+        let items: Vec<ListItem> = names.iter().map(|c| ListItem::new(c.clone())).collect();
+        let mut ls = ListState::default();
+        ls.select(Some(app.candidate));
+        f.render_stateful_widget(
+            List::new(items)
+                .block(panel("waiting changes · ↑↓ to choose"))
+                .highlight_style(Style::new().fg(ACCENT).bold())
+                .highlight_symbol("▸ "),
+            list,
+            &mut ls,
+        );
+    }
+
+    let mut broken = false;
+    let lines: Vec<Line> = match &app.plan {
+        None => vec![dim("Reading the change…")],
+        Some(Err(e)) => {
+            broken = true;
+            vec![
+                Line::from(Span::styled(
+                    "This change cannot be applied as it is:",
+                    Style::new().fg(BAD).bold(),
+                )),
+                Line::from(Span::styled(e.clone(), Style::new().fg(BAD))),
+            ]
+        }
+        Some(Ok(p)) => {
+            let mut v = vec![];
+            if p.first_commit {
+                v.push(Line::from("This is the first config for the box."));
+            }
+            for line in &p.headline {
+                v.push(Line::from(vec![
+                    Span::styled("• ", Style::new().fg(ACCENT)),
+                    Span::styled(line.clone(), Style::new().bold()),
+                ]));
+            }
+            if !p.starts.is_empty() || !p.stops.is_empty() {
+                if !p.headline.is_empty() {
+                    v.push(Line::from(""));
+                    v.push(dim("In detail"));
+                }
+                if !p.starts.is_empty() {
+                    v.push(Line::from("The box will start doing this:"));
+                    v.extend(p.starts.iter().map(|l| {
+                        Line::from(Span::styled(format!("  + {l}"), Style::new().fg(OK)))
+                    }));
+                }
+                if !p.stops.is_empty() {
+                    v.push(Line::from("The box will stop doing this:"));
+                    v.extend(p.stops.iter().map(|l| {
+                        Line::from(Span::styled(format!("  - {l}"), Style::new().fg(BAD)))
+                    }));
+                }
+            } else if !p.first_commit && p.headline.is_empty() {
+                v.push(if p.changes.is_empty() {
+                    dim("Nothing. This is the same as what the box does now.")
+                } else {
+                    dim(format!(
+                        "This changes details that have no plain sentence: {}",
+                        p.changes.join("; ")
+                    ))
+                });
+            }
+            v
+        }
+    };
+    let title = match app.selected_candidate() {
+        Some(name) if several => format!("what will change · {name}"),
+        _ => "what will change".to_string(),
+    };
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(panel("let in from the internet")),
-        rest,
+            .block(panel(title)),
+        what,
     );
+
+    let last = if app.discarding {
+        Line::from(Span::styled(
+            "Press d again to throw this change away. Any other key keeps it.",
+            Style::new().fg(WARN).bold(),
+        ))
+    } else if broken {
+        dim("Press d to discard it.")
+    } else {
+        Line::from(vec![
+            Span::styled("enter", Style::new().fg(ACCENT).bold()),
+            Span::raw(" applies it safely.  "),
+            Span::styled("d", Style::new().fg(ACCENT).bold()),
+            Span::raw(" discards it. Nothing changes until you choose."),
+        ])
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(format!(
+                "You get {} minutes to check things still work. If you do not keep the change, it undoes itself, so a mistake cannot lock you out.",
+                SAFE_SECS / 60
+            )),
+            Line::from(""),
+            last,
+        ])
+        .wrap(Wrap { trim: true })
+        .block(panel("apply safely")),
+        how,
+    );
+}
+
+/// Settings: the basics, and a switch for each detailed screen.
+fn draw_settings(f: &mut Frame, app: &mut LiveApp, area: Rect) {
+    let dry = !app.status.applier.is_empty() && app.status.applier != "kernel";
+    let basics = vec![
+        kv(
+            "box name",
+            app.config
+                .as_ref()
+                .map_or("not set up".to_string(), |c| c.hostname.clone()),
+        ),
+        kv(
+            "changes",
+            format!(
+                "applied safely: each undoes itself after {} minutes unless kept",
+                SAFE_SECS / 60
+            ),
+        ),
+        kv(
+            "rules",
+            if dry {
+                "dry run: nothing is loaded into the kernel"
+            } else {
+                "loaded into the kernel of this box"
+            },
+        ),
+    ];
+    let label_w = DETAILED.iter().map(|d| d.1.len()).max().unwrap_or(0) + 2;
+    let items: Vec<ListItem> = DETAILED
+        .iter()
+        .map(|(screen, title, about)| {
+            let on = app.detailed.contains(screen);
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    if on { "[x] " } else { "[ ] " },
+                    Style::new().fg(if on { OK } else { DIM }),
+                ),
+                Span::raw(format!("{title:<label_w$}")),
+                Span::styled(about.to_string(), Style::new().fg(DIM)),
+            ]))
+        })
+        .collect();
+    let [top, switches] = Layout::vertical([Constraint::Length(5), Constraint::Min(0)]).areas(area);
+    f.render_widget(Paragraph::new(basics).block(panel("basics")), top);
+    let mut ls = ListState::default();
+    ls.select(Some(app.switch));
+    f.render_stateful_widget(
+        List::new(items)
+            .block(
+                panel("detailed screens · each adds a tab").title_bottom(Span::styled(
+                    " a switch shows or hides a screen and never changes what the box does ",
+                    Style::new().fg(DIM),
+                )),
+            )
+            .highlight_style(Style::new().bold())
+            .highlight_symbol("▸ "),
+        switches,
+        &mut ls,
+    );
+}
+
+/// A task: a few lines to fill in, then one key to see the change.
+fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
+    let inner = usize::from(area.width.saturating_sub(4));
+    let label_w = form
+        .fields
+        .iter()
+        .map(|f| f.label.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let value_w = inner.saturating_sub(label_w + 4).max(8);
+    let mut lines = vec![dim(form.about), Line::from("")];
+    for (i, field) in form.fields.iter().enumerate() {
+        let here = i == form.at;
+        let mut spans = vec![
+            Span::styled(
+                if here { "▸ " } else { "  " },
+                Style::new().fg(ACCENT).bold(),
+            ),
+            Span::styled(
+                format!("{:<label_w$}", field.label),
+                if here {
+                    Style::new().bold()
+                } else {
+                    Style::new()
+                },
+            ),
+        ];
+        match &field.kind {
+            Kind::Pick(_) => {
+                let style = if here {
+                    Style::new().fg(Color::Black).bg(ACCENT)
+                } else {
+                    Style::new()
+                };
+                spans.push(Span::styled(
+                    if here { "‹ " } else { "  " },
+                    Style::new().fg(DIM),
+                ));
+                spans.push(Span::styled(
+                    if field.value.is_empty() {
+                        "none".to_string()
+                    } else {
+                        field.value.clone()
+                    },
+                    style,
+                ));
+                spans.push(Span::styled(
+                    if here { " ›" } else { "" },
+                    Style::new().fg(DIM),
+                ));
+            }
+            Kind::Text if field.value.is_empty() && !here => {
+                spans.push(Span::styled(
+                    format!(
+                        "  {}",
+                        if field.required {
+                            format!("such as {}", field.hint)
+                        } else {
+                            field.hint.to_string()
+                        }
+                    ),
+                    Style::new().fg(DIM),
+                ));
+            }
+            Kind::Text => {
+                // A long value shows its end, where the typing is.
+                let count = field.value.chars().count();
+                let shown: String = field
+                    .value
+                    .chars()
+                    .skip(count.saturating_sub(value_w))
+                    .collect();
+                spans.push(Span::raw("  "));
+                if here {
+                    spans.push(Span::styled(
+                        format!("{shown}█"),
+                        Style::new().fg(Color::Black).bg(ACCENT),
+                    ));
+                    if field.value.is_empty() {
+                        spans.push(Span::styled(
+                            format!(
+                                "  {}",
+                                if field.required {
+                                    format!("such as {}", field.hint)
+                                } else {
+                                    format!("leave empty: {}", field.hint)
+                                }
+                            ),
+                            Style::new().fg(DIM),
+                        ));
+                    }
+                } else {
+                    spans.push(Span::raw(shown));
+                }
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(""));
+    if let Some(error) = &form.error {
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::new().fg(BAD).bold(),
+        )));
+    } else if !form.note.is_empty() {
+        lines.push(dim(form.note));
+    }
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(panel(form.title.to_lowercase()).border_style(Style::new().fg(ACCENT))),
+        area,
+    );
+}
+
+/// A VPN device's settings: a code to scan if it fits, and the text.
+fn draw_device(f: &mut Frame, app: &LiveApp) {
+    let Some(device) = &app.device else {
+        return;
+    };
+    let area = f.area();
+    f.render_widget(Clear, area);
+    let block = panel("set up the device").border_style(Style::new().fg(ACCENT));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut intro = if device.key_made_here {
+        vec![
+            Line::from(
+                "These settings hold the device's private key. They are shown once and kept nowhere on the box.",
+            ),
+            Line::from("Scan the code with the WireGuard app, or copy the text into it."),
+        ]
+    } else {
+        vec![Line::from(
+            "Put the device's own private key where the settings say, then load them into WireGuard.",
+        )]
+    };
+    intro.push(dim(
+        "The device can connect once you apply the waiting change. esc closes this for good.",
+    ));
+    // Tall enough for each sentence to wrap in full, and a blank line after.
+    let wide = usize::from(inner.width).max(1);
+    let intro_h = intro
+        .iter()
+        .map(|l| l.width().div_ceil(wide).max(1) as u16)
+        .sum::<u16>()
+        + 1;
+    let [top, rest] =
+        Layout::vertical([Constraint::Length(intro_h), Constraint::Min(0)]).areas(inner);
+    f.render_widget(Paragraph::new(intro).wrap(Wrap { trim: true }), top);
+
+    // A code is only any use with the device's key inside it.
+    let code = device
+        .key_made_here
+        .then(|| ox_setup::qr_rows(&device.config))
+        .flatten()
+        .map(|rows| ox_setup::qr_text(&rows));
+    let size = code.as_ref().map(|c| {
+        (
+            c.lines().next().map_or(0, |l| l.chars().count()) as u16,
+            c.lines().count() as u16,
+        )
+    });
+    let text_w = device
+        .config
+        .lines()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0) as u16;
+    let fits = size.is_some_and(|(w, h)| w <= rest.width && h <= rest.height);
+    let both = size.is_some_and(|(w, h)| w + 2 + text_w <= rest.width && h <= rest.height);
+    let code_style = Style::new().fg(Color::White).bg(Color::Black);
+    let text = |extra: Option<String>| {
+        let mut lines: Vec<Line> = device
+            .config
+            .lines()
+            .map(|l| Line::from(l.to_string()))
+            .collect();
+        if let Some(extra) = extra {
+            lines.push(Line::from(""));
+            lines.push(dim(extra));
+        }
+        Paragraph::new(lines).wrap(Wrap { trim: false })
+    };
+    match (&code, size) {
+        (Some(code), Some((w, _))) if both => {
+            let [left, _, right] = Layout::horizontal([
+                Constraint::Length(w),
+                Constraint::Length(2),
+                Constraint::Min(0),
+            ])
+            .areas(rest);
+            f.render_widget(Paragraph::new(code.clone()).style(code_style), left);
+            f.render_widget(text(None), right);
+        }
+        (Some(code), Some((w, h))) if fits && !app.device_text => {
+            let [left, _] =
+                Layout::horizontal([Constraint::Length(w), Constraint::Min(0)]).areas(rest);
+            let [left, _] =
+                Layout::vertical([Constraint::Length(h), Constraint::Min(0)]).areas(left);
+            f.render_widget(Paragraph::new(code.clone()).style(code_style), left);
+        }
+        (_, Some((w, h))) if !fits => f.render_widget(
+            text(Some(format!(
+                "A code to scan needs a window of at least {}×{}; this one is {}×{}.",
+                w + 2,
+                h + intro_h + 2,
+                area.width,
+                area.height
+            ))),
+            rest,
+        ),
+        _ => f.render_widget(text(None), rest),
+    }
 }
 
 fn draw_policy(f: &mut Frame, app: &mut LiveApp, area: Rect) {
