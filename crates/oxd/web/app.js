@@ -17,7 +17,7 @@ function h(tag, attrs, ...kids) {
     else if (k === 'value') el.value = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
-  for (const kid of kids.flat()) {
+  for (const kid of kids.flat(Infinity)) {
     if (kid == null || kid === false) continue;
     el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
   }
@@ -455,7 +455,7 @@ const TASKS = [
   ['network', 'Add a network, such as one for guests'],
   ['forward', 'Let something in from the internet'],
   ['vpn', 'Give a phone or laptop remote access'],
-  ['block', 'Block a device'],
+  ['block', 'Block a device or a website'],
 ];
 
 // The name someone gave a rule or a port forward, by its ID.
@@ -618,7 +618,7 @@ function access() {
         h('button', { onclick: () => startTask('network') }, 'Add a network'),
         h('button', { onclick: () => startTask('forward') }, 'Let something in'),
         h('button', { onclick: () => startTask('vpn') }, 'Give a phone or laptop remote access'),
-        h('button', { onclick: () => startTask('block') }, 'Block a device')) : null),
+        h('button', { onclick: () => startTask('block') }, 'Block a device or a website')) : null),
   ];
 }
 
@@ -907,18 +907,29 @@ function forwardForm() {
 }
 
 function blockForm() {
+  // An address means a device. Anything else is taken as a website's name.
+  const isDevice = (v) => /^[0-9a-fA-F:.]+(\/[0-9]+)?$/.test(v.trim()) && /[.:]/.test(v) && !/[g-zG-Z]/.test(v);
   const go = (e) => {
     e.preventDefault();
-    act(() => call('POST', '/v1/actions/block', { address: draftBlock.address, name: draftBlock.name }), saved);
+    const what = draftBlock.address.trim();
+    act(() => (isDevice(what)
+      ? call('POST', '/v1/actions/block', { address: what, name: draftBlock.name })
+      : call('POST', '/v1/actions/block-site', { name: what, block: true })), saved);
   };
-  return h('form', { class: 'panel', onsubmit: go },
-    h('h2', null, 'Block a device'),
-    h('p', { class: 'dim' }, 'Drops and logs everything the device sends, to other networks and to the box. Connections it already has open end on their own.'),
+  const sites = ((state.running && state.running.config.dns) || {}).blocked || [];
+  return [h('form', { class: 'panel', onsubmit: go },
+    h('h2', null, 'Block a device or a website'),
+    h('p', { class: 'dim' }, 'Give the address of a device to drop everything it sends, to other networks and to the box. Or give the name of a website to stop every device looking it up.'),
     h('div', { class: 'fields' },
-      field('Device address', 'address', draftBlock, { required: true, placeholder: '192.168.10.66' }),
-      field('What is it?', 'name', draftBlock, { placeholder: 'Smart TV' })),
+      field('Device address or website name', 'address', draftBlock, { required: true, placeholder: '192.168.10.66 or example.com' }),
+      field('For a device: what is it?', 'name', draftBlock, { placeholder: 'Smart TV' })),
+    h('p', { class: 'dim' }, 'A website block works through the box\'s DNS. A device set to use another DNS server, or a browser with its own secure DNS turned on, is not affected.'),
     h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Review'),
-      h('button', { type: 'button', onclick: cancelTask }, 'Cancel')));
+      h('button', { type: 'button', onclick: cancelTask }, 'Cancel'))),
+  sites.length ? h('div', { class: 'panel' },
+    h('h2', null, 'Blocked websites'),
+    table(['Name', ''], sites.map((n) => [n,
+      h('button', { 'aria-label': 'Unblock ' + n, onclick: () => act(() => call('POST', '/v1/actions/block-site', { name: n, block: false }), saved) }, 'Unblock')]))) : null];
 }
 
 function networkForm() {

@@ -253,6 +253,7 @@ pub fn router(shared: Shared, lease_file: PathBuf, state_dir: PathBuf) -> Router
         )
         .route("/v1/actions/access", post(action_access))
         .route("/v1/actions/network", post(action_network))
+        .route("/v1/actions/block-site", post(action_block_site))
         .merge(crate::setup::routes())
         .merge(web::routes())
         .with_state(shared)
@@ -510,6 +511,29 @@ async fn action_access(
     );
     act(&s, &caller, &name, |c| {
         ox_setup::set_access(c, &body.from, &body.to, body.allow)
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SiteBody {
+    /// The website's name, such as example.com.
+    name: String,
+    /// True to block it, false to lift the block.
+    block: bool,
+}
+
+/// Blocks a website by name in the box's DNS, or lifts the block, as a candidate.
+async fn action_block_site(
+    State(s): State<Shared>,
+    caller: Caller,
+    Json(body): Json<SiteBody>,
+) -> Api<Response> {
+    caller.may(Action::Edit)?;
+    let site = ox_setup::site_name(&body.name).map_err(invalid)?;
+    let name = ox_setup::candidate_name(if body.block { "block" } else { "unblock" }, &site);
+    act(&s, &caller, &name, |c| {
+        ox_setup::block_name(c, &site, body.block)
     })
 }
 

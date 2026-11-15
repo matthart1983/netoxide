@@ -290,10 +290,17 @@ enum Command {
         #[arg(long)]
         address: Option<IpAddr>,
     },
-    /// Block everything a device inside sends
+    /// Stop blocking a website
+    #[command(display_order = 6)]
+    Unblock {
+        /// The website's name, such as example.com
+        name: String,
+    },
+    /// Block a device by its address, or a website by its name
     #[command(display_order = 5)]
     Block {
-        /// The device's address, or a network
+        /// A device's address such as 192.168.10.66, or a website's name
+        /// such as example.com
         address: String,
         /// What the device is, such as "Smart TV"
         #[arg(long)]
@@ -906,6 +913,7 @@ fn daemon(cli: &Cli) -> Result<()> {
             out!("undone; the box is as it was before");
         }
         Command::More => unreachable!("handled before a daemon is chosen"),
+        Command::Unblock { .. } => unreachable!("handled before a daemon is chosen"),
         Command::Confirm => {
             out!(
                 "kept {}",
@@ -1465,6 +1473,7 @@ fn main() -> ExitCode {
             Command::Block { address, name } => {
                 easy::block(&cli.client()?, address, name.as_deref())
             }
+            Command::Unblock { name } => easy::unblock(&cli.client()?, name),
             Command::Remote(cmd) => remote::run(cmd),
             Command::More => {
                 use clap::CommandFactory;

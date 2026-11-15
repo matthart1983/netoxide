@@ -246,6 +246,26 @@ if (!(await js(`[...document.querySelectorAll('tbody tr')].some((r) => r.innerTe
 }
 await shot('access-with-guest');
 
+// Block a website by name, see it listed, and lift the block.
+await click('Home');
+await click('Block a device or a website');
+await see('Block a device or a website');
+await type('#f-address', 'https://www.example.com/page');
+await click('Review');
+await see('example.com is blocked for every device');
+await click('Apply safely');
+await see('Applied. Check things still work');
+await click('Keep it');
+await see('Kept.');
+await click('Home');
+await click('Block a device or a website');
+await see('Blocked websites');
+await shot('task-block');
+await press('Unblock example.com');
+await see('example.com is no longer blocked');
+await click('Discard');
+await see('Discarded. Nothing was changed.');
+
 // Allow the inside network out again, the same way it was blocked.
 await click('Access');
 await press('Allow Inside network to Internet');

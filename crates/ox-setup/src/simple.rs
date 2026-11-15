@@ -458,6 +458,19 @@ pub fn headline(old: &Config, new: &Config) -> Vec<String> {
     for name in had.iter().filter(|n| !has.contains(n)) {
         out.push(format!("{name} can no longer connect to the VPN"));
     }
+    let blocked = |c: &Config| {
+        c.dns
+            .as_ref()
+            .map(|d| d.blocked.clone())
+            .unwrap_or_default()
+    };
+    let (had, has) = (blocked(old), blocked(new));
+    for name in has.iter().filter(|n| !had.contains(n)) {
+        out.push(format!("{name} is blocked for every device"));
+    }
+    for name in had.iter().filter(|n| !has.contains(n)) {
+        out.push(format!("{name} is no longer blocked"));
+    }
     for name in new.zones.keys().filter(|z| !old.zones.contains_key(*z)) {
         out.push(format!("A new network: {}", display_name(new, name)));
     }

@@ -1293,6 +1293,7 @@ dependencies = [
  "ox-explain",
  "ox-nft",
  "ox-schema",
+ "ox-services",
  "qrcode",
  "rqrr",
  "serde",

@@ -292,6 +292,65 @@ fn have(program: &str, arg: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+/// A website blocked by name gets no address from the box's resolver.
+#[test]
+fn a_website_is_blocked_by_name() {
+    if !(have("dnsmasq", "--version") && have("dig", "-v") && have("nsenter", "--version")) {
+        skip("needs dnsmasq, dig and nsenter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("oxd-block-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let Some(d) = start_home(&dir, &[]) else {
+        skip("needs unshare(1), unprivileged user namespaces and libnftables");
+        return;
+    };
+    d.ok("PUT", "/v1/candidates/home", HOME);
+    d.ok("POST", "/v1/candidates/home/commit", "{}");
+    assert_eq!(
+        dig(&d, "192.168.10.1", "nas.home.arpa", "A").as_deref(),
+        Some("192.168.10.5")
+    );
+
+    // A website blocked by name: the box answers with no address, for the
+    // name and everything under it, over IPv4 and IPv6, and leaves others be.
+    let blocked = d.ok(
+        "POST",
+        "/v1/actions/block-site",
+        r#"{"name":"https://www.blocked.example/page","block":true}"#,
+    );
+    let candidate = blocked["candidate"].as_str().unwrap().to_string();
+    d.ok("POST", &format!("/v1/candidates/{candidate}/commit"), "{}");
+    for (server, name, kind, want) in [
+        ("192.168.10.1", "blocked.example", "A", "0.0.0.0"),
+        ("192.168.10.1", "cdn.blocked.example", "A", "0.0.0.0"),
+        ("2001:db8:2::1", "blocked.example", "AAAA", "::"),
+        ("192.168.10.1", "nas.home.arpa", "A", "192.168.10.5"),
+    ] {
+        assert_eq!(
+            dig(&d, server, name, kind).as_deref(),
+            Some(want),
+            "{name} {kind} at {server}"
+        );
+    }
+    let lifted = d.ok(
+        "POST",
+        "/v1/actions/block-site",
+        r#"{"name":"blocked.example","block":false}"#,
+    );
+    let candidate = lifted["candidate"].as_str().unwrap().to_string();
+    d.ok("POST", &format!("/v1/candidates/{candidate}/commit"), "{}");
+    assert_ne!(
+        dig(&d, "192.168.10.1", "blocked.example", "A").as_deref(),
+        Some("0.0.0.0"),
+        "the block is lifted"
+    );
+
+    drop(d);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn dns_and_dhcp_follow_the_commits() {
     if !(have("dnsmasq", "--version") && have("dig", "-v") && have("nsenter", "--version")) {
@@ -344,6 +403,7 @@ fn dns_and_dhcp_follow_the_commits() {
         Some("192.168.10.5"),
         "short name"
     );
+
     assert_eq!(d.ok("GET", "/v1/leases", ""), json!([]));
 
     // Change a record with a confirm window and let it lapse: the old answer returns.

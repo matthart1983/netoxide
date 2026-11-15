@@ -96,6 +96,11 @@ pub fn dnsmasq_conf(config: &Config) -> Option<String> {
                     _ => line(&format!("host-record={},{}", h.name, h.address)),
                 }
             }
+            // The null address for the name and everything under it, so a
+            // device gets an answer at once and connects to nothing.
+            for name in &dns.blocked {
+                line(&format!("address=/{name}/#"));
+            }
         }
     }
 
