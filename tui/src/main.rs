@@ -23,6 +23,8 @@ mod data;
 mod html;
 mod live;
 mod live_ui;
+mod live_view;
+mod spark;
 mod tasks;
 mod ui;
 
@@ -80,6 +82,7 @@ fn main() -> io::Result<()> {
                 };
                 let mut app = live::LiveApp::new(&backend);
                 app.screen = screen;
+                app.refresh(&backend);
                 for c in value("--keys").unwrap_or_default().chars() {
                     app.on_key(KeyEvent::new(key_for(c), KeyModifiers::NONE), &backend);
                 }
@@ -229,6 +232,7 @@ fn live_snapshot(
     for s in screens {
         let mut app = live::LiveApp::new(backend);
         app.screen = s;
+        app.refresh(backend);
         for c in keys.unwrap_or("").chars() {
             app.on_key(KeyEvent::new(key_for(c), KeyModifiers::NONE), backend);
         }
@@ -381,6 +385,7 @@ mod tests {
         for s in live::Screen::ALL {
             let mut app = LiveApp::new(&backend);
             app.screen = s;
+            app.refresh(&backend);
             got.push_str(&live_text(&mut app, 160, 46).unwrap());
         }
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/snapshots-live.txt");
@@ -400,6 +405,7 @@ mod tests {
         for s in live::Screen::ALL {
             let mut app = LiveApp::new(&backend);
             app.screen = s;
+            app.refresh(&backend);
             let text = live_text(&mut app, ui::MIN_W, ui::MIN_H).unwrap();
             assert!(
                 !text.contains("needs at least"),
@@ -412,7 +418,7 @@ mod tests {
     fn live_policy_shows_the_running_config_and_kernel_counters() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "A5");
+        live_keys(&mut app, &backend, "A6");
         let text = live_text(&mut app, 160, 46).unwrap();
         assert!(text.contains("syd-br-014-a") && text.contains("running #1"));
         assert!(text.contains("r-0388 Finance to file servers") && text.contains("1204"));
@@ -452,7 +458,7 @@ mod tests {
         }
 
         // The grid is on Access, with hand-written rules read as what they do.
-        live_keys(&mut app, &backend, "2");
+        live_keys(&mut app, &backend, "3");
         let text = live_text(&mut app, 160, 46).unwrap();
         assert!(
             text.contains("who can reach what") && text.contains("Internet"),
@@ -464,17 +470,20 @@ mod tests {
         );
 
         // One switch on Settings adds one tab and nothing else.
-        live_keys(&mut app, &backend, "4\n");
-        assert_eq!(app.tabs().len(), 5);
-        assert_eq!(app.tabs()[4], live::Screen::Policy);
+        live_keys(&mut app, &backend, "5\n");
+        assert_eq!(app.tabs().len(), 6);
+        assert_eq!(app.tabs()[5], live::Screen::Policy);
         live_keys(&mut app, &backend, "\n");
         assert_eq!(app.tabs(), live::SIMPLE);
 
         // A shows all the detailed screens, and hides them again without
         // leaving the user on a hidden one.
         live_keys(&mut app, &backend, "A");
-        assert_eq!(app.tabs().len(), 10);
+        assert_eq!(app.tabs().len(), 11);
+        // 0 is the tenth tab. The eleventh has no digit and is reached with tab.
         live_keys(&mut app, &backend, "0");
+        assert_eq!(app.screen, live::Screen::Explain);
+        press(&mut app, &backend, &[KeyCode::Tab]);
         assert_eq!(app.screen, live::Screen::Audit);
         live_keys(&mut app, &backend, "A");
         assert_eq!(app.screen, live::Screen::Home);
@@ -492,7 +501,7 @@ mod tests {
         app.load_prefs(file.clone());
         assert!(app.detailed.is_empty());
         // Settings, down to the packet tracer, switch it on.
-        live_keys(&mut app, &backend, "4jjjj\n");
+        live_keys(&mut app, &backend, "5jjjj\n");
         assert_eq!(app.detailed, [live::Screen::Explain]);
 
         let mut again = LiveApp::new(&backend);
@@ -624,7 +633,7 @@ mod tests {
         let mut app = LiveApp::new(&backend);
         // Access opens on the first pair that is not a network to itself:
         // Servers to Guest Wi-Fi, which is Blocked.
-        live_keys(&mut app, &backend, "2\n");
+        live_keys(&mut app, &backend, "3\n");
         let (path, body) = backend.0.borrow().actions[0].clone();
         assert_eq!(path, "/v1/actions/access");
         assert_eq!(
@@ -709,10 +718,89 @@ mod tests {
     }
 
     #[test]
+    fn live_shows_what_the_daemon_measured_and_can_be_paused() {
+        let backend = Fixture::default();
+        let mut app = LiveApp::new(&backend);
+        assert!(app.live.is_none(), "nothing is fetched until Live is open");
+        live_keys(&mut app, &backend, "2");
+        assert_eq!(app.screen, live::Screen::Live);
+        assert!(app.live.is_some(), "Live has its readings as it opens");
+        let text = live_text(&mut app, 80, 24).unwrap();
+        for part in [
+            "download",
+            "upload",
+            "connections",
+            "blocked",
+            "internet traffic",
+            "Staff network",
+            "just blocked",
+            "Internet tried to reach the box itself",
+            "p to pause",
+        ] {
+            assert!(text.contains(part), "'{part}' is missing: {text}");
+        }
+        // The plots are drawn in braille.
+        assert!(
+            text.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)),
+            "{text}"
+        );
+
+        // Paused, it keeps what it has and says so.
+        live_keys(&mut app, &backend, "p");
+        assert!(app.paused);
+        let frozen = app.live.clone();
+        app.refresh(&backend);
+        assert_eq!(app.live, frozen);
+        let text = live_text(&mut app, 80, 24).unwrap();
+        assert!(text.contains("paused") && text.contains("resume"), "{text}");
+        live_keys(&mut app, &backend, "p");
+        assert!(!app.paused);
+    }
+
+    #[test]
+    fn live_leaves_out_what_the_box_cannot_measure() {
+        // A dry run has no rules in a kernel and may have no connection count.
+        let data = live_view::LiveData {
+            window: 120,
+            download: Some([1_000_000, 2_000_000].into()),
+            upload: Some([100_000, 200_000].into()),
+            connections: None,
+            blocked: None,
+            networks: vec![],
+            feed: vec![],
+        };
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| live_view::draw(f, Some(&data), false, f.area()))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let text: String = (0..24)
+            .flat_map(|y| (0..80).map(move |x| (x, y)))
+            .map(|(x, y)| buf[(x, y)].symbol().to_string())
+            .collect();
+        assert!(
+            text.contains("download") && text.contains("2.0 Mb/s"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("connections") && !text.contains("blocked"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn rates_read_in_the_unit_that_fits() {
+        assert_eq!(live_view::rate(0), ("0".to_string(), "b/s"));
+        assert_eq!(live_view::rate(950), ("950".to_string(), "b/s"));
+        assert_eq!(live_view::rate(48_400), ("48".to_string(), "kb/s"));
+        assert_eq!(live_view::rate(12_340_000), ("12.3".to_string(), "Mb/s"));
+        assert_eq!(live_view::rate(2_500_000_000), ("2.5".to_string(), "Gb/s"));
+    }
+
+    #[test]
     fn discarding_takes_two_presses() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "3d");
+        live_keys(&mut app, &backend, "4d");
         assert!(!backend.0.borrow().discarded);
         let text = live_text(&mut app, 80, 24).unwrap();
         assert!(text.contains("Press d again"), "{text}");
@@ -745,6 +833,7 @@ mod tests {
         for s in live::SIMPLE {
             let mut app = LiveApp::new(&backend);
             app.screen = s;
+            app.refresh(&backend);
             fits(&mut app, s.title());
         }
         for (i, (choice, label)) in tasks::MENU.iter().enumerate() {
@@ -766,9 +855,10 @@ mod tests {
         }
         // With a change applied and waiting to be kept.
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "3\n");
+        live_keys(&mut app, &backend, "4\n");
         for s in live::SIMPLE {
             app.screen = s;
+            app.refresh(&backend);
             fits(&mut app, s.title());
         }
     }
@@ -777,7 +867,7 @@ mod tests {
     fn a_detailed_screen_in_a_small_window_says_what_it_needs() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "A5");
+        live_keys(&mut app, &backend, "A6");
         let text = live_text(&mut app, 80, 24).unwrap();
         assert!(
             text.contains("This detailed screen needs at least 132×34"),
@@ -794,7 +884,7 @@ mod tests {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
         // Changes screen, shorten the window twice (5m → 10m → 30s), commit.
-        live_keys(&mut app, &backend, "A8wwc");
+        live_keys(&mut app, &backend, "A9wwc");
         assert_eq!(app.reason.as_deref(), Some(""));
         // While the prompt is open, q is a letter, not quit.
         live_keys(&mut app, &backend, "q-CHG-2207\n");
@@ -815,7 +905,7 @@ mod tests {
         assert!(app.reason.is_none());
 
         // y works from any screen and the new rule is now the running config.
-        live_keys(&mut app, &backend, "y5");
+        live_keys(&mut app, &backend, "y6");
         assert!(!backend.0.borrow().pending);
         let text = live_text(&mut app, 160, 46).unwrap();
         assert!(
@@ -827,7 +917,7 @@ mod tests {
     fn live_revert_goes_back_to_the_old_config() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "A8c\nr");
+        live_keys(&mut app, &backend, "A9c\nr");
         assert!(!backend.0.borrow().applied);
         assert_eq!(app.status.running.as_ref().unwrap().id, 1);
         assert_eq!(app.selected_candidate(), Some("block-legacy-smb"));
@@ -837,7 +927,7 @@ mod tests {
     fn live_x_explains_a_packet_the_rule_is_about() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "A5x");
+        live_keys(&mut app, &backend, "A6x");
         assert_eq!(app.screen, live::Screen::Explain);
         let (q, candidate) = backend.0.borrow().explained[0].clone();
         assert_eq!(
@@ -863,7 +953,7 @@ mod tests {
     fn live_explain_form_takes_typing_and_reports_bad_input() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "A9e");
+        live_keys(&mut app, &backend, "A0e");
         assert_eq!(app.editing, Some(0));
         live_keys(&mut app, &backend, "nonsense\n");
         assert!(app.running && app.editing.is_none());

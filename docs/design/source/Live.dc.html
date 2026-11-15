@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Netoxide — Live</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0A5FA8}a:hover{color:#074579}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #F5F6F8; font-family: Inter, system-ui, sans-serif; color: #16181D; font-size: 15px; line-height: 1.5">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #E2E5EA">
+    <div style="max-width: 1180px; margin: 0 auto; padding: 0 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px">
+      <div style="display: flex; align-items: center; gap: 28px; flex-wrap: wrap">
+        <span style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px">
+          <svg width="26" height="26" viewBox="0 0 28 28" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="7" fill="#16181D"></rect><path d="M8 19V10m4 9V8m4 11V8m4 11v-9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path></svg>Netoxide</span>
+        <nav aria-label="Main" style="display: flex; gap: 4px">
+          <a href="Main.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; color: #3A3F4B; text-decoration: none">Home</a>
+          <a href="Live.dc.html" aria-current="page" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; background: #E7EFF8; color: #0A5FA8; font-weight: 600; text-decoration: none">Live</a>
+          <a href="Access.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; color: #3A3F4B; text-decoration: none">Access</a>
+          <a href="Settings.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; color: #3A3F4B; text-decoration: none">Settings</a>
+        </nav>
+      </div>
+      <span style="font-size: 13px; color: #5B6170">Harbour Dental · Sydney office</span>
+    </div>
+  </header>
+
+  <main style="max-width: 1180px; margin: 0 auto; padding: 28px 24px 56px; display: flex; flex-direction: column; gap: 16px">
+    <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <h1 style="margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.01em">Live</h1>
+        <span style="display: flex; align-items: center; gap: 8px; color: #5B6170; font-size: 14px">
+          <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: {{dotColor}}"></span>{{statusText}}</span>
+      </div>
+      <button type="button" aria-pressed="{{paused}}" onClick="{{togglePause}}" style="min-height: 44px; padding: 0 18px; border: 1px solid #CDD2DA; border-radius: 8px; background: #FFFFFF; font: inherit; font-weight: 500; cursor: pointer">{{pauseLabel}}</button>
+    </div>
+
+    <section aria-label="Right now" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px">
+      <sc-for list="{{tiles}}" as="t" hint-placeholder-count="5">
+        <div style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 12px; padding: 12px 14px 12px; display: flex; flex-direction: column; gap: 4px">
+          <span style="font-size: 13px; font-weight: 600; color: {{t.ink}}">{{t.label}}</span>
+          <div style="display: flex; align-items: flex-end; gap: 10px">
+            <span style="flex: none; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1">{{t.value}} <span style="font-size: 13px; font-weight: 500; color: #5B6170">{{t.unit}}</span></span>
+            <svg viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" style="flex: 1; min-width: 40px; height: 28px; display: block">
+              <defs>
+                <linearGradient id="{{t.gid}}" gradientUnits="userSpaceOnUse" x1="0" y1="28" x2="0" y2="0">
+                  <stop offset="0" stop-color="{{t.color}}" stop-opacity="0.28"></stop>
+                  <stop offset="0.55" stop-color="{{t.color}}" stop-opacity="0.7"></stop>
+                  <stop offset="1" stop-color="{{t.peak}}" stop-opacity="1"></stop>
+                </linearGradient>
+              </defs>
+              <polygon points="{{t.area}}" fill="url(#{{t.gid}})"></polygon>
+              <polyline points="{{t.line}}" fill="none" stroke="{{t.peak}}" stroke-width="1.25" vector-effect="non-scaling-stroke"></polyline>
+            </svg>
+          </div>
+          <span style="font-size: 12px; color: #5B6170; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{t.detail}}</span>
+        </div>
+      </sc-for>
+    </section>
+
+    <section aria-labelledby="tr-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 18px 22px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 12px">
+        <h2 id="tr-h" style="margin: 0; font-size: 18px; font-weight: 600">Internet traffic, last 2 minutes</h2>
+        <div style="display: flex; gap: 18px; font-size: 13px; color: #3A3F4B">
+          <span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="color: #2a78d6">▲</span>Download {{dNow}} Mb/s</span>
+          <span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="color: #eb6834">▼</span>Upload {{uNow}} Mb/s</span>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px">
+        <div aria-hidden="true" style="flex: none; width: 64px; height: 240px; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; font-size: 12px; color: #5B6170; font-variant-numeric: tabular-nums">
+          <span>{{scale}} ▲</span><span>0</span><span>{{scale}} ▼</span>
+        </div>
+        <div style="flex: 1; min-width: 0; position: relative; height: 240px" onMouseLeave="{{leave}}">
+          <svg width="100%" height="240" viewBox="0 0 900 240" preserveAspectRatio="none" role="img" aria-label="{{chartLabel}}" style="display: block">
+            <defs>
+              <linearGradient id="mx-down" gradientUnits="userSpaceOnUse" x1="0" y1="120" x2="0" y2="0">
+                <stop offset="0" stop-color="#2a78d6" stop-opacity="0.22"></stop>
+                <stop offset="0.5" stop-color="#2a78d6" stop-opacity="0.7"></stop>
+                <stop offset="1" stop-color="#1b4f8f" stop-opacity="1"></stop>
+              </linearGradient>
+              <linearGradient id="mx-up" gradientUnits="userSpaceOnUse" x1="0" y1="120" x2="0" y2="240">
+                <stop offset="0" stop-color="#eb6834" stop-opacity="0.22"></stop>
+                <stop offset="0.5" stop-color="#eb6834" stop-opacity="0.7"></stop>
+                <stop offset="1" stop-color="#a8431c" stop-opacity="1"></stop>
+              </linearGradient>
+            </defs>
+            <polygon points="{{downArea}}" fill="url(#mx-down)"></polygon>
+            <polygon points="{{upArea}}" fill="url(#mx-up)"></polygon>
+            <line x1="0" y1="120" x2="900" y2="120" stroke="#8A919E" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"></line>
+          </svg>
+          <div style="position: absolute; inset: 0; display: flex">
+            <sc-for list="{{cols}}" as="c" hint-placeholder-count="120">
+              <span onMouseEnter="{{c.enter}}" style="flex: 1; height: 100%"></span>
+            </sc-for>
+          </div>
+          <sc-if value="{{hovering}}" hint-placeholder-val="{{false}}">
+            <div aria-hidden="true" style="position: absolute; top: 0; bottom: 0; left: {{tip.left}}; width: 1px; background: #16181D; opacity: 0.5; pointer-events: none"></div>
+            <div role="status" style="position: absolute; top: 8px; left: {{tip.left}}; transform: {{tip.shift}}; background: #16181D; color: #FFFFFF; border-radius: 8px; padding: 8px 10px; font-size: 13px; line-height: 1.45; white-space: nowrap; pointer-events: none">
+              <div style="color: #C9CED6">{{tip.when}}</div>
+              <div><span style="color: #6aa6ee">▲</span> Download {{tip.down}} Mb/s</div>
+              <div><span style="color: #f39a72">▼</span> Upload {{tip.up}} Mb/s</div>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+      <div aria-hidden="true" style="display: flex; justify-content: space-between; margin-left: 72px; font-size: 12px; color: #5B6170">
+        <span>2 min ago</span><span>1 min</span><span>now</span>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; color: #5B6170">
+        <span>Download grows up, upload grows down, on one shared scale. Colour deepens with height.</span>
+        <details>
+          <summary style="cursor: pointer">Last 10 readings as a table</summary>
+          <table style="margin-top: 8px; border-collapse: collapse; font-variant-numeric: tabular-nums; color: #3A3F4B">
+            <thead><tr style="color: #5B6170; text-align: right"><th scope="col" style="padding: 4px 16px 4px 0; font-weight: 500; text-align: left">When</th><th scope="col" style="padding: 4px 16px; font-weight: 500">Download Mb/s</th><th scope="col" style="padding: 4px 0 4px 16px; font-weight: 500">Upload Mb/s</th></tr></thead>
+            <tbody>
+              <sc-for list="{{recent}}" as="r" hint-placeholder-count="10">
+                <tr style="text-align: right; border-top: 1px solid #EEF0F3"><td style="padding: 4px 16px 4px 0; text-align: left">{{r.when}}</td><td style="padding: 4px 16px">{{r.down}}</td><td style="padding: 4px 0 4px 16px">{{r.up}}</td></tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </details>
+      </div>
+    </section>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; align-items: start">
+      <sc-for list="{{rowPanels}}" as="p" hint-placeholder-count="4">
+        <section style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 16px 20px; display: flex; flex-direction: column">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 6px">
+            <h2 style="margin: 0; font-size: 17px; font-weight: 600">{{p.title}}</h2>
+            <span style="font-size: 12px; color: #5B6170">{{p.note}}</span>
+          </div>
+          <sc-for list="{{p.rows}}" as="r" hint-placeholder-count="5">
+            <div style="display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(80px, 1fr) 76px; align-items: center; gap: 12px; padding: 7px 0; border-top: 1px solid #EEF0F3; font-size: 14px">
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"><span style="font-weight: 500">{{r.name}}</span> <span style="color: #5B6170">{{r.sub}}</span></span>
+              <svg viewBox="0 0 120 22" preserveAspectRatio="none" aria-hidden="true" style="width: 100%; height: 22px; display: block">
+                <defs>
+                  <linearGradient id="{{r.gid}}" gradientUnits="userSpaceOnUse" x1="0" y1="22" x2="0" y2="0">
+                    <stop offset="0" stop-color="{{p.color}}" stop-opacity="0.28"></stop>
+                    <stop offset="0.55" stop-color="{{p.color}}" stop-opacity="0.7"></stop>
+                    <stop offset="1" stop-color="{{p.peak}}" stop-opacity="1"></stop>
+                  </linearGradient>
+                </defs>
+                <polygon points="{{r.area}}" fill="url(#{{r.gid}})"></polygon>
+              </svg>
+              <span style="text-align: right; font-variant-numeric: tabular-nums">{{r.value}}</span>
+            </div>
+          </sc-for>
+        </section>
+      </sc-for>
+    </div>
+
+    <section aria-labelledby="bl-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 16px 20px; display: flex; flex-direction: column">
+      <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 6px">
+        <h2 id="bl-h" style="margin: 0; font-size: 17px; font-weight: 600">Just blocked</h2>
+        <span style="font-size: 12px; color: #5B6170">Threat protection and your access rules · {{blocked}} in the last hour</span>
+      </div>
+      <ul aria-live="polite" style="margin: 0; padding: 0; list-style: none">
+        <sc-for list="{{feed}}" as="e" hint-placeholder-count="6">
+          <li style="display: grid; grid-template-columns: 64px 84px minmax(0, 1fr); align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid #EEF0F3; font-size: 14px">
+            <span style="color: #5B6170; font-variant-numeric: tabular-nums">{{e.ago}}</span>
+            <span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #8E1F1F">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#d03b3b" stroke-width="2.6" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M6 18L18 6"></path></svg>Blocked</span>
+            <span>{{e.text}}</span>
+          </li>
+        </sc-for>
+      </ul>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1360}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.N = 120;
+    this.seed = 7;
+    this.burstPrev = 0;
+    this.NETS = [['Staff', '48 devices', 0.46], ['Servers', '6 devices', 0.31], ['Guest Wi-Fi', '17 devices', 0.15], ['Remote staff', '5 connected', 0.08]];
+    this.DEVS = [['Backup server', 'Servers', 0.21], ['Reception PC', 'Staff', 0.09], ['Imaging workstation', 'Staff', 0.08], ['Meeting room TV', 'Guest', 0.06], ['FIN-PC-12', 'Staff', 0.04]];
+    this.DESTS = [['s3.ap-southeast-2.amazonaws.com', 0.19], ['outlook.office365.com', 0.12], ['rr3.googlevideo.com', 0.09], ['zoom.us', 0.07], ['api.xero.com', 0.03]];
+    this.EVENTS = [
+      'Exploit attempt on the website from 45.0.2.18',
+      'Guest phone tried BitTorrent',
+      'Database scan from 91.0.3.77',
+      'Staff laptop tried a known malware address',
+      'Repeated remote-access logins, 103.0.9.4',
+      'Guest laptop tried to send email directly'
+    ];
+    const s = {
+      tick: 0, paused: false, hover: null,
+      down: [], up: [], conns: [], fibre: [], g5: [],
+      nets: this.NETS.map(() => []), devs: this.DEVS.map(() => []), dests: this.DESTS.map(() => []),
+      perMin: [], blocked: 0, feed: []
+    };
+    for (let i = 0; i < 60; i++) { const v = Math.round(this.rand() * 4); s.perMin.push(v); s.blocked += v; }
+    for (let i = 0; i < this.N; i++) this.sample(s);
+    this.EVENTS.forEach((text, i) => s.feed.push({ at: s.tick - (i * 23 + 4), text }));
+    this.state = s;
+    this.timer = null;
+  }
+  rand() { this.seed = (this.seed * 1103515245 + 12345) % 2147483648; return this.seed / 2147483648; }
+  walk(v, lo, hi, step) { return Math.round(Math.max(lo, Math.min(hi, v + (this.rand() - 0.5) * 2 * step))); }
+  push(arr, v) { arr.push(v); if (arr.length > this.N) arr.shift(); }
+  last(arr, dflt) { return arr.length ? arr[arr.length - 1] : dflt; }
+  // One second of readings for every series. Mutates `s` in place.
+  sample(s) {
+    s.tick += 1;
+    const d = this.walk(this.last(s.down, 380), 240, 560, 40);
+    const burst = s.tick % 47 < 6 ? 120 : 0;
+    const u = this.walk(this.last(s.up, 90) - this.burstPrev, 40, 150, 14) + burst;
+    this.push(s.down, d); this.push(s.up, u);
+    this.push(s.conns, this.walk(this.last(s.conns, 12480), 11600, 13600, 180));
+    this.push(s.fibre, this.walk(this.last(s.fibre, 4), 3, 9, 1));
+    this.push(s.g5, this.walk(this.last(s.g5, 31), 24, 48, 3));
+    const total = d + u;
+    this.NETS.forEach(([, , p], i) => {
+      const base = total * p;
+      this.push(s.nets[i], this.walk(this.last(s.nets[i], base), base * 0.35, base * 1.5, Math.max(2, base * 0.14)));
+    });
+    this.DEVS.forEach(([, , p], i) => {
+      const base = d * p, prev = this.last(s.devs[i], base) - (i === 0 ? this.burstPrev : 0);
+      this.push(s.devs[i], this.walk(prev, base * 0.2, base * 1.6, Math.max(2, base * 0.2)) + (i === 0 ? burst : 0));
+    });
+    this.DESTS.forEach(([, p], i) => {
+      const base = d * p, prev = this.last(s.dests[i], base) - (i === 0 ? this.burstPrev : 0);
+      this.push(s.dests[i], this.walk(prev, base * 0.2, base * 1.7, Math.max(2, base * 0.22)) + (i === 0 ? burst : 0));
+    });
+    this.burstPrev = burst;
+    if (s.tick % 60 === 0) {
+      if (s.perMin.length === 60) s.blocked -= s.perMin.shift();
+      s.perMin.push(0);
+    }
+  }
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      if (this.state.paused) return;
+      const s = {
+        ...this.state,
+        down: this.state.down.slice(), up: this.state.up.slice(), conns: this.state.conns.slice(),
+        fibre: this.state.fibre.slice(), g5: this.state.g5.slice(), perMin: this.state.perMin.slice(),
+        nets: this.state.nets.map(a => a.slice()), devs: this.state.devs.map(a => a.slice()), dests: this.state.dests.map(a => a.slice()),
+        feed: this.state.feed.slice()
+      };
+      this.sample(s);
+      // About two blocks a minute, matching Home's daily count.
+      if (this.rand() < 0.035) {
+        s.feed = [{ at: s.tick, text: this.EVENTS[Math.floor(this.rand() * this.EVENTS.length)] }].concat(s.feed).slice(0, 6);
+        s.blocked += 1;
+        s.perMin[s.perMin.length - 1] += 1;
+      }
+      this.setState(s);
+    }, 1000);
+  }
+  componentWillUnmount() { if (this.timer) clearInterval(this.timer); }
+  robustMax(arr) {
+    if (!arr.length) return 1;
+    const v = arr.slice().sort((a, b) => a - b);
+    return Math.max(1, Math.ceil(v[Math.round((v.length - 1) * 0.95)] * 1.1));
+  }
+  // Area polygon and top line for a sparkline in a W×H box, zero-based,
+  // scaled to its own robust max. A zero still draws a sliver of floor.
+  spark(arr, W, H) {
+    const max = this.robustMax(arr), n = arr.length;
+    const pts = arr.map((v, i) => {
+      const x = (n === 1 ? 0 : i * W / (n - 1)).toFixed(1);
+      const y = (H - Math.max(1, Math.min(v, max) / max * (H - 1))).toFixed(1);
+      return x + ',' + y;
+    }).join(' ');
+    return { area: '0,' + H + ' ' + pts + ' ' + W + ',' + H, line: pts };
+  }
+  renderVals() {
+    const s = this.state, N = this.N;
+    const dNow = this.last(s.down, 0), uNow = this.last(s.up, 0);
+    const avg = a => Math.round(a.reduce((x, y) => x + y, 0) / a.length);
+    const peak = a => Math.max(...a);
+    const scale = this.robustMax(s.down.concat(s.up));
+    const half = (v, dir) => (120 + dir * Math.max(1, Math.min(v, scale) / scale * 118)).toFixed(1);
+    const xs = i => (i * 900 / (N - 1)).toFixed(1);
+    const downArea = '0,120 ' + s.down.map((v, i) => xs(i) + ',' + half(v, -1)).join(' ') + ' 900,120';
+    const upArea = '0,120 ' + s.up.map((v, i) => xs(i) + ',' + half(v, 1)).join(' ') + ' 900,120';
+    const tile = (gid, label, ink, color, pk, value, unit, detail, arr) => {
+      const sp = this.spark(arr, 120, 28);
+      return { gid, label, ink, color, peak: pk, value, unit, detail, area: sp.area, line: sp.line };
+    };
+    const BLUE = ['#2a78d6', '#1b4f8f'], ORANGE = ['#eb6834', '#a8431c'], TEAL = ['#1baf7a', '#0f7a54'], RED = ['#d03b3b', '#8e1f1f'], GREY = ['#8a919e', '#4f5562'];
+    const fmt = n => n.toLocaleString('en-AU');
+    const rowsOf = (prefix, items, arrs, label, sub, unit) => {
+      const order = items.map((it, i) => i);
+      return order.map(i => {
+        const sp = this.spark(arrs[i], 120, 22);
+        return { name: label(items[i]), sub: sub(items[i]), gid: prefix + i, area: sp.area, value: this.last(arrs[i], 0) + ' ' + unit, now: this.last(arrs[i], 0) };
+      });
+    };
+    const byNow = rows => rows.slice().sort((a, b) => b.now - a.now);
+    const h = s.hover;
+    const recent = [];
+    for (let i = N - 1; i >= N - 10; i--) recent.push({ when: (N - 1 - i) === 0 ? 'now' : (N - 1 - i) + ' s ago', down: String(s.down[i]), up: String(s.up[i]) });
+    return {
+      paused: s.paused,
+      pauseLabel: s.paused ? 'Resume' : 'Pause',
+      dotColor: s.paused ? '#8A919E' : '#0ca30c',
+      statusText: s.paused ? 'Paused. Numbers are frozen.' : 'One reading a second',
+      togglePause: () => this.setState({ paused: !s.paused }),
+      dNow, uNow, scale,
+      tiles: [
+        tile('sp-dl', 'Download', '#1b4f8f', BLUE[0], BLUE[1], String(dNow), 'Mb/s', 'avg ' + avg(s.down) + ' · peak ' + peak(s.down) + ' · 2 min', s.down),
+        tile('sp-ul', 'Upload', '#a8431c', ORANGE[0], ORANGE[1], String(uNow), 'Mb/s', 'avg ' + avg(s.up) + ' · peak ' + peak(s.up) + ' · 2 min', s.up),
+        tile('sp-cn', 'Connections', '#0f7a54', TEAL[0], TEAL[1], fmt(this.last(s.conns, 0)), 'open', '76 devices online', s.conns),
+        tile('sp-lt', 'Fibre latency', '#0f7a54', TEAL[0], TEAL[1], String(this.last(s.fibre, 0)), 'ms', 'no loss · 5G backup ready', s.fibre),
+        tile('sp-bk', 'Blocked', '#8e1f1f', RED[0], RED[1], String(s.blocked), 'last hour', 'per minute, last hour', s.perMin)
+      ],
+      downArea, upArea,
+      chartLabel: 'Download now ' + dNow + ' Mb/s, peak ' + peak(s.down) + '. Upload now ' + uNow + ' Mb/s, peak ' + peak(s.up) + '. Last 2 minutes.',
+      cols: s.down.map((_, i) => ({ enter: () => this.setState({ hover: i }) })),
+      leave: () => this.setState({ hover: null }),
+      hovering: h !== null,
+      tip: h === null ? { left: '0%', shift: 'none', when: '', down: '', up: '' } : {
+        left: (h / (N - 1) * 100).toFixed(2) + '%',
+        shift: h > N * 0.7 ? 'translateX(calc(-100% - 8px))' : 'translateX(8px)',
+        when: (N - 1 - h) === 0 ? 'now' : (N - 1 - h) + ' seconds ago',
+        down: String(s.down[h]), up: String(s.up[h])
+      },
+      recent,
+      rowPanels: [
+        { title: 'Networks', note: 'last 2 minutes', color: BLUE[0], peak: BLUE[1], rows: rowsOf('sp-nw', this.NETS, s.nets, n => n[0], n => '· ' + n[1], 'Mb/s') },
+        { title: 'Internet connections', note: 'latency · fails over by itself', color: GREY[0], peak: GREY[1], rows: [
+          { name: 'Fibre', sub: '· in use', gid: 'sp-wf', area: this.spark(s.fibre, 120, 22).area, value: this.last(s.fibre, 0) + ' ms' },
+          { name: '5G backup', sub: '· ready', gid: 'sp-wg', area: this.spark(s.g5, 120, 22).area, value: this.last(s.g5, 0) + ' ms' }
+        ] },
+        { title: 'Busiest devices', note: 'by current traffic', color: BLUE[0], peak: BLUE[1], rows: byNow(rowsOf('sp-dv', this.DEVS, s.devs, x => x[0], x => '· ' + x[1], 'Mb/s')) },
+        { title: 'Busiest destinations', note: 'named from DNS, not traffic contents', color: BLUE[0], peak: BLUE[1], rows: byNow(rowsOf('sp-ds', this.DESTS, s.dests, x => x[0], () => '', 'Mb/s')) }
+      ],
+      blocked: s.blocked,
+      feed: s.feed.map(e => {
+        const ago = s.tick - e.at;
+        return { text: e.text, ago: ago < 60 ? ago + 's ago' : Math.floor(ago / 60) + 'm ago' };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

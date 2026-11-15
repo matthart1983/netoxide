@@ -196,7 +196,7 @@ await click('Apply safely');
 // ── Home ──
 await see('The box is set up');
 await see('It undoes itself in');
-if ((await tabs()).join(',') !== 'Home,Access,Settings') await fail('a new box shows only the three simple tabs, got ' + (await tabs()));
+if ((await tabs()).join(',') !== 'Home,Live,Access,Settings') await fail('a new box shows only the four simple tabs, got ' + (await tabs()));
 await shot('home-pending');
 await click('Keep it');
 await see('Kept. The change is now permanent.');
@@ -214,6 +214,38 @@ await click('Check');
 await see('Blocked');
 await see('Nothing allows it, and anything not allowed is blocked.');
 await shot('home-check');
+
+// ── Live: readings from the box's own counters, one a second ──
+await click('Live');
+await see('Internet traffic');
+await see('Your networks');
+await see('Inside network');
+const real = process.env.OX_WEB_KERNEL === '1';
+// Let a few readings arrive, then look at what was drawn.
+await new Promise((r) => setTimeout(r, 7000));
+const points = await js(`document.querySelector('svg.traffic polygon.down').getAttribute('points').trim().split(' ').length`);
+if (points < 5) await fail('the traffic chart has ' + points + ' points after seven seconds');
+if (real) {
+  // With rules in the kernel there is traffic through the box, a count of
+  // connections, and the outside probes are being blocked.
+  await see('Connections');
+  await see('Just blocked');
+  await see('Internet tried to reach the box itself', 20);
+  const peak = await js(`document.querySelector('.tile.down').textContent`);
+  if (!/peak [1-9]/.test(peak)) await fail('no download was measured: ' + peak);
+} else {
+  // A dry run has no rules in a kernel, so nothing is counted as blocked
+  // and the page must not pretend otherwise.
+  await notSee('Just blocked');
+}
+await shot('live');
+await click('Pause');
+await see('Paused. The numbers are frozen.');
+const frozen = await js(`document.querySelector('svg.traffic polygon.down').getAttribute('points')`);
+await new Promise((r) => setTimeout(r, 2500));
+if (frozen !== await js(`document.querySelector('svg.traffic polygon.down').getAttribute('points')`)) await fail('the chart moved while paused');
+await click('Resume');
+await see('Live.');
 
 // ── Access: block the inside network from the internet, review, apply ──
 await click('Access');
@@ -273,7 +305,7 @@ for (const id of ['nat', 'network', 'changes', 'explain', 'audit', 'admin']) {
   await click('Settings');
   await flip(id);
 }
-if ((await tabs()).join(',') !== 'Home,Access,Settings') await fail('with every switch off, only the simple tabs remain, got ' + (await tabs()));
+if ((await tabs()).join(',') !== 'Home,Live,Access,Settings') await fail('with every switch off, only the simple tabs remain, got ' + (await tabs()));
 // Add a guest network in one step and see it in the grid, kept apart.
 await click('Home');
 await click('Add a network, such as one for guests');
@@ -335,5 +367,13 @@ await notSee('Save your access token now');
 await shot('home-clean');
 
 if (errors.length) await fail('the page reported errors: ' + errors.join(' | '));
-console.log('ok (' + which + '): setup, Home, Access, Review, Settings and every advanced screen; ' + step + ' pictures in ' + out);
+// For the README's picture of Live: a chart with some history in it.
+if (process.env.OX_WEB_PICTURES === '1') {
+  await click('Live');
+  await see('Internet traffic');
+  await new Promise((r) => setTimeout(r, 75000));
+  await shot('live-full');
+}
+
+console.log('ok (' + which + '): setup, Home, Live, Access, Review, Settings and every advanced screen; ' + step + ' pictures in ' + out);
 quit(0);

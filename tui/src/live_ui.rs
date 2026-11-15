@@ -180,6 +180,13 @@ pub fn draw(f: &mut Frame, app: &mut LiveApp) {
     } else {
         match app.screen {
             Screen::Home => draw_home(f, app, body),
+            Screen::Live => {
+                if app.config.is_some() {
+                    crate::live_view::draw(f, app.live.as_ref(), app.paused, body);
+                } else {
+                    empty(f, body, "live", NOT_SET_UP);
+                }
+            }
             Screen::Access => draw_access(f, app, body),
             Screen::Review => draw_review(f, app, body),
             Screen::Settings => draw_settings(f, app, body),
@@ -296,6 +303,7 @@ fn draw_footer(f: &mut Frame, app: &LiveApp, area: Rect) {
     } else {
         match app.screen {
             Screen::Home => vec![("↑↓", "choose"), ("enter", "open")],
+            Screen::Live => vec![("p", if app.paused { "resume" } else { "pause" })],
             Screen::Access => vec![("↑↓←→", "move"), ("enter", "allow or block")],
             Screen::Review if pending => vec![("y", "keep"), ("r", "undo")],
             Screen::Review if waiting => vec![("enter", "apply safely"), ("d", "discard")],

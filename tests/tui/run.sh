@@ -24,19 +24,26 @@ work=$(mktemp -d)
 cat >"$work/inside.sh" <<INSIDE
 set -eu
 ip link set lo up
-(unshare -n sleep 300 & echo \$! >"$work/far")
+# Two cables, each into a namespace of its own, so traffic between them
+# has to cross the box: eth0 goes to a provider's router, eth1 to a client
+# on the inside network.
+(unshare -n sleep 600 & echo \$! >"$work/isp")
+(unshare -n sleep 600 & echo \$! >"$work/client")
 sleep 0.3
-far=\$(cat "$work/far")
-ip link add eth0 type veth peer name isp0 && ip link set isp0 netns \$far
-ip link add eth1 type veth peer name cli0 && ip link set cli0 netns \$far
-nsenter -t \$far -n sh -c 'ip link set isp0 up; ip addr add 203.0.113.1/24 dev isp0; ip link set cli0 up'
+isp=\$(cat "$work/isp")
+client=\$(cat "$work/client")
+ip link add eth0 type veth peer name isp0 && ip link set isp0 netns \$isp
+ip link add eth1 type veth peer name cli0 && ip link set cli0 netns \$client
+nsenter -t \$isp -n sh -c 'ip link set lo up; ip link set isp0 up; ip addr add 203.0.113.1/24 dev isp0'
+nsenter -t \$client -n sh -c 'ip link set lo up; ip link set cli0 up; ip addr add 192.168.10.50/24 dev cli0; ip route add default via 192.168.10.1'
 ip addr add 203.0.113.10/24 dev eth0 && ip link set eth0 up && ip route add default via 203.0.113.1
 ip addr add 192.168.10.1/24 dev eth1 && ip link set eth1 up
 "$repo/target/debug/oxd" --state-dir "$work/state" --socket "$work/oxd.sock" $mode 2>"$work/oxd.log" &
 daemon=\$!
-trap 'kill \$daemon \$far 2>/dev/null' EXIT
+trap 'kill \$daemon \$isp \$client 2>/dev/null' EXIT
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -S "$work/oxd.sock" ] && break; sleep 0.3; done
-export OX_SOCKET="$work/oxd.sock" HOME="$work"
+# The walk reaches the two far ends with: nsenter -t <pid> -n
+export OX_SOCKET="$work/oxd.sock" HOME="$work" OX_LAB_ISP=\$isp OX_LAB_CLIENT=\$client
 sh "$inside" "$repo/target/debug" "$out"
 INSIDE
 if unshare -Urn sh "$work/inside.sh"; then

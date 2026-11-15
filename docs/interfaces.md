@@ -24,11 +24,16 @@ These fit a terminal of 80×24.
 | Screen | Shows | Keys |
 | --- | --- | --- |
 | Home | Whether the firewall is running, your networks with what each can reach and how many devices have an address, and a menu of things to do | `↑↓` choose, `enter` open, `a` go to the waiting change |
+| Live | What the box is doing now, one reading a second: download, upload, connections and blocked packets, a traffic chart of the last two minutes, traffic per network, and what was just blocked | `p` pause or resume |
 | Access | Who can reach what, as a grid, the selected pair in a sentence, and what is let in from the internet | arrows move, `enter` allows or blocks the pair |
 | Review | One waiting change in sentences, then in detail | `enter` applies it safely, `d` twice discards it |
 | Settings | The basics, and a switch for each detailed screen | `↑↓` choose, `enter` switch |
 
 ![Home](images/tui-home.png)
+
+![Live](images/tui-live.png)
+
+Live is drawn in braille: each plot deepens in colour with height, download grows up and upload grows down on one shared scale, and the scale follows the 95th percentile so one spike does not flatten the rest. See [Live](#live) below for where the numbers come from.
 
 The Home menu has the same tasks as the web UI: add a network, let something in from the internet, give a phone or laptop remote access, block a device or a website, and check whether something is blocked. A task is a short form. `tab` moves between its lines, the left and right arrows change an answer that has a fixed set, `enter` sends it and `esc` leaves without changing anything. Sending a form saves a waiting change and takes you to Review. Nothing is applied until you press enter there.
 
@@ -82,6 +87,7 @@ Start the daemon with an HTTPS listener (`OXD_ARGS=--listen [::]:8443` in `/etc/
 | --- | --- |
 | Setup | Three steps: the code, which port is the internet and which are yours, and a review of what the box will do |
 | Home | Status in one line, your networks with what each can reach, "Is something blocked?", and the common tasks: add a network, let something in, give a device remote access, block a device |
+| Live | What the box is doing now: tiles, a traffic chart you can point at for a reading, traffic per network, what was just blocked, and Pause |
 | Access | Who can reach what, as a grid, and what is let in from the internet |
 | Review | One waiting change in a sentence, with Apply safely, Discard and Not now |
 | Settings | The basics, and the switches for the advanced screens |
@@ -97,6 +103,23 @@ A grid cell is Allowed, Blocked, or it names what its own rules do ("Only web, p
 ![Settings: the advanced features as switches, all off](images/web-settings.png)
 
 Applying a change always starts a two-minute timer. A bar at the top of every screen counts down with Keep it and Undo now.
+
+### Live
+
+![Live](images/web-live.png)
+
+Live is the same in the terminal and the browser, and both read `GET /v1/live`.
+
+| Shown | Where the number comes from |
+| --- | --- |
+| Download and upload | The byte counters of the port that faces the internet, read over netlink |
+| Traffic per network | The byte counters of each network's ports. A VLAN's traffic is taken off its parent port, which the kernel counts it on as well |
+| Connections | The kernel's count of tracked connections |
+| Blocked, and "just blocked" | The packet counters of the rules that drop. Each pair of networks has its own, so a line can say "Guest Wi-Fi tried to reach Inside network" |
+
+Readings are taken once a second, and only while someone has Live open: fifteen seconds after the last look the box stops and forgets the history. The history is two minutes. A config change keeps it.
+
+What Live does not show, because the box cannot measure it yet: latency to the internet, traffic per device, and the names of the busiest destinations. "Just blocked" says which networks and how many packets, not which device or port. A dry-run daemon has no rules in a kernel, so it shows traffic and leaves the blocked parts out.
 
 ### The advanced layer
 

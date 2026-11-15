@@ -1919,6 +1919,24 @@ fn first_run_setup_and_the_simple_view() {
         200
     );
     assert_eq!(cell(&get("/v1/home"), 0, 1), "allowed");
+
+    // ── the live view ───────────────────────────────────────────────────
+    // It needs a token like everything else.
+    assert_eq!(https(&d, "GET", "/v1/live", None, None).0, 401);
+    let live = get("/v1/live");
+    assert_eq!(live["window"], 120);
+    assert_eq!(live["networks"][0]["name"], "Inside network");
+    // This daemon is a dry run: there are no rules in a kernel to count
+    // blocks with, so that series is absent, not zero.
+    assert!(live["blocked"].is_null(), "{live}");
+    assert_eq!(live["feed"], json!([]));
+    // Asking is what starts the readings. A few seconds on there are some,
+    // one a second, read from the namespace's own interface counters.
+    std::thread::sleep(Duration::from_millis(3500));
+    let live = get("/v1/live");
+    let readings = live["networks"][0]["down"].as_array().unwrap().len();
+    assert!((1..=4).contains(&readings), "{readings} readings: {live}");
+
     // The internet is never let in as a whole.
     let (status, body) = post(
         "/v1/actions/access",

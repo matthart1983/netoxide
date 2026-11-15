@@ -13,45 +13,49 @@ Hide
 Type "clear" Enter
 Show
 Type "netoxide-tui --live" Sleep 600ms Enter
-Sleep 3s
+Sleep 2500ms
 
-# Add a network for guests.
+# Live: what the box is doing right now, from the kernel's own counters.
+Type "2"
+Sleep 7s
+
+# Add a network for guests, from the Home menu.
+Type "1" Sleep 1200ms
 Enter
-Sleep 2s
-Type "Guest Wi-Fi" Sleep 500ms
-Tab Sleep 400ms Tab Sleep 400ms
-Type "30" Sleep 1s
+Sleep 1500ms
+Type "Guest Wi-Fi" Sleep 400ms
+Tab Sleep 300ms Tab Sleep 300ms
+Type "30" Sleep 900ms
 Screenshot tui-task.png
 Enter
-Sleep 4s
+Sleep 3500ms
 Screenshot tui-review.png
 
 # Apply it safely, check, keep it.
 Enter
-Sleep 3500ms
-Type "y"
-Sleep 2s
-
-# Who can reach what: let the inside network reach the guests.
-Type "2"
-Sleep 2500ms
-Down Sleep 600ms Left Sleep 1500ms
-Enter
-Sleep 3500ms
-Enter
 Sleep 3s
 Type "y"
-Sleep 2s
+Sleep 1500ms
+
+# Live again: the guest network has traffic of its own, and its attempt
+# to reach the inside network is being blocked.
 Type "2"
+Sleep 11s
+Screenshot tui-live.png
+Sleep 1500ms
+Type "p" Sleep 2s Type "p" Sleep 1s
+
+# Who can reach what.
+Type "3"
 Sleep 3s
 Screenshot tui-access.png
 
-# Is something blocked?
-Type "1" Sleep 1s
-Up Sleep 1s
-Enter Sleep 1500ms
+# Is something blocked? Ask the box.
+Type "1" Sleep 800ms
+Up Sleep 800ms
+Enter Sleep 1200ms
 Type "192.168.30.50" Tab Sleep 300ms
-Type "192.168.10.20" Sleep 800ms
+Type "192.168.10.20" Sleep 600ms
 Enter
 Sleep 2s
 Screenshot tui-home.png

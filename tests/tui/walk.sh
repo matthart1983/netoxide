@@ -74,6 +74,43 @@ screen first-keep home "y"
 has "Kept."
 has "$running"
 
+# Live: real traffic through the box, read from the kernel's counters. A
+# server on the provider's side, a device inside that uses it, and
+# something outside that keeps trying ports the box should block.
+here=$(cd "$(dirname "$0")" && pwd)
+nsenter -t "$OX_LAB_ISP" -n python3 "$here/traffic.py" serve 203.0.113.1 8080 >/dev/null 2>&1 &
+nsenter -t "$OX_LAB_ISP" -n python3 "$here/traffic.py" knock 203.0.113.10 22 23 3389 >/dev/null 2>&1 &
+nsenter -t "$OX_LAB_CLIENT" -n python3 "$here/traffic.py" use http://203.0.113.1:8080 >/dev/null 2>&1 &
+trap 'kill $(jobs -p) 2>/dev/null' EXIT
+# The box takes readings only while it is asked, so ask for a few seconds.
+for _ in 1 2 3 4 5 6 7 8; do
+    "$tui" --socket "$OX_SOCKET" --snapshot live --size 80x24 >/dev/null
+    sleep 1
+done
+screen live live ""
+has "live · one reading a second"
+has "internet traffic"
+has "your networks"
+has "Inside network"
+lacks "needs at least"
+if [ "${OX_TUI_KERNEL:-}" = 1 ]; then
+    has "connections"
+    has "just blocked"
+    has "Internet tried to reach the box itself"
+    grep -qE 'peak [1-9][0-9.]* [kMG]b/s' "$last" || {
+        echo "FAILED at $last: no download was measured" >&2
+        cat "$last" >&2
+        exit 1
+    }
+else
+    # A dry run has no rules in a kernel, so nothing is counted as blocked
+    # and the screen must not pretend otherwise.
+    lacks "just blocked"
+fi
+# Paused, it says so.
+screen live-paused live "p"
+has "paused"
+
 # Home: plain words, and nothing from the detailed screens.
 screen home home ""
 has "$running"
@@ -181,9 +218,9 @@ lacks "PrivateKey"
 # Settings: one switch adds one tab.
 screen settings settings ""
 has "detailed screens"
-lacks "5 Policy"
+lacks "6 Policy"
 screen settings-on settings "$nl" 132x34
-has "5 Policy"
+has "6 Policy"
 has "[x] The full rule list"
 
 echo "terminal walk-through passed: $step screens"

@@ -104,6 +104,7 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `GET /v1/audit` | | All entries. Fails if the hash chain is broken |
 | `GET /v1/hygiene` | | Findings about rules in the running config |
 | `GET /metrics` | | Prometheus metrics |
+| `GET /v1/live` | | What the box is doing now: bits per second in and out, per network, tracked connections, packets blocked per second, and what was just blocked. Up to 120 readings, one a second, oldest first. A series the box cannot measure is `null`. Asking is what keeps the readings coming |
 | `GET /v1/home` | | The simple view: networks, the grid of who can reach what, what is let in, device counts |
 | `POST /v1/actions/access` | `{"from", "to", "allow"}` | Lets one network reach another or stops it; saves a candidate |
 | `POST /v1/actions/network` | `{"name", "port", "vlan", "address", "internet"}` | Adds a network of its own; saves a candidate |
