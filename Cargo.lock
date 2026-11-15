@@ -1305,7 +1305,6 @@ dependencies = [
  "ipnet",
  "ox-explain",
  "ox-nft",
- "ox-plan",
  "ox-schema",
  "ox-services",
  "serde",

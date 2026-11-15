@@ -533,6 +533,20 @@ fn a_dhcp_client_gets_an_address_through_the_firewall() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Waits until the HTTPS listener answers. It comes up a little after the
+/// socket, and how long that takes depends on the machine: the daemon makes
+/// its certificate first.
+fn wait_for_https(d: &Daemon) {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(20) {
+        if https(d, "GET", "/", None, None).0 == 200 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("the HTTPS listener did not answer within 20 seconds");
+}
+
 /// Calls the HTTPS listener from inside the daemon's namespace with curl.
 /// Returns the status and the body.
 fn https(
@@ -580,7 +594,7 @@ fn the_https_listener_caps_connections_and_drops_quiet_ones() {
         skip("needs unshare(1) and unprivileged user namespaces");
         return;
     };
-    std::thread::sleep(Duration::from_millis(300));
+    wait_for_https(&d);
 
     // One address opens connections and says nothing on them. The 33rd is
     // closed at once; the rest are closed when they have been quiet too long.
@@ -643,7 +657,7 @@ fn the_https_api_needs_a_token_and_respects_its_role() {
         return;
     };
     // Give the listener a moment to come up after the socket.
-    std::thread::sleep(Duration::from_millis(300));
+    wait_for_https(&d);
 
     // No token, or a wrong one: nothing but the page itself.
     assert_eq!(https(&d, "GET", "/v1/status", None, None).0, 401);
@@ -810,7 +824,7 @@ fn the_web_ui_endpoints_work_and_the_page_is_locked_down() {
         skip("needs unshare(1) and unprivileged user namespaces");
         return;
     };
-    std::thread::sleep(Duration::from_millis(300));
+    wait_for_https(&d);
 
     // One-step actions need a running config to start from.
     let forward = r#"{"name":"Home Assistant","port":"tcp/443","to":"192.168.10.20","to_port":8123,"address":"203.0.113.10"}"#;
@@ -1647,7 +1661,7 @@ fn first_run_setup_and_the_simple_view() {
         skip("needs unshare(1) and unprivileged user namespaces");
         return;
     };
-    std::thread::sleep(Duration::from_millis(300));
+    wait_for_https(&d);
     // A request as the setup page makes it: a code, no token.
     let setup =
         |method: &str, path: &str, code: Option<&str>, body: Option<&str>| -> (u16, Value) {

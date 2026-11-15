@@ -68,7 +68,15 @@ impl Box_ {
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(5) {
             if UnixStream::connect(dir.join("oxd.sock")).is_ok() {
-                // The HTTPS listener comes up just after the socket.
+                // The HTTPS listener comes up after the socket, once the
+                // daemon has made its certificate. How long that takes
+                // depends on the machine, so wait for the daemon to report it.
+                let listening = Instant::now();
+                while listening.elapsed() < Duration::from_secs(20)
+                    && !b.local(&["status"]).out.contains("certificate sha256:")
+                {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
                 std::thread::sleep(Duration::from_millis(400));
                 return Some(b);
             }

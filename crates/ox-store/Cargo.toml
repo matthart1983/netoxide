@@ -10,7 +10,6 @@ publish.workspace = true
 ipnet.workspace = true
 ox-explain.workspace = true
 ox-nft.workspace = true
-ox-plan.workspace = true
 ox-schema.workspace = true
 ox-services.workspace = true
 serde.workspace = true
