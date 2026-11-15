@@ -1240,10 +1240,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ox-libnft"
-version = "0.1.0"
-
-[[package]]
 name = "ox-nft"
 version = "0.1.0"
 dependencies = [
@@ -1329,7 +1325,6 @@ dependencies = [
  "netlink-packet-wireguard",
  "nix",
  "ox-explain",
- "ox-libnft",
  "ox-nft",
  "ox-plan",
  "ox-schema",

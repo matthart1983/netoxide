@@ -21,10 +21,6 @@ allow = [
     "Zlib",
 ]
 
-[licenses.private]
-# First-party crates carry no licence until the licence decision is made.
-ignore = true
-
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

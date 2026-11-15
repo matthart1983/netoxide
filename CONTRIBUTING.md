@@ -2,11 +2,11 @@
 
 Netoxide is at 0.1 and has one maintainer. Bug reports, test results from real hardware and small fixes are the most useful things you can send.
 
-**The repository has no licence yet.** Until one is chosen, nobody else may use, copy or distribute the code, and a contribution cannot be accepted on clear terms. If you want to send code, open an issue first.
+Netoxide is under the [MIT licence](LICENSE). What you contribute is under the same licence. There is no contributor agreement to sign.
 
 ## Build and test
 
-You need Rust 1.88 or later and `libnftables.so.1` (the `nftables` package). The kernel tests also use `unshare`, `nsenter`, `ip`, `curl`, `dig`, `python3`, `dnsmasq` and the kernel's WireGuard module, and they need unprivileged user namespaces.
+You need Rust 1.88 or later and the `nft` program (the `nftables` package). The kernel tests also use `unshare`, `nsenter`, `ip`, `curl`, `dig`, `python3`, `dnsmasq` and the kernel's WireGuard module, and they need unprivileged user namespaces.
 
 ```sh
 cargo fmt --all
@@ -30,7 +30,7 @@ unshare -Urn ./target/debug/oxd --state-dir /tmp/ox-state --socket /tmp/oxd.sock
 
 ## Rules for code
 
-- `unsafe` is allowed only in `crates/ox-libnft`. The workspace forbids it everywhere else.
+- `unsafe` is forbidden in every crate.
 - The daemon never builds a shell command. Programs are started with a fixed argument list.
 - Every rule, NAT and VPN test covers IPv4 and IPv6.
 - A new API route takes a `Caller` and checks what the caller may do before anything else. A route that changes the config also checks the caller's sections.

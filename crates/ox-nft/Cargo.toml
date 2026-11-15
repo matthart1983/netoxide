@@ -2,6 +2,7 @@
 name = "ox-nft"
 description = "Compiles a Netoxide config to a ruleset and renders it as libnftables JSON"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

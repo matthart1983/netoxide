@@ -2,6 +2,7 @@
 name = "ox-plan"
 description = "Diff between two Netoxide configs, and which flows change verdict"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

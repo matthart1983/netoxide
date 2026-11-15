@@ -8,6 +8,8 @@ The first preview. A single-box firewall and router that passes its tests in net
 
 ### What is in it
 
+- **Licence.** MIT.
+
 - **Config.** One typed TOML or JSON document per box, schema version 1, with a published JSON Schema. Zones, interfaces, address groups, services, zone-pair rules, port forwards, outbound NAT, DNS, DHCP and WireGuard tunnels. IPv4 and IPv6 in the same rules.
 - **Compiler.** A config becomes one nftables ruleset built from sets and verdict maps, loaded as an atomic transaction.
 - **Daemon `oxd`.** Named candidates, plan, commit, a confirm window with automatic revert, rollback, and a history of the last 100 commits. A daemon that restarts with an unconfirmed commit reverts it.

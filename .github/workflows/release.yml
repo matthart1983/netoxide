@@ -17,7 +17,7 @@ jobs:
       - name: Install what the build and tests use
         run: |
           sudo apt-get update
-          sudo apt-get install -y nftables libnftables1 dnsmasq-base dnsutils curl util-linux iproute2 python3
+          sudo apt-get install -y nftables dnsmasq-base dnsutils curl util-linux iproute2 python3
       - uses: dtolnay/rust-toolchain@stable
       - name: The tag matches the version in Cargo.toml
         run: |

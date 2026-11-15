@@ -2,6 +2,7 @@
 name = "ox-import"
 description = "Translates a pfSense config.xml into a Netoxide config and a report"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

@@ -6,6 +6,7 @@ members = ["crates/*", "tui"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
+license = "MIT"
 publish = false
 
 [workspace.dependencies]
@@ -13,7 +14,6 @@ ox-schema = { path = "crates/ox-schema" }
 ox-nft = { path = "crates/ox-nft" }
 ox-explain = { path = "crates/ox-explain" }
 ox-plan = { path = "crates/ox-plan" }
-ox-libnft = { path = "crates/ox-libnft" }
 ox-store = { path = "crates/ox-store" }
 ox-client = { path = "crates/ox-client" }
 ox-setup = { path = "crates/ox-setup" }

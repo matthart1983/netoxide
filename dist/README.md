@@ -7,7 +7,7 @@ console access, not on a box you can only reach over the network.
 
 ## What you need
 
-- A Linux kernel with nftables, and `libnftables.so.1` (package `nftables`)
+- A Linux kernel with nftables, and the `nft` program (package `nftables`)
 - `dnsmasq`, if the box will answer DNS or hand out addresses
 - Rust 1.88 or later to build
 
