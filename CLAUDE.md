@@ -129,8 +129,7 @@ as a page to capture in a browser. The web pictures are browser captures of a `-
 with `examples/branch.toml` and `examples/branch-candidate.toml`. Retake them
 when a screen changes.
 
-The version is 0.1.0 and is set once, in the workspace `Cargo.toml`. Nothing
-has been tagged or released. `docs/releasing.md` has the checklist and the
+The version is set once, in the workspace `Cargo.toml`. 0.1.0 was tagged on 15 Nov 2026 as a preview. `docs/releasing.md` has the checklist and the
 remaining steps.
 `.github/workflows/release.yml` builds a draft release from a `v*` tag. Do not
 tag or publish; that is the maintainer's step.
