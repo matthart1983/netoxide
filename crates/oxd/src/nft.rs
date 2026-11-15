@@ -49,7 +49,22 @@ impl fmt::Display for NftError {
                 PLACES.join(", ")
             ),
             NftError::Failed(why) => write!(f, "nft could not be run: {why}"),
-            NftError::Refused(msg) => write!(f, "nftables refused the ruleset: {}", msg.trim()),
+            NftError::Refused(msg) => {
+                // nft repeats one line per rule. Once is enough.
+                let mut lines: Vec<&str> = msg
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                lines.dedup();
+                write!(f, "nftables refused the ruleset: {}", lines.join("; "))?;
+                if msg.contains("Operation not supported") {
+                    f.write_str(
+                        ". This usually means the nft program is older than the kernel expects; update the nftables package",
+                    )?;
+                }
+                Ok(())
+            }
         }
     }
 }
