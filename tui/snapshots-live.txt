@@ -1,6 +1,53 @@
+── Home ──
+ Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
+ 1 Home  2 Changes
+╭ status ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✓ The firewall is running                                                                                                                                    │
+│   1 thing is let in from the internet. Everything else is blocked.                                                                                           │
+│   1 change is waiting. Press a to review and apply it.                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ your networks ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│network        can reach                         ports and addresses                                                                                          │
+│Servers        Nothing                           lan0.30  10.30.0.1/24, 2001:db8:4a00:2::1/64                                                                 │
+│Guest Wi-Fi    Parts of Internet                 lan0.50  10.50.0.1/22                                                                                        │
+│Staff network  Parts of Servers and Internet     lan0.20  10.20.0.1/16, 2001:db8:4a00:1::1/64                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ who can reach what ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│from ↓  to →   Servers               Guest Wi-Fi           Staff network         Internet                                                                     │
+│Servers        —                     Blocked               Blocked               Blocked                                                                      │
+│Guest Wi-Fi    Blocked               —                     Blocked               Only dns, http, https                                                        │
+│Staff network  3 rules               Blocked               —                     1 rule                                                                       │
+│Internet       1 service let in      Blocked               Blocked               —                                                                            │
+│                                                                                                                                                              │
+╰ anything not allowed is blocked · yellow has rules of its own (A for the detailed screens) ──────────────────────────────────────────────────────────────────╯
+╭ let in from the internet ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Public web              tcp/443     goes to 10.30.0.10                                                                                                        │
+│                                                                                                                                                              │
+│Change things with ox on the box: ox access, ox forward, ox block, ox vpn add. Then press a here, or run ox apply.                                            │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  a  review and apply   tab  screens   A  advanced   R  reload   ?  help   q  quit
 ── Policy ──
  Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+ 1 Home  2 Changes
 ╭ zone pairs ──────────────╮╭ lan → dmz · 3 rules · first match wins ──────────────────────────────────────────────────────────────────────────────────────────╮
 │▸ lan → dmz            3  ││ #  rule                                                                                                 action packets    log    │
 │  lan → wan            1  ││▸1  r-0388 Finance to file servers                                                                       accept       1204        │
@@ -44,10 +91,10 @@
 │                          ││reason          Open file share for finance, CHG-1984                                                                             │
 │                          ││state           enabled, in the kernel                                                                                            │
 ╰ 8 rules · 5 pairs ───────╯╰ packets are kernel counters since the last load ─────────────────────────────────────────────────────────────────────────────────╯
-  ←→  zone pair   ↑↓  rule   x  explain   1-6  screens   R  reload   ?  help   q  quit
+  ←→  zone pair   ↑↓  rule   x  explain   tab  screens   A  advanced   R  reload   ?  help   q  quit
 ── NAT ──
  Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+ 1 Home  2 Changes
 ╭ port forwards · 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │id           name                                from zone  match                                translate to                        filter rule    packets   │
 │n-0010       Public web                          wan        203.0.113.10 tcp/443                 10.30.0.10                          r-0200             512880│
@@ -91,10 +138,10 @@
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  1-6  screens   R  reload   ?  help   q  quit
+  tab  screens   A  advanced   R  reload   ?  help   q  quit
 ── Interfaces ──
  Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+ 1 Home  2 Changes
 ╭ interfaces · 4 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │interface        zone         zone description                      addresses                                                                   route         │
 │lan0.20          lan          Staff network                         10.20.0.1/16, 2001:db8:4a00:1::1/64                                                       │
@@ -138,10 +185,10 @@
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 ╰ from the running config; link state is not read yet ─────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  1-6  screens   R  reload   ?  help   q  quit
+  tab  screens   A  advanced   R  reload   ?  help   q  quit
 ── Changes ──
  Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+ 1 Home  2 Changes
 ╭ candidates ──────────────────────────────────────────────────────────────────────────────────╮╭ running ─────────────────────────────────────────────────────╮
 │▸ block-legacy-smb                                                                            ││#1  confirmed                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────╯│by              ana                                           │
@@ -185,10 +232,10 @@
 │                                                                                              ││                                                              │
 │                                                                                              ││                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
-  ↑↓  candidate   c  commit   w  confirm window   1-6  screens   R  reload   ?  help   q  quit
+  ↑↓  candidate   c  commit   w  confirm window   tab  screens   A  advanced   R  reload   ?  help   q  quit
 ── Explain ──
  Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+ 1 Home  2 Changes
 ╭ why did this packet do that? ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │src —   dst —   proto tcp   dport —   in —                                                                                                                    │
 │                                                                                                                                                              │
@@ -232,10 +279,10 @@
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  e  edit packet   enter  explain   m  compare candidate   1-6  screens   R  reload   ?  help   q  quit
+  e  edit packet   enter  explain   m  compare candidate   tab  screens   A  advanced   R  reload   ?  help   q  quit
 ── Audit ──
  Netoxide  syd-br-014-a  │  running #1  │  candidate block-legacy-smb  │  applying to the kernel
- 1 Policy  2 NAT  3 Interfaces  4 Changes  5 Explain  6 Audit
+ 1 Home  2 Changes
 ╭ audit log · 4 entries · hash chain verified by oxd ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ #    time (UTC)          who          event             detail                                                                                    hash       │
 │▸   4 2026-11-14 10:56:03 jun          candidate saved   block-legacy-smb sha256 762941b3                                                          049f3ca1e0…│
@@ -279,4 +326,4 @@
 │hash 049f3ca1e041d27b9cc07a3f122be890d477e1c5aae4f912bd0a9915cf22                                                                                             │
 │                                                                                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  ↑↓  entry   1-6  screens   R  reload   ?  help   q  quit
+  ↑↓  entry   tab  screens   A  advanced   R  reload   ?  help   q  quit

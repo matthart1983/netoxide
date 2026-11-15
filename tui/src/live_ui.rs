@@ -109,7 +109,8 @@ pub fn draw(f: &mut Frame, app: &mut LiveApp) {
     .areas(a);
 
     draw_top(f, app, top);
-    let titles: Vec<Line> = Screen::ALL
+    let shown = app.tabs();
+    let titles: Vec<Line> = shown
         .iter()
         .enumerate()
         .map(|(i, s)| {
@@ -121,7 +122,7 @@ pub fn draw(f: &mut Frame, app: &mut LiveApp) {
         .collect();
     f.render_widget(
         Tabs::new(titles)
-            .select(app.screen.index())
+            .select(shown.iter().position(|s| *s == app.screen))
             .highlight_style(Style::new().fg(ACCENT).bold().underlined())
             .divider("")
             .padding(" ", " "),
@@ -142,6 +143,7 @@ pub fn draw(f: &mut Frame, app: &mut LiveApp) {
         return;
     }
     match app.screen {
+        Screen::Home => draw_home(f, app, body),
         Screen::Policy => draw_policy(f, app, body),
         Screen::Nat => draw_nat(f, app, body),
         Screen::Interfaces => draw_interfaces(f, app, body),
@@ -211,6 +213,7 @@ fn draw_footer(f: &mut Frame, app: &LiveApp, area: Rect) {
         ]
     } else {
         match app.screen {
+            Screen::Home => vec![("a", "review and apply")],
             Screen::Policy => vec![("←→", "zone pair"), ("↑↓", "rule"), ("x", "explain")],
             Screen::Changes if pending => vec![("↑↓", "candidate")],
             Screen::Changes => vec![
@@ -232,7 +235,15 @@ fn draw_footer(f: &mut Frame, app: &LiveApp, area: Rect) {
             keys.extend([("y", "keep commit"), ("r", "undo commit")]);
         }
         keys.extend([
-            ("1-6", "screens"),
+            ("tab", "screens"),
+            (
+                "A",
+                if app.advanced {
+                    "hide advanced"
+                } else {
+                    "advanced"
+                },
+            ),
             ("R", "reload"),
             ("?", "help"),
             ("q", "quit"),
@@ -250,11 +261,13 @@ fn draw_footer(f: &mut Frame, app: &LiveApp, area: Rect) {
 }
 
 fn draw_help(f: &mut Frame) {
-    let area = centered(f.area(), 66, 17);
+    let area = centered(f.area(), 66, 19);
     f.render_widget(Clear, area);
     let lines = vec![
         Line::from("Navigation".bold()),
-        kv("1 … 6, tab", "screens"),
+        kv("1 … 9, tab", "screens"),
+        kv("A", "show or hide the detailed screens"),
+        kv("a", "home: go to the waiting change"),
         kv("↑↓ or j k", "move the selection"),
         kv("←→ or h l", "zone pair on Policy"),
         kv("R", "read everything from the daemon again"),
@@ -273,6 +286,163 @@ fn draw_help(f: &mut Frame) {
     f.render_widget(
         Paragraph::new(lines).block(panel("help").border_style(Style::new().fg(ACCENT))),
         area,
+    );
+}
+
+/// The simple view: is the box running, the networks, and who can reach what.
+fn draw_home(f: &mut Frame, app: &mut LiveApp, area: Rect) {
+    let Some(config) = &app.config else {
+        empty(
+            f,
+            area,
+            "home",
+            "This box is not set up yet. Run `ox init --save starter` then `ox apply starter` on the box, or open its web page and enter the setup code.",
+        );
+        return;
+    };
+    let grid = ox_setup::grid(config);
+    let waiting = app.status.candidates.len();
+    let pending = app.status.reverts_in.is_some();
+    let dry = !app.status.applier.is_empty() && app.status.applier != "kernel";
+    let (mark, color, headline) = if dry {
+        (
+            "!",
+            WARN,
+            "Dry run: the box keeps its config and loads nothing into the kernel",
+        )
+    } else if pending {
+        (
+            "!",
+            WARN,
+            "A change is waiting for you to keep it: y keeps it, r undoes it",
+        )
+    } else {
+        ("✓", OK, "The firewall is running")
+    };
+    let let_in = match grid.let_in.len() {
+        0 => "Everything from the internet is blocked. Nothing is let in.".to_string(),
+        1 => "1 thing is let in from the internet. Everything else is blocked.".to_string(),
+        n => format!("{n} things are let in from the internet. Everything else is blocked."),
+    };
+    let status = vec![
+        Line::from(vec![
+            Span::styled(format!(" {mark} "), Style::new().fg(color).bold()),
+            Span::styled(headline, Style::new().bold()),
+        ]),
+        Line::from(Span::styled(format!("   {let_in}"), Style::new().fg(DIM))),
+        Line::from(Span::styled(
+            match waiting {
+                0 => "   No changes are waiting.".to_string(),
+                1 => "   1 change is waiting. Press a to review and apply it.".to_string(),
+                n => format!("   {n} changes are waiting. Press a to review and apply them."),
+            },
+            Style::new().fg(if waiting == 0 { DIM } else { WARN }),
+        )),
+    ];
+    let inside: Vec<&ox_setup::Network> = grid.networks.iter().filter(|n| !n.internet).collect();
+    let rows = grid.networks.len() as u16;
+    let [top, nets, table, rest] = Layout::vertical([
+        Constraint::Length(5),
+        Constraint::Length(inside.len() as u16 + 3),
+        Constraint::Length(rows + 4),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    f.render_widget(Paragraph::new(status).block(panel("status")), top);
+
+    let wide = |text: &str| text.chars().count();
+    let name_w = grid
+        .networks
+        .iter()
+        .map(|n| wide(&n.name))
+        .max()
+        .unwrap_or(8)
+        .max(10)
+        + 2;
+    let mut lines = vec![Line::from(Span::styled(
+        format!(
+            "{:<name_w$}{:<34}{}",
+            "network", "can reach", "ports and addresses"
+        ),
+        Style::new().fg(DIM),
+    ))];
+    for n in &inside {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<name_w$}", n.name), Style::new().bold()),
+            Span::raw(format!("{:<34}", n.reaches)),
+            Span::styled(
+                format!("{}  {}", n.interfaces.join(", "), n.addresses.join(", ")),
+                Style::new().fg(DIM),
+            ),
+        ]));
+    }
+    f.render_widget(Paragraph::new(lines).block(panel("your networks")), nets);
+
+    // Who can reach what: the same grid the web interface shows.
+    let cell_w = name_w.max(22);
+    let mut lines = vec![Line::from(
+        std::iter::once(Span::styled(
+            format!("{:<name_w$}", "from ↓  to →"),
+            Style::new().fg(DIM),
+        ))
+        .chain(
+            grid.networks
+                .iter()
+                .map(|n| Span::styled(format!("{:<cell_w$}", n.name), Style::new().fg(DIM))),
+        )
+        .collect::<Vec<_>>(),
+    )];
+    for (i, from) in grid.networks.iter().enumerate() {
+        let mut spans = vec![Span::styled(
+            format!("{:<name_w$}", from.name),
+            Style::new().bold(),
+        )];
+        for cell in &grid.cells[i] {
+            let (text, style) = match cell {
+                ox_setup::Cell::Same => ("—".to_string(), Style::new().fg(DIM)),
+                ox_setup::Cell::Allowed => ("Allowed".to_string(), Style::new().fg(OK)),
+                ox_setup::Cell::Blocked => ("Blocked".to_string(), Style::new().fg(BAD)),
+                ox_setup::Cell::Custom { summary } => (summary.clone(), Style::new().fg(WARN)),
+            };
+            let shown: String = text.chars().take(cell_w - 1).collect();
+            spans.push(Span::styled(format!("{shown:<cell_w$}"), style));
+        }
+        lines.push(Line::from(spans));
+    }
+    f.render_widget(
+        Paragraph::new(lines).block(
+            panel("who can reach what").title_bottom(Span::styled(
+                " anything not allowed is blocked · yellow has rules of its own (A for the detailed screens) ",
+                Style::new().fg(DIM),
+            )),
+        ),
+        table,
+    );
+
+    let mut lines: Vec<Line> = grid
+        .let_in
+        .iter()
+        .map(|l| {
+            Line::from(vec![
+                Span::styled(format!("{:<24}", l.name), Style::new().bold()),
+                Span::raw(format!("{:<12}", l.service)),
+                Span::styled(format!("goes to {}", l.to), Style::new().fg(DIM)),
+            ])
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled("Nothing.", Style::new().fg(DIM))));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Change things with ox on the box: ox access, ox forward, ox block, ox vpn add. Then press a here, or run ox apply.",
+        Style::new().fg(DIM),
+    )));
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(panel("let in from the internet")),
+        rest,
     );
 }
 

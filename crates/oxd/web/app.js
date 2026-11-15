@@ -27,7 +27,11 @@ function h(tag, attrs, ...kids) {
 const state = {
   token: sessionStorage.getItem('ox-token') || '',
   me: null,
-  view: 'overview',
+  view: 'home',
+  home: null,         // the simple view: networks, grid, what is let in
+  setup: null,        // first-run setup: { needed, step, code, ports, choice, preview, error }
+  back: 'home',       // where a task or a review returns to
+  check: { from: '', to: '', what: 'tcp/443', port: '', result: null },
   status: null,
   running: null,      // { config, summary, describe }
   hits: {},           // rule ID -> packets
@@ -120,7 +124,17 @@ function parseHits(dump) {
 }
 
 async function refresh(rerender) {
-  if (!state.token) return render();
+  if (!state.token) {
+    // A box with no config offers setup in place of sign-in.
+    if (!state.setup) {
+      state.setup = { needed: false, step: 'code', code: '', ports: [], choice: null, preview: null, error: null };
+      try {
+        const r = await fetch('/v1/setup');
+        state.setup.needed = r.ok && (await r.json()).needed === true;
+      } catch (e) { /* the sign-in page still works */ }
+    }
+    return render();
+  }
   try {
     state.me = await call('GET', '/v1/whoami');
     state.status = await call('GET', '/v1/status');
@@ -130,6 +144,7 @@ async function refresh(rerender) {
       if (e.status !== 404) throw e;
       state.running = null;
     }
+    state.home = state.running ? await call('GET', '/v1/home').catch(() => null) : null;
     state.hits = parseHits(await call('GET', '/v1/kernel').catch(() => null));
     state.leases = await call('GET', '/v1/leases');
     state.tunnels = await call('GET', '/v1/wireguard').catch(() => []);
@@ -143,8 +158,8 @@ async function refresh(rerender) {
       state.meta = state.plan = null;
     }
     if (state.view === 'audit' && may('audit')) state.audit = (await call('GET', '/v1/audit')).entries;
-    if (state.view === 'settings') state.roles = await call('GET', '/v1/roles');
-    if (state.view === 'settings' && may('manage')) state.tokens = await call('GET', '/v1/tokens');
+    if (state.view === 'admin') state.roles = await call('GET', '/v1/roles');
+    if (state.view === 'admin' && may('manage')) state.tokens = await call('GET', '/v1/tokens');
     state.problem = null;
   } catch (e) {
     if (e.status === 401) {
@@ -156,44 +171,86 @@ async function refresh(rerender) {
     }
   }
   // Views with a form are not redrawn on the timer, so typing is not lost.
-  const hasForm = ['changes', 'explain', 'settings'].includes(state.view);
+  const hasForm = ['home', 'task', 'changes', 'explain', 'admin'].includes(state.view);
   if (rerender || !hasForm) render(); else renderChrome();
 }
 
 // ── drawing ─────────────────────────────────────────────────────────────
 
-const VIEWS = [
-  ['overview', 'Overview'], ['rules', 'Rules'], ['nat', 'NAT'], ['network', 'Network'],
-  ['changes', 'Changes'], ['explain', 'Explain'], ['audit', 'Audit'], ['settings', 'Settings'],
+// Everyone sees these three.
+const SIMPLE = [['home', 'Home'], ['access', 'Access'], ['settings', 'Settings']];
+
+// Each advanced feature is a screen that stays out of the way until it is
+// switched on in Settings. A switch only shows or hides a screen. It never
+// changes what the box does. The choice is kept in this browser.
+const ADVANCED = [
+  ['rules', 'Rules', 'Full rule list', 'Every rule in order, with sources, services, packet counts and hygiene notes'],
+  ['nat', 'NAT', 'Address translation', 'Port forwards and outbound translation, with the rule each one uses'],
+  ['network', 'Network', 'Interfaces, DNS and addresses', 'Ports and VLANs, the resolver, address pools, leases and VPN tunnels'],
+  ['changes', 'Changes', 'Candidates and the config editor', 'Named candidates, the full plan, the whole config as text, approvals'],
+  ['explain', 'Explain', 'Packet tracer', 'Follow one packet step by step, against the running config and a candidate'],
+  ['audit', 'Audit', 'Audit log', 'Every change with who made it, in a hash-chained log'],
+  ['admin', 'Admin', 'Access tokens and roles', 'Tokens, roles, four-eyes approval, and managing this box from another machine'],
 ];
+
+function chosenAdvanced() {
+  try { return JSON.parse(localStorage.getItem('ox-advanced') || '[]'); } catch (e) { return []; }
+}
+
+// A feature the box already depends on shows its screen whatever the switch says.
+function inUse(id) {
+  const cells = (state.home && state.home.cells) || [];
+  if (id === 'rules') return cells.some((row) => row.some((c) => c.state === 'custom'));
+  if (id === 'changes') return !!(state.status && state.status.four_eyes);
+  return false;
+}
+
+function shown(id) {
+  if (id === 'audit' && !may('audit')) return false;
+  return inUse(id) || chosenAdvanced().includes(id);
+}
+
+function setAdvanced(id, on) {
+  const now = chosenAdvanced().filter((x) => x !== id);
+  if (on) now.push(id);
+  localStorage.setItem('ox-advanced', JSON.stringify(now));
+  render();
+}
+
+function go(view) {
+  state.view = view;
+  state.notice = null;
+  state.form = null;
+  refresh(true);
+}
 
 function chrome() {
   const s = state.status || {};
   const run = s.running;
+  const waiting = (s.candidates || []).length;
   const top = h('header', { class: 'top' },
     h('span', { class: 'brand' }, 'Netoxide'),
-    h('span', { class: 'fact' }, h('b', null, state.running ? state.running.config.hostname : 'no config')),
-    h('span', { class: 'fact' }, run ? ['running ', h('b', null, '#' + run.id)] : 'no commit yet'),
-    h('span', { class: 'fact' }, (s.candidates || []).length + ' candidate' + ((s.candidates || []).length === 1 ? '' : 's')),
+    h('span', { class: 'fact' }, h('b', null, state.running ? state.running.config.hostname : 'not set up')),
     s.applier && s.applier !== 'kernel' ? h('span', { class: 'tag note' }, 'dry run: nothing is loaded') : null,
+    waiting ? h('button', { class: 'link', onclick: () => review(s.candidates[0], state.view) },
+      waiting + ' change' + (waiting === 1 ? '' : 's') + ' waiting') : null,
     h('span', { class: 'spacer' }),
-    state.me ? h('span', { class: 'fact' }, state.me.name + ' (' + state.me.role + ')') : null,
+    state.me ? h('span', { class: 'fact' }, state.me.name) : null,
     h('button', { onclick: signOut }, 'Sign out'));
 
-  const nav = h('nav', null, VIEWS
-    .filter(([id]) => id !== 'audit' || may('audit'))
-    .map(([id, label]) => h('button', {
-      class: state.view === id ? 'on' : '',
-      onclick: () => { state.view = id; state.notice = null; refresh(true); },
-    }, label)));
+  const tabs = SIMPLE.concat(ADVANCED.filter(([id]) => shown(id)).map(([id, label]) => [id, label]));
+  const nav = h('nav', null, tabs.map(([id, label]) => h('button', {
+    class: state.view === id ? 'on' : '',
+    onclick: () => go(id),
+  }, label)));
 
   const banners = [];
-  if (state.problem) banners.push(h('div', { class: 'banner bad' }, 'Cannot read the daemon: ' + state.problem));
+  if (state.problem) banners.push(h('div', { class: 'banner bad' }, 'Cannot read the box: ' + state.problem));
   if (s.reverts_in != null && run) {
     banners.push(h('div', { class: 'banner warn' },
-      h('span', { class: 'grow' }, 'Commit #' + run.id + ' is applied and undoes itself in ' + mmss(s.reverts_in) + ' unless you keep it.'),
-      may('commit') ? h('button', { class: 'primary', onclick: () => act(() => call('POST', '/v1/confirm'), (c) => 'Kept commit #' + c.id + '.') }, 'Keep it') : null,
-      may('commit') ? h('button', { class: 'danger', onclick: () => act(() => call('POST', '/v1/revert'), (c) => 'Undid commit #' + c.id + '. The candidate is kept.') }, 'Undo now') : null));
+      h('span', { class: 'grow' }, 'Your change is applied. Check things still work. It undoes itself in ' + mmss(s.reverts_in) + ' unless you keep it.'),
+      may('commit') ? h('button', { class: 'primary', onclick: () => act(() => call('POST', '/v1/confirm'), 'Kept. The change is now permanent.') }, 'Keep it') : null,
+      may('commit') ? h('button', { class: 'danger', onclick: () => act(() => call('POST', '/v1/revert'), 'Undone. The box is as it was before.') }, 'Undo now') : null));
   }
   if (s.lockdown) banners.push(h('div', { class: 'banner warn' }, 'This box has no config yet. Inbound and forwarded traffic is dropped until the first commit.'));
   if (state.notice) banners.push(h('div', { class: 'banner ' + state.notice.kind }, state.notice.text));
@@ -207,11 +264,13 @@ function renderChrome() {
 
 function render() {
   if (!state.token) {
-    app.replaceChildren(signIn());
+    app.replaceChildren(state.setup && state.setup.needed ? setupView() : signIn());
     return;
   }
-  const views = { overview, rules, nat, network, changes, explainView, audit, settings };
-  const draw = views[state.view === 'explain' ? 'explainView' : state.view] || overview;
+  const views = { home, access, settings, task, review: reviewView, rules, nat, network, changes, explain: explainView, audit, admin };
+  // A screen that was switched off, or one this role may not see, falls back to Home.
+  const wanted = ADVANCED.some(([id]) => id === state.view) && !shown(state.view) ? 'home' : state.view;
+  const draw = views[wanted] || home;
   app.replaceChildren(h('div', { id: 'chrome' }, chrome()), h('main', null, draw()));
 }
 
@@ -226,7 +285,7 @@ function signIn() {
   };
   return h('form', { class: 'panel signin', onsubmit: go },
     h('h1', null, 'Netoxide'),
-    h('p', { class: 'dim' }, 'Sign in with an access token. An administrator makes one on the box with ',
+    h('p', { class: 'dim' }, 'Sign in with an access token. Whoever set this box up has one. A new one is made on the box with ',
       h('code', null, 'ox token create <name> --role operator'), '.'),
     state.problem ? h('p', { class: 'change-del' }, state.problem) : null,
     h('label', { for: 'token' }, 'Access token'),
@@ -237,8 +296,9 @@ function signIn() {
 function signOut() {
   state.token = '';
   state.me = null;
+  state.setup = null;
   sessionStorage.removeItem('ox-token');
-  render();
+  refresh(true);
 }
 
 function table(head, rows) {
@@ -251,31 +311,387 @@ function noConfig() {
   return h('div', { class: 'panel' },
     h('h2', null, 'No config yet'),
     h('p', null, 'Nothing has been committed, so there is nothing to show here.'),
-    h('p', { class: 'dim' }, 'On the box, run ', h('code', null, 'ox init --save starter'), ' then ', h('code', null, 'ox commit starter --confirm 5m'), '. Or open Changes and write a config.'));
+    h('p', { class: 'dim' }, 'On the box, run ', h('code', null, 'ox init --save starter'), ' then ', h('code', null, 'ox commit starter --confirm 5m'), '.'));
 }
 
-function overview() {
+// ── first-run setup ─────────────────────────────────────────────────────
+
+async function setupCall(method, path, body) {
+  const headers = { 'X-Setup-Code': state.setup.code };
+  if (body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('the box answered ' + res.status));
+  return data;
+}
+
+function setupChoice() {
+  const c = state.setup.choice;
+  return {
+    internet: c.internet,
+    name: c.name,
+    inside: Object.keys(c.inside).filter((p) => c.inside[p] && p !== c.internet)
+      .map((port) => (c.address[port] ? { port, address: c.address[port] } : { port })),
+  };
+}
+
+function setupView() {
+  const su = state.setup;
+  const fail = (e) => { su.error = e.message; render(); };
+  const steps = h('p', { class: 'dim' }, 'Step ' + ({ code: 1, ports: 2, review: 3 }[su.step]) + ' of 3');
+  const problem = su.error ? h('p', { class: 'change-del', role: 'alert' }, su.error) : null;
+
+  if (su.step === 'code') {
+    const next = async (e) => {
+      e.preventDefault();
+      su.error = null;
+      try {
+        const r = await setupCall('GET', '/v1/setup/ports');
+        su.ports = r.ports;
+        const internet = (r.ports.find((p) => p.internet) || r.ports[0] || {}).name || '';
+        const inside = {};
+        for (const p of r.ports) inside[p.name] = p.name !== internet && r.ports.length <= 2;
+        su.choice = { internet, inside, address: {}, name: r.hostname };
+        su.step = 'ports';
+        render();
+      } catch (err) { fail(err); }
+    };
+    return h('form', { class: 'panel signin', onsubmit: next },
+      h('h1', null, 'Set up this box'), steps,
+      h('p', null, 'This box has no config yet. To prove you are the person setting it up, enter the setup code.'),
+      h('p', { class: 'dim' }, 'The code is shown on the box itself: run ', h('code', null, 'ox status'), ' there, or read the line the daemon printed when it started.'),
+      problem,
+      field('Setup code', 'code', su, { required: true, placeholder: 'ABCD-EFGH', autocomplete: 'off', autocapitalize: 'characters' }),
+      h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Continue')),
+      h('p', { class: 'dim' }, 'Already set up? ', h('button', { type: 'button', class: 'link', onclick: () => { su.needed = false; render(); } }, 'Sign in with a token')));
+  }
+
+  const c = su.choice;
+  if (su.step === 'ports') {
+    const next = async (e) => {
+      e.preventDefault();
+      su.error = null;
+      try {
+        su.preview = (await setupCall('POST', '/v1/setup/preview', setupChoice())).describe;
+        su.step = 'review';
+        render();
+      } catch (err) { fail(err); }
+    };
+    const about = (p) => (p.up ? 'connected' : 'nothing plugged in') + (p.addresses.length ? ', has ' + p.addresses.join(', ') : ', no address yet');
+    return h('form', { class: 'panel setup', onsubmit: next },
+      h('h1', null, 'Set up this box'), steps, problem,
+      h('h2', null, 'Which port goes to the internet?'),
+      h('p', { class: 'dim' }, 'The one plugged into your modem or your provider. Everything arriving there is blocked unless you later let something in.'),
+      su.ports.map((p) => h('div', { class: 'check' },
+        h('input', { type: 'radio', name: 'internet', id: 'wan-' + p.name, checked: c.internet === p.name, onchange: () => { c.internet = p.name; c.inside[p.name] = false; render(); } }),
+        h('label', { for: 'wan-' + p.name }, h('b', null, p.name), ' ', h('span', { class: 'dim' }, about(p) + (p.internet ? ', reaches the internet now' : ''))))),
+      h('h2', null, 'Which ports are your own network?'),
+      h('p', { class: 'dim' }, 'Devices there get an address and DNS from the box and can reach the internet.'),
+      su.ports.length < 2 ? h('p', { class: 'change-del', role: 'alert' },
+        'This machine has only one network port. A router needs two: one to the internet and one to your own network. Add a port, or a second virtual port if this is a virtual machine, then start again.') : null,
+      su.ports.filter((p) => p.name !== c.internet).map((p) => h('div', null,
+        h('div', { class: 'check' },
+          h('input', { type: 'checkbox', id: 'lan-' + p.name, checked: !!c.inside[p.name], onchange: (e) => { c.inside[p.name] = e.target.checked; render(); } }),
+          h('label', { for: 'lan-' + p.name }, h('b', null, p.name), ' ', h('span', { class: 'dim' }, about(p)))),
+        c.inside[p.name] ? h('div', { class: 'indent' },
+          field("The box's address on " + p.name, p.name, c.address, { placeholder: p.addresses[0] || '192.168.10.1/24' }),
+          h('p', { class: 'dim' }, p.addresses.length
+            ? 'Leave it empty to keep the address the port has now. That is the safe choice if you are connected through this port.'
+            : 'Leave it empty to use 192.168.10.1/24.')) : null)),
+      h('h2', null, 'A name for the box'),
+      field('Name', 'name', c, { required: true, pattern: '[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?', placeholder: 'homebox' }),
+      h('div', { class: 'row' },
+        h('button', { class: 'primary', type: 'submit', disabled: !su.ports.some((p) => p.name !== c.internet && c.inside[p.name]) }, 'Review'),
+        h('button', { type: 'button', onclick: () => { su.step = 'code'; render(); } }, 'Back')));
+  }
+
+  const apply = async () => {
+    su.error = null;
+    try {
+      const r = await setupCall('POST', '/v1/setup/apply', setupChoice());
+      state.token = r.token;
+      sessionStorage.setItem('ox-token', r.token);
+      state.newToken = { name: 'setup', token: r.token };
+      state.view = 'home';
+      state.notice = { kind: 'ok', text: 'The box is set up. Check your connection still works, then keep the change.' };
+      refresh(true);
+    } catch (err) { fail(err); }
+  };
+  return h('div', { class: 'panel setup' },
+    h('h1', null, 'Set up this box'), steps, problem,
+    h('h2', null, 'This is what the box will do'),
+    h('ul', { class: 'plain' }, su.preview.map((l) => h('li', null, l))),
+    h('h2', null, 'Applied safely'),
+    h('p', null, 'You get 5 minutes to check that things still work. If you cannot reach this page afterwards, do nothing: the box undoes the setup by itself and you can start again with the same code.'),
+    h('div', { class: 'row' },
+      h('button', { class: 'primary', onclick: apply }, 'Apply safely'),
+      h('button', { onclick: () => { su.step = 'ports'; render(); } }, 'Back')));
+}
+
+// ── the simple layer ────────────────────────────────────────────────────
+
+// Opens the review of one waiting change. `back` is where to return to.
+function review(name, back) {
+  state.candidate = name;
+  state.back = ['task', 'review'].includes(back) ? 'home' : back || 'home';
+  go('review');
+}
+
+// Starts one of the plain-language tasks.
+function startTask(form) {
+  state.back = state.view === 'task' ? state.back : state.view;
+  state.view = 'task';
+  state.notice = null;
+  state.form = form;
+  render();
+}
+
+function task() {
+  const forms = { forward: forwardForm, block: blockForm, vpn: vpnForm, network: networkForm };
+  return [vpnDevicePanel(), (forms[state.form] || forwardForm)()];
+}
+
+const TASKS = [
+  ['network', 'Add a network, such as one for guests'],
+  ['forward', 'Let something in from the internet'],
+  ['vpn', 'Give a phone or laptop remote access'],
+  ['block', 'Block a device'],
+];
+
+// The name someone gave a rule or a port forward, by its ID.
+function ruleName(id) {
+  const c = (state.running && state.running.config) || {};
+  for (const p of c.policy || []) for (const r of p.rule || []) if (r.id === id) return r.name;
+  for (const f of (c.nat && c.nat.forward) || []) if (f.id === id || f.rule === id) return f.name;
+  return null;
+}
+
+// Setup made a token and it is shown once. Losing it locks the owner out
+// of this page, so it stays in view until they say it is saved.
+function tokenPanel() {
+  const t = state.newToken;
+  if (!t || t.name !== 'setup') return null;
+  return h('div', { class: 'panel waiting' },
+    h('h2', null, 'Save your access token now'),
+    h('p', null, 'Setup made this token for you. It is how you sign in next time, and it is not shown again. Put it in your password manager.'),
+    h('p', { class: 'secret mono' }, t.token),
+    h('div', { class: 'row' }, h('button', { onclick: () => { state.newToken = null; render(); } }, 'I have saved it')));
+}
+
+function waitingPanel() {
+  const names = (state.status && state.status.candidates) || [];
+  if (!names.length) return null;
+  return h('div', { class: 'panel waiting' },
+    h('h2', null, names.length === 1 ? 'A change is waiting' : names.length + ' changes are waiting'),
+    h('p', { class: 'dim' }, 'Nothing is applied until you review it.'),
+    names.map((n) => h('div', { class: 'row' },
+      h('span', { class: 'grow' }, n),
+      h('button', { class: 'primary', onclick: () => review(n, state.view) }, 'Review and apply'))));
+}
+
+function home() {
   const s = state.status || {};
-  if (!state.running) return noConfig();
-  const run = s.running;
+  if (!state.running) {
+    return [waitingPanel(), h('div', { class: 'panel' },
+      h('h2', null, 'This box is not set up yet'),
+      h('p', null, 'Nothing is running, so the box filters nothing and routes nothing.'),
+      h('p', { class: 'dim' }, 'On the box, run ', h('code', null, 'ox init --save starter'), ' then ', h('code', null, 'ox commit starter --confirm 5m'), '.'))];
+  }
+  const hm = state.home || { networks: [], cells: [], let_in: [], devices: [] };
+  const dry = s.applier && s.applier !== 'kernel';
+  const pending = s.reverts_in != null;
+  const services = (s.services || []);
+  const trouble = services.filter(([, st]) => !/running|bound|has /.test(st));
+  const headline = dry ? ['note', 'Dry run', 'The box keeps its config and answers here, and loads nothing into the kernel.']
+    : pending ? ['note', 'A change is waiting for you to keep it', 'Use the bar at the top to keep it or undo it.']
+      : trouble.length ? ['note', 'The firewall is running, and something needs a look', trouble.map(([n, st]) => n + ': ' + st).join('; ')]
+        : ['accept', 'The firewall is running', 'Nothing needs you right now.'];
+  const inside = hm.networks.map((n, i) => [n, hm.devices[i] || 0]).filter(([n]) => !n.internet);
+  const x = state.check;
+  const runCheck = async (e) => {
+    e.preventDefault();
+    const [proto, port] = x.what === 'other' ? ['tcp', x.port] : x.what.split('/');
+    const body = { src: x.from.trim(), dst: x.to.trim(), proto };
+    if (port) body.dport = Number(port);
+    try { x.result = await call('POST', '/v1/explain', body); } catch (err) { x.result = { error: err.message }; }
+    render();
+  };
+  const answer = () => {
+    const r = x.result;
+    if (!r) return null;
+    if (r.error) return h('p', { class: 'change-del', role: 'alert' }, r.error);
+    const run = r.running;
+    const okay = run.verdict === 'ACCEPT';
+    const named = run.rule ? ruleName(run.rule) : null;
+    const why = run.rule
+      ? (okay ? 'It is allowed by ' : 'It is stopped by ') + (named ? '"' + named + '"' : 'rule ' + run.rule) + '.'
+      : (okay ? 'Nothing stands in its way.' : 'Nothing allows it, and anything not allowed is blocked.');
+    return h('div', { class: 'answer' },
+      h('p', null, h('span', { class: 'tag ' + (okay ? 'accept' : 'drop') }, okay ? 'Allowed' : 'Blocked'), ' ', why),
+      h('details', null, h('summary', null, 'How the box decided'),
+        h('pre', { class: 'dim' }, run.text.split('\n').slice(1).join('\n')),
+        shown('explain') ? null : h('p', { class: 'dim' }, 'To compare with a waiting change, turn on the packet tracer in Settings.')));
+  };
+
   return [
+    tokenPanel(),
+    waitingPanel(),
+    h('div', { class: 'panel status' },
+      h('h2', null, h('span', { class: 'tag ' + headline[0] }, headline[0] === 'accept' ? '✓' : '!'), ' ', headline[1]),
+      h('p', { class: 'dim' }, headline[2]),
+      h('div', { class: 'grid facts' },
+        h('div', null, h('b', null, 'From the internet'),
+          h('p', { class: 'dim' }, hm.let_in.length
+            ? hm.let_in.length + ' thing' + (hm.let_in.length === 1 ? ' is' : 's are') + ' let in. Everything else is blocked.'
+            : 'Everything is blocked. Nothing is let in.')),
+        h('div', null, h('b', null, 'Changes'),
+          h('p', { class: 'dim' }, 'Applied safely: each one undoes itself after 2 minutes unless you keep it.')),
+        h('div', null, h('b', null, 'Services'),
+          h('p', { class: 'dim' }, services.length ? services.map(([n, st]) => n + ': ' + st).join('; ') : 'The box hands out no addresses and answers no DNS.')))),
+    h('div', { class: 'grid' }, inside.map(([n, devices]) => h('div', { class: 'panel' },
+      h('h2', null, n.name),
+      h('p', null, devices + ' device' + (devices === 1 ? '' : 's') + ' with an address from the box'),
+      h('p', { class: 'dim' }, 'Can reach: ' + n.reaches),
+      h('p', { class: 'dim' }, n.interfaces.join(', ') + (n.addresses.length ? ' · ' + n.addresses.join(', ') : ''))))),
     h('div', { class: 'grid' },
-      h('div', { class: 'panel' },
-        h('h2', null, 'Running'),
-        h('p', null, h('b', null, 'Commit #' + run.id), run.state === 'pending' ? ' (not yet kept)' : ''),
-        h('p', { class: 'dim' }, 'by ' + run.author + ' · ' + when(run.time)),
-        h('p', { class: 'dim' }, run.source + (run.reason ? ' · ' + run.reason : '')),
-        h('p', { class: 'dim' }, state.running.summary)),
-      h('div', { class: 'panel' },
-        h('h2', null, 'Services'),
-        (s.services || []).length
-          ? h('ul', { class: 'plain' }, s.services.map(([n, st]) => h('li', null, n + ': ' + st)))
-          : h('p', { class: 'dim' }, 'The box serves no DNS or DHCP.'),
-        h('p', { class: 'dim' }, state.leases.length + ' address' + (state.leases.length === 1 ? '' : 'es') + ' handed out'),
-        s.four_eyes ? h('p', null, h('span', { class: 'tag note' }, 'four-eyes on'), ' a commit needs a second person') : null)),
-    h('div', { class: 'panel' },
-      h('h2', null, 'What this box does'),
+      h('form', { class: 'panel', onsubmit: runCheck },
+        h('h2', null, 'Is something blocked?'),
+        h('p', { class: 'dim' }, 'Say which device is trying to reach what, and the box says what it would do and why.'),
+        h('div', { class: 'fields' },
+          field('From (address of the device)', 'from', x, { required: true, placeholder: '192.168.10.50' }),
+          field('To (address)', 'to', x, { required: true, placeholder: '1.1.1.1' }),
+          h('div', null, h('label', { for: 'f-what' }, 'Using'),
+            h('select', { id: 'f-what', onchange: (e) => { x.what = e.target.value; render(); } },
+              [['tcp/443', 'Secure web (HTTPS)'], ['tcp/80', 'Web (HTTP)'], ['udp/53', 'DNS'], ['tcp/22', 'SSH'], ['icmp/', 'Ping'], ['other', 'Another TCP port']]
+                .map(([v, l]) => h('option', { value: v, selected: v === x.what }, l)))),
+          x.what === 'other' ? field('Port', 'port', x, { required: true, inputmode: 'numeric', placeholder: '8080' }) : null),
+        h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Check')),
+        answer()),
+      may('edit') ? h('div', { class: 'panel list' },
+        h('h2', null, 'Common tasks'),
+        TASKS.map(([form, label]) => h('button', { onclick: () => startTask(form) }, label)),
+        h('button', { onclick: () => go('access') }, 'Change which networks can reach each other')) : null),
+    h('details', { class: 'panel' },
+      h('summary', null, 'Everything this box does, line by line'),
       h('ul', { class: 'plain' }, state.running.describe.map((line) => h('li', null, line)))),
+  ];
+}
+
+function access() {
+  if (!state.running || !state.home) return noConfig();
+  const hm = state.home;
+  const pending = state.status && state.status.reverts_in != null;
+  const flip = (from, to, allow) => act(
+    () => call('POST', '/v1/actions/access', { from: from.zone, to: to.zone, allow }),
+    (r) => { review(r.candidate, 'access'); return r.done.join('. ') + '. Nothing is applied yet.'; });
+  const cell = (from, to, c) => {
+    if (c.state === 'same') return h('span', { class: 'dim' }, from.internet ? '—' : 'same network');
+    if (c.state === 'custom') {
+      return h('span', null, h('span', { class: 'tag note' }, c.summary), ' ',
+        shown('rules') ? h('button', { class: 'link', onclick: () => go('rules') }, 'see rules') : null);
+    }
+    const allowed = c.state === 'allowed';
+    const label = h('span', { class: 'tag ' + (allowed ? 'accept' : 'drop') }, allowed ? 'Allowed' : 'Blocked');
+    // The internet is let in one service at a time, below.
+    if (from.internet || !may('edit') || pending) return label;
+    return h('span', null, label, ' ',
+      h('button', { class: 'link', 'aria-label': (allowed ? 'Block ' : 'Allow ') + from.name + ' to ' + to.name, onclick: () => flip(from, to, !allowed) },
+        allowed ? 'block' : 'allow'));
+  };
+  const custom = hm.cells.some((row) => row.some((c) => c.state === 'custom'));
+  return [
+    waitingPanel(),
+    h('div', { class: 'panel' },
+      h('h2', null, 'Who can reach what'),
+      h('p', { class: 'dim' }, 'Read across: the network on the left may reach the networks along the top. Anything not allowed is blocked and logged.'),
+      table([{ label: 'From ↓  can reach →' }].concat(hm.networks.map((n) => n.name)),
+        hm.networks.map((from, i) => [h('b', null, from.name)].concat(hm.networks.map((to, j) => cell(from, to, hm.cells[i][j]))))),
+      custom ? h('p', { class: 'dim' }, 'A yellow cell has rules of its own, for particular devices or services. Those are edited as rules, not here, so nothing is changed by accident.',
+        shown('rules') ? '' : ' Turn on the full rule list in Settings to see them.') : null,
+      pending ? h('p', { class: 'dim' }, 'A change is waiting to be kept or undone. Deal with that first.') : null),
+    h('div', { class: 'panel' },
+      h('h2', null, 'Let in from the internet'),
+      hm.let_in.length
+        ? table(['What', 'Outside port', 'Goes to'], hm.let_in.map((f) => [f.name, f.service, f.to]))
+        : h('p', { class: 'dim' }, 'Nothing. Everything arriving from the internet is blocked.'),
+      may('edit') ? h('div', { class: 'row' },
+        h('button', { onclick: () => startTask('network') }, 'Add a network'),
+        h('button', { onclick: () => startTask('forward') }, 'Let something in'),
+        h('button', { onclick: () => startTask('vpn') }, 'Give a phone or laptop remote access'),
+        h('button', { onclick: () => startTask('block') }, 'Block a device')) : null),
+  ];
+}
+
+// One waiting change, in sentences, with one safe way to apply it.
+function reviewView() {
+  const name = state.candidate;
+  const s = state.status || {};
+  if (!name || !(s.candidates || []).includes(name)) {
+    return h('div', { class: 'panel' }, h('p', null, 'Nothing is waiting.'),
+      h('div', { class: 'row' }, h('button', { onclick: () => go(state.back) }, 'Back')));
+  }
+  const plan = state.plan || {};
+  const meta = state.meta || {};
+  const pending = s.reverts_in != null;
+  const needsApproval = s.four_eyes && !meta.approved_by;
+  const apply = () => act(
+    () => call('POST', '/v1/candidates/' + name + '/commit', { reason: '', confirm_secs: 120 }),
+    () => { state.view = state.back; return 'Applied. Check things still work, then keep it.'; });
+  const discard = () => act(() => call('DELETE', '/v1/candidates/' + name),
+    () => { state.view = state.back; return 'Discarded. Nothing was changed.'; });
+  const list = (title, lines, klass) => (lines && lines.length
+    ? h('div', null, h('h3', null, title), h('ul', { class: 'plain' }, lines.map((l) => h('li', { class: klass }, l)))) : null);
+  const nothing = !plan.error && !plan.first_commit && !(plan.starts || []).length && !(plan.stops || []).length;
+  return [
+    vpnDevicePanel(),
+    h('div', { class: 'panel' },
+      h('h2', null, 'What will change'),
+      h('p', { class: 'dim' }, (meta.author ? 'Prepared by ' + meta.author : '') + (meta.saved_at ? ' · ' + when(meta.saved_at) : '')),
+      plan.error ? h('pre', { class: 'change-del' }, plan.error) : null,
+      plan.first_commit ? h('p', null, 'This is the first config for the box.') : null,
+      (plan.headline || []).length ? h('ul', { class: 'plain headline' }, plan.headline.map((l) => h('li', null, l))) : null,
+      (plan.starts || []).length || (plan.stops || []).length ? h((plan.headline || []).length ? 'details' : 'div', null,
+        (plan.headline || []).length ? h('summary', null, 'In detail') : null,
+        list('The box will start doing this', plan.starts, 'change-add'),
+        list('The box will stop doing this', plan.stops, 'change-del')) : null,
+      nothing ? h('p', { class: 'dim' }, (plan.changes || []).length
+        ? 'This changes details that have no plain sentence: ' + plan.changes.join('; ')
+        : 'Nothing. This is the same as what the box does now.') : null,
+      shown('changes') ? h('p', null, h('button', { class: 'link', onclick: () => go('changes') }, 'See the full plan and the config')) : null),
+    h('div', { class: 'panel' },
+      h('h2', null, 'Apply safely'),
+      h('p', null, 'You get 2 minutes to check things still work. If you do not keep the change, it undoes itself, so a mistake cannot lock you out.'),
+      needsApproval ? h('p', null, h('span', { class: 'tag note' }, 'needs approval'), ' from someone other than ' + (meta.author || 'its author') + '.') : null,
+      pending ? h('p', { class: 'dim' }, 'Another change is waiting to be kept or undone. Deal with that first.') : null,
+      h('div', { class: 'row' },
+        may('commit') ? h('button', { class: 'primary', disabled: pending || needsApproval || !!plan.error, onclick: apply }, 'Apply safely') : null,
+        needsApproval && may('approve') ? h('button', { onclick: () => act(() => call('POST', '/v1/candidates/' + name + '/approve'), 'Approved.') }, 'Approve') : null,
+        may('edit') ? h('button', { class: 'danger', onclick: discard }, 'Discard') : null,
+        h('button', { onclick: () => go(state.back) }, 'Not now'))),
+  ];
+}
+
+function settings() {
+  const s = state.status || {};
+  const me = state.me || {};
+  return [
+    h('div', { class: 'panel' },
+      h('h2', null, 'Basics'),
+      table(['', ''], [
+        ['Box name', state.running ? state.running.config.hostname : 'not set up'],
+        ['Signed in as', (me.name || '') + (me.role ? ', role ' + me.role : '') + (me.sections ? ' (' + held(me) + ')' : '')],
+        ['Changes', 'Applied safely: each one undoes itself after 2 minutes unless you keep it'],
+        ['Second approval', s.four_eyes ? 'On: a change needs approval from a second person' : 'Off'],
+        ['Version', s.version || ''],
+      ])),
+    tokenPanel(),
+    h('div', { class: 'panel' },
+      h('h2', null, 'Advanced features'),
+      h('p', { class: 'dim' }, 'Each adds its own tab. Turning one off hides its screen and never changes what the box does. A feature the box already depends on stays on. The choice is kept in this browser.'),
+      ADVANCED.filter(([id]) => id !== 'audit' || may('audit')).map(([id, , title, about]) => h('div', { class: 'check switch' },
+        h('input', { type: 'checkbox', id: 'adv-' + id, checked: shown(id), disabled: inUse(id), onchange: (e) => setAdvanced(id, e.target.checked) }),
+        h('label', { for: 'adv-' + id }, h('b', null, title), inUse(id) ? h('span', { class: 'tag note' }, 'in use') : null,
+          h('span', { class: 'dim' }, about))))),
   ];
 }
 
@@ -415,7 +831,16 @@ function changes() {
   else if (state.form === 'vpn') right = vpnForm();
   else if (state.form === 'edit') right = editForm();
   else if (state.candidate) right = candidatePanel(pending);
-  else right = h('div', { class: 'panel' }, h('p', { class: 'dim' }, 'Choose a candidate, or start a new change.'));
+  else {
+    const run = state.status && state.status.running;
+    right = h('div', { class: 'panel' },
+      h('p', { class: 'dim' }, 'Choose a candidate, or start a new change.'),
+      run ? [h('h2', null, 'Running'),
+        h('p', null, h('b', null, 'Commit #' + run.id), run.state === 'pending' ? ' (not yet kept)' : ''),
+        h('p', { class: 'dim' }, 'by ' + run.author + ' · ' + when(run.time)),
+        h('p', { class: 'dim' }, run.source + (run.reason ? ' · ' + run.reason : '')),
+        h('p', { class: 'dim' }, state.running ? state.running.summary : '')] : null);
+  }
   return h('div', { class: 'split' }, left, h('div', null, vpnDevicePanel(), right));
 }
 
@@ -442,11 +867,22 @@ function vpnDevicePanel() {
 const draftForward = { name: '', port: 'tcp/443', to: '', to_port: '', address: '' };
 const draftBlock = { address: '', name: '' };
 const draftVpn = { name: '', endpoint: '', public_key: '' };
+const draftNetwork = { name: '', port: '', vlan: '', address: '', internet: true };
 
 function saved(result) {
+  const fromTask = state.view === 'task';
   state.candidate = result.candidate;
   state.form = null;
-  return result.done.join('; ') + '. Saved as candidate ' + result.candidate + '. Nothing is applied yet.';
+  // A plain task leads straight to its review. The advanced screen stays put.
+  if (fromTask) state.view = 'review';
+  return result.done.join('; ') + '. ' + (fromTask ? 'Nothing is applied yet.' : 'Saved as candidate ' + result.candidate + '. Nothing is applied yet.');
+}
+
+// Leaves a task form: back to where it was started from.
+function cancelTask() {
+  if (state.view === 'task') return go(state.back);
+  state.form = null;
+  render();
 }
 
 function forwardForm() {
@@ -466,8 +902,8 @@ function forwardForm() {
       field('Inside device address', 'to', draftForward, { required: true, placeholder: '192.168.10.20' }),
       field('Inside port, if different', 'to_port', draftForward, { inputmode: 'numeric', placeholder: 'same' }),
       field('Outside address, if the box has several', 'address', draftForward, { placeholder: "whichever the box has" })),
-    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save as candidate'),
-      h('button', { type: 'button', onclick: () => { state.form = null; render(); } }, 'Cancel')));
+    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Review'),
+      h('button', { type: 'button', onclick: cancelTask }, 'Cancel')));
 }
 
 function blockForm() {
@@ -481,8 +917,37 @@ function blockForm() {
     h('div', { class: 'fields' },
       field('Device address', 'address', draftBlock, { required: true, placeholder: '192.168.10.66' }),
       field('What is it?', 'name', draftBlock, { placeholder: 'Smart TV' })),
-    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save as candidate'),
-      h('button', { type: 'button', onclick: () => { state.form = null; render(); } }, 'Cancel')));
+    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Review'),
+      h('button', { type: 'button', onclick: cancelTask }, 'Cancel')));
+}
+
+function networkForm() {
+  // An inside port that is a real port: not the internet side, not a VLAN.
+  const ifaces = Object.entries((state.running && state.running.config.interfaces) || {})
+    .filter(([, i]) => !i.default_route && !i.vlan).map(([name]) => name);
+  if (!ifaces.includes(draftNetwork.port)) draftNetwork.port = ifaces[0] || '';
+  const go = (e) => {
+    e.preventDefault();
+    const body = { name: draftNetwork.name, port: draftNetwork.port, vlan: Number(draftNetwork.vlan), internet: draftNetwork.internet };
+    if (draftNetwork.address) body.address = draftNetwork.address;
+    act(() => call('POST', '/v1/actions/network', body), (r) => { draftNetwork.name = ''; draftNetwork.vlan = ''; draftNetwork.address = ''; return saved(r); });
+  };
+  return h('form', { class: 'panel', onsubmit: go },
+    h('h2', null, 'Add a network'),
+    h('p', { class: 'dim' }, 'A network of its own for guests, cameras or anything you want kept apart. Devices on it get an address and DNS from the box. It reaches none of your other networks, and they do not reach it, until you allow that under Access.'),
+    h('div', { class: 'fields' },
+      field('What is it for?', 'name', draftNetwork, { required: true, maxlength: '40', placeholder: 'Guest Wi-Fi' }),
+      h('div', null, h('label', { for: 'f-port' }, 'On which port?'),
+        h('select', { id: 'f-port', onchange: (e) => { draftNetwork.port = e.target.value; } },
+          ifaces.map((n) => h('option', { value: n, selected: n === draftNetwork.port }, n)))),
+      field('VLAN number', 'vlan', draftNetwork, { required: true, inputmode: 'numeric', pattern: '[0-9]{1,4}', placeholder: '20' }),
+      field("The box's address on it", 'address', draftNetwork, { placeholder: 'chosen for you' })),
+    h('div', { class: 'check' },
+      h('input', { type: 'checkbox', id: 'f-internet', checked: draftNetwork.internet, onchange: (e) => { draftNetwork.internet = e.target.checked; } }),
+      h('label', { for: 'f-internet' }, 'Devices on it can reach the internet')),
+    h('p', { class: 'dim' }, 'The network travels on that port as a VLAN. Set the switch or access point there to use the same VLAN number for it.'),
+    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit', disabled: !ifaces.length }, 'Review'),
+      h('button', { type: 'button', onclick: cancelTask }, 'Cancel')));
 }
 
 function vpnForm() {
@@ -504,8 +969,8 @@ function vpnForm() {
       field('What is it?', 'name', draftVpn, { required: true, placeholder: 'laptop' }),
       field('How the device finds this box from outside', 'endpoint', draftVpn, { required: true, placeholder: 'home.example.net' }),
       field("The device's public key, if it made its own", 'public_key', draftVpn, { placeholder: 'make one for it' })),
-    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Save as candidate'),
-      h('button', { type: 'button', onclick: () => { state.form = null; render(); } }, 'Cancel')));
+    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Review'),
+      h('button', { type: 'button', onclick: cancelTask }, 'Cancel')));
 }
 
 async function loadDraft() {
@@ -554,7 +1019,7 @@ function editForm() {
     check);
 }
 
-const commitDraft = { reason: '', window: '300' };
+const commitDraft = { reason: '', window: '120' };
 
 function candidatePanel(pending) {
   const name = state.candidate;
@@ -682,7 +1147,7 @@ function checks(list, picked, prefix) {
   });
 }
 
-function settings() {
+function admin() {
   const s = state.status || {};
   const out = [h('div', { class: 'panel' },
     h('h2', null, 'You'),

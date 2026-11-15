@@ -1,6 +1,6 @@
 # Netoxide web UI design
 
-There are 11 screens, made in Claude Design with mock data. The live canvas is
+There are two layers: 5 simple screens everyone sees, and 11 advanced screens that each switch on separately in Settings. All are made in Claude Design with mock data. The live canvas is
 <https://claude.ai/artifact/68bGaD4eiUpPPuTdvhMVjY> and needs a claude.ai login.
 
 The files in `source/` are Claude Design components (`.dc.html`). They render
@@ -10,7 +10,17 @@ only inside the Design runtime. Read them for layout, copy and sample data.
 `tui-preview.html` is a static, coloured render of the terminal version. It
 opens in any browser.
 
-## Shared shell
+## Simple layer (default)
+
+| File | Screen | Key content |
+| --- | --- | --- |
+| `Setup.dc.html` | First-run setup | Three steps (internet, type of site, who manages it), then a list of what's on by default |
+| `Main.dc.html` | Home | One status, networks and what each can reach, one "worth a look" item, "Is something blocked?", common tasks |
+| `Access.dc.html` | Who can reach what | Network-to-network grid (click to allow or block), services reachable from the internet, exceptions as sentences, exception builder |
+| `Review.dc.html` | Review and apply | Change in one sentence, devices that would lose access, safe apply with a 2-minute keep-or-undo countdown |
+| `Settings.dc.html` | Settings | Basics, then 12 advanced features as switches; features in use stay on |
+
+## Advanced layer: shared shell
 
 Every screen has the same layout:
 
@@ -22,7 +32,7 @@ Every screen has the same layout:
 
 | File | Screen | Key content |
 | --- | --- | --- |
-| `Main.dc.html` | Security policy | Zone-pair list (no floating rules), rule table with objects, schedule, hits and hygiene flags (shadowed, no hits in 90 d, wider than traffic), candidate-only rule marked, default drop shown as a row |
+| `Policy.dc.html` | Security policy | Zone-pair list (no floating rules), rule table with objects, schedule, hits and hygiene flags (shadowed, no hits in 90 d, wider than traffic), candidate-only rule marked, default drop shown as a row |
 | `Nat.dc.html` | NAT | Tabs for port forwards, outbound, 1:1 and NAT64. Every forward names its filter rule |
 | `Vpn.dc.html` | VPN | WireGuard and IPsec tunnels with status and reason, remote-access portal, IdP group → rule mapping. FIPS mode means IPsec only |
 | `Ips.dc.html` | Intrusion prevention | Suricata 8 inline, ET Open only, per-zone block / alert / off, fail-open or fail-closed, events |

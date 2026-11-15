@@ -46,7 +46,12 @@ use ox_schema::Config;
 use serde_json::{Value, json};
 
 #[derive(Parser)]
-#[command(name = "ox", version, about = "Netoxide command line tool")]
+#[command(
+    name = "ox",
+    version,
+    about = "Netoxide command line tool",
+    after_help = "These are the everyday commands. A change you make is saved, shown to you, and\napplied with `ox apply`. Run `ox more` for every command, including candidates,\nrollback, the audit log, tokens and roles."
+)]
 struct Cli {
     /// The daemon's Unix socket
     #[arg(
@@ -94,14 +99,45 @@ impl Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// What the box is running, and whether a commit is waiting for confirmation
+    /// The networks, and who can reach what
+    #[command(display_order = 3)]
+    Access {
+        #[command(subcommand)]
+        action: Option<AccessCmd>,
+    },
+    /// Add a network of its own, such as one for guests or cameras
+    #[command(display_order = 4)]
+    Network {
+        #[command(subcommand)]
+        action: NetworkCmd,
+    },
+    /// Apply a waiting change safely; it undoes itself unless you keep it
+    #[command(display_order = 7)]
+    Apply {
+        /// The change to apply. Not needed when only one is waiting
+        change: Option<String>,
+    },
+    /// Keep the change you just applied
+    #[command(display_order = 8)]
+    Keep,
+    /// Undo the change you just applied, now
+    #[command(display_order = 9)]
+    Undo,
+    /// List every command, including the advanced ones
+    #[command(display_order = 13)]
+    More,
+    /// What the box is running, and whether a change is waiting to be kept
+    #[command(display_order = 2)]
     Status,
     /// Print the running config
+    #[command(hide = true)]
     Running,
     /// Save, list, show or delete candidate configs
     #[command(subcommand)]
+    #[command(hide = true)]
     Candidate(CandidateCmd),
     /// Show what a candidate would change, without applying it
+    #[command(hide = true)]
     Plan {
         candidate: String,
         /// JSON Lines file of observed flows; reports those whose verdict changes
@@ -109,6 +145,7 @@ enum Command {
         flows: Option<PathBuf>,
     },
     /// Apply a candidate
+    #[command(hide = true)]
     Commit {
         candidate: String,
         /// Revert unless confirmed within this time, such as 5m or 90s
@@ -119,10 +156,13 @@ enum Command {
         reason: String,
     },
     /// Keep the commit that is waiting for confirmation
+    #[command(hide = true)]
     Confirm,
     /// Undo the commit that is waiting for confirmation, now
+    #[command(hide = true)]
     Revert,
     /// Go back to the config from N commits ago, as a new commit
+    #[command(hide = true)]
     Rollback {
         #[arg(default_value_t = 1)]
         steps: u64,
@@ -132,10 +172,13 @@ enum Command {
         reason: String,
     },
     /// List commits, newest first
+    #[command(hide = true)]
     History,
     /// Show one commit and its config
+    #[command(hide = true)]
     Show { id: u64 },
-    /// Say what happens to one packet under the running config
+    /// Say what the box does with one connection, and why
+    #[command(display_order = 10)]
     Explain {
         #[command(flatten)]
         packet: PacketArgs,
@@ -144,12 +187,16 @@ enum Command {
         candidate: Option<String>,
     },
     /// Print the audit log and check its hash chain
+    #[command(hide = true)]
     Audit,
     /// List rules that never apply, add nothing, allow everything or see no traffic
+    #[command(hide = true)]
     Hygiene,
     /// List the addresses DHCP has handed out
+    #[command(hide = true)]
     Leases,
-    /// WireGuard tunnels: the box's public key and each peer's state
+    /// The VPN: add a phone or laptop, and see who is connected
+    #[command(display_order = 6)]
     Vpn {
         /// Print only the box's public key for this tunnel, making the key
         /// if there is none. Use it to swap keys before a first commit
@@ -159,36 +206,44 @@ enum Command {
         action: Option<VpnCmd>,
     },
     /// Approve a candidate someone else saved (four-eyes)
+    #[command(hide = true)]
     Approve { candidate: String },
     /// Require a second person's approval before a commit: on or off
+    #[command(hide = true)]
     FourEyes {
         #[arg(value_parser = ["on", "off"])]
         state: String,
     },
     /// Access tokens for the HTTPS API and the web UI
     #[command(subcommand)]
+    #[command(hide = true)]
     Token(TokenCmd),
     /// Roles: what a token may do, and in which parts of the config
     #[command(subcommand)]
+    #[command(hide = true)]
     Role(RoleCmd),
     /// Boxes on the network that `ox --remote <name>` can manage from here
     #[command(subcommand)]
+    #[command(hide = true)]
     Remote(RemoteCmd),
-    /// Save what the box needs to be set up again: its config, VPN keys,
-    /// roles and settings. The file holds private keys
+    /// Save the config, VPN keys, roles and settings to a file
+    #[command(display_order = 11)]
     Backup {
         /// Where to write it. The file is readable by you only
         #[arg(long, short)]
         out: PathBuf,
     },
-    /// Put a backup's keys, roles and settings in place and save its config
-    /// as the candidate `restore`, for you to commit
+    /// Bring a backup back, as a change for you to apply
+    #[command(display_order = 12)]
     Restore { file: PathBuf },
     /// Show who the daemon thinks you are
+    #[command(hide = true)]
     Whoami,
     /// Print the Netoxide table as the kernel holds it
+    #[command(hide = true)]
     Kernel,
-    /// Guided setup: pick the internet and inside ports, get a complete starter config
+    /// Guided setup: pick the internet port and your own, get a working config
+    #[command(display_order = 1)]
     Init {
         /// The port that faces the internet
         #[arg(long)]
@@ -219,7 +274,8 @@ enum Command {
         #[arg(long)]
         gateway: Vec<IpAddr>,
     },
-    /// Forward a port from the internet to a host inside. Saved as a candidate
+    /// Let a port in from the internet to a device inside
+    #[command(display_order = 4)]
     Forward {
         /// What this is for, such as "Home Assistant"
         #[arg(long)]
@@ -234,7 +290,8 @@ enum Command {
         #[arg(long)]
         address: Option<IpAddr>,
     },
-    /// Block everything an inside device sends. Saved as a candidate
+    /// Block everything a device inside sends
+    #[command(display_order = 5)]
     Block {
         /// The device's address, or a network
         address: String,
@@ -243,6 +300,7 @@ enum Command {
         name: Option<String>,
     },
     /// Translate a pfSense config.xml backup into a Netoxide config and a report
+    #[command(hide = true)]
     Import {
         backup: PathBuf,
         /// Write the translated config here
@@ -254,9 +312,11 @@ enum Command {
         verify: Option<PathBuf>,
     },
     /// Print the JSON Schema of the config format
+    #[command(hide = true)]
     Schema,
     /// Work on config files, without the daemon
     #[command(subcommand)]
+    #[command(hide = true)]
     File(FileCmd),
 }
 
@@ -297,6 +357,38 @@ enum TokenCmd {
     List,
     /// Revoke a token
     Revoke { name: String },
+}
+
+#[derive(Subcommand)]
+enum NetworkCmd {
+    /// Add a network as a VLAN on an inside port. Devices on it get an
+    /// address and DNS from the box, and reach nothing else until allowed
+    Add {
+        /// What to call it, such as "Guest Wi-Fi"
+        name: String,
+        /// The inside port that carries it, such as eth1
+        #[arg(long)]
+        port: String,
+        /// Its VLAN number on that port. The switch or access point must
+        /// use the same number for this network
+        #[arg(long)]
+        vlan: u16,
+        /// The box's address on it, such as 192.168.20.1/24. Left out, a
+        /// free one is chosen
+        #[arg(long)]
+        address: Option<String>,
+        /// Do not let it reach the internet
+        #[arg(long)]
+        no_internet: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AccessCmd {
+    /// Let one network reach another
+    Allow { from: String, to: String },
+    /// Stop one network reaching another
+    Block { from: String, to: String },
 }
 
 #[derive(Subcommand)]
@@ -402,9 +494,10 @@ struct PacketArgs {
     /// Destination port, for tcp and udp
     #[arg(long)]
     dport: Option<u16>,
-    /// Interface the packet arrives on
+    /// Interface the packet arrives on. Left out, the box works it out
+    /// from the source address
     #[arg(long = "in")]
-    iif: String,
+    iif: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -587,6 +680,12 @@ fn daemon(cli: &Cli) -> Result<()> {
             for svc in s["services"].as_array().into_iter().flatten() {
                 out!("service     {} {}", text(&svc[0]), text(&svc[1]));
             }
+            if let Some(code) = s["setup_code"].as_str() {
+                out!("setup       code {code}");
+                out!(
+                    "            open the box's web interface from the inside network and enter it, or run `ox init` here"
+                );
+            }
             if s["https"].is_object() {
                 out!("https       {}", text(&s["https"]["listen"]));
                 out!(
@@ -654,6 +753,159 @@ fn daemon(cli: &Cli) -> Result<()> {
                 out!("run `ox confirm` within {secs} s to keep it, or `ox revert` to undo it now");
             }
         }
+        Command::Access { action: None } => {
+            let home = oxd.json("GET", "/v1/home", None)?;
+            let names: Vec<String> = home["networks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|n| text(&n["name"]).to_string())
+                .collect();
+            let wide = names
+                .iter()
+                .map(|n| n.chars().count())
+                .max()
+                .unwrap_or(8)
+                .max(12)
+                + 2;
+            outp!("{:<wide$}", "from \\ to");
+            for n in &names {
+                outp!("{n:<wide$}");
+            }
+            out!("");
+            for (i, from) in names.iter().enumerate() {
+                outp!("{from:<wide$}");
+                for j in 0..names.len() {
+                    let cell = &home["cells"][i][j];
+                    let word = match text(&cell["state"]) {
+                        "allowed" => "Allowed".to_string(),
+                        "blocked" => "Blocked".to_string(),
+                        "same" => "-".to_string(),
+                        _ => format!("Custom: {}", text(&cell["summary"])),
+                    };
+                    outp!("{word:<wide$}");
+                }
+                out!("");
+            }
+            out!("");
+            for n in home["networks"].as_array().into_iter().flatten() {
+                out!(
+                    "{:<wide$}zone {}  {}",
+                    text(&n["name"]),
+                    text(&n["zone"]),
+                    strings(&n["interfaces"]).join(", ")
+                );
+            }
+            let let_in = home["let_in"].as_array().cloned().unwrap_or_default();
+            if let_in.is_empty() {
+                out!("\nNothing is let in from the internet.");
+            } else {
+                out!("\nLet in from the internet:");
+                for f in &let_in {
+                    out!(
+                        "  {}: {} goes to {}",
+                        text(&f["name"]),
+                        text(&f["service"]),
+                        text(&f["to"])
+                    );
+                }
+            }
+            out!(
+                "\nChange it with: ox access allow <from> <to>   or   ox access block <from> <to>"
+            );
+            out!(
+                "Use the zone names. A Custom pair has rules of its own; edit those in the config."
+            );
+        }
+        Command::Access {
+            action: Some(action),
+        } => {
+            let (from, to, allow) = match action {
+                AccessCmd::Allow { from, to } => (from, to, true),
+                AccessCmd::Block { from, to } => (from, to, false),
+            };
+            let v = oxd.json(
+                "POST",
+                "/v1/actions/access",
+                Some(&json!({ "from": from, "to": to, "allow": allow })),
+            )?;
+            for line in strings(&v["done"]) {
+                out!("{line}");
+            }
+            out!(
+                "\nNothing is applied yet. Apply it with: ox apply {}",
+                text(&v["candidate"])
+            );
+        }
+        Command::Network {
+            action:
+                NetworkCmd::Add {
+                    name,
+                    port,
+                    vlan,
+                    address,
+                    no_internet,
+                },
+        } => {
+            let v = oxd.json(
+                "POST",
+                "/v1/actions/network",
+                Some(&json!({
+                    "name": name, "port": port, "vlan": vlan,
+                    "address": address, "internet": !no_internet,
+                })),
+            )?;
+            for line in strings(&v["done"]) {
+                out!("{line}");
+            }
+            out!(
+                "\nNothing is applied yet. Apply it with: ox apply {}",
+                text(&v["candidate"])
+            );
+            out!("Set the switch or access point on {port} to use VLAN {vlan} for this network.");
+        }
+        Command::Apply { change } => {
+            let name = match change {
+                Some(name) => name.clone(),
+                None => {
+                    let waiting = strings(&oxd.json("GET", "/v1/status", None)?["candidates"]);
+                    match waiting.as_slice() {
+                        [one] => one.clone(),
+                        [] => return Err("nothing is waiting to be applied".into()),
+                        many => {
+                            return Err(format!(
+                                "{} changes are waiting; say which: {}",
+                                many.len(),
+                                many.join(", ")
+                            )
+                            .into());
+                        }
+                    }
+                }
+            };
+            let plan = oxd.json("POST", &format!("/v1/candidates/{name}/plan"), None)?;
+            for line in strings(&plan["headline"]) {
+                out!("{line}");
+            }
+            let c = oxd.json(
+                "POST",
+                &format!("/v1/candidates/{name}/commit"),
+                Some(&json!({ "confirm_secs": 120, "reason": "" })),
+            )?;
+            out!("applied {}", commit_line(&c));
+            out!(
+                "Check things still work, then run `ox keep`. If you do nothing, it undoes itself in 2 minutes."
+            );
+        }
+        Command::Keep => {
+            oxd.json("POST", "/v1/confirm", None)?;
+            out!("kept; the change is now permanent");
+        }
+        Command::Undo => {
+            oxd.json("POST", "/v1/revert", None)?;
+            out!("undone; the box is as it was before");
+        }
+        Command::More => unreachable!("handled before a daemon is chosen"),
         Command::Confirm => {
             out!(
                 "kept {}",
@@ -838,9 +1090,7 @@ fn daemon(cli: &Cli) -> Result<()> {
                 out!("{line}");
             }
             match v["candidate"].as_str() {
-                Some(name) => out!(
-                    "\nNothing is applied yet. Look at it with `ox plan {name}`, then `ox commit {name} --confirm 5m`."
-                ),
+                Some(name) => out!("\nNothing is applied yet. Apply it with: ox apply {name}"),
                 None => out!("\nThe backup held no config, so there is nothing to commit."),
             }
         }
@@ -929,7 +1179,7 @@ fn daemon(cli: &Cli) -> Result<()> {
             }
             let candidate = text(&v["candidate"]);
             out!("\nSaved as candidate {candidate}. Nothing is applied yet.");
-            out!("Next: ox plan {candidate}  then  ox commit {candidate} --confirm 5m\n");
+            out!("Apply it with: ox apply {candidate}\n");
             out!("The config for the device. Import it into the WireGuard app:\n");
             out!("{}", text(&v["client_config"]));
             if *qr {
@@ -1109,7 +1359,9 @@ fn file(cmd: &FileCmd) -> Result<()> {
                 dst: packet.dst,
                 l4: packet.proto.into(),
                 dport: packet.dport,
-                iif: packet.iif.clone(),
+                iif: packet.iif.clone().ok_or(
+                    "say which interface the packet arrives on with --in; a config file alone cannot tell",
+                )?,
                 box_addrs: vec![],
             };
             let (_, rs) = load(config)?;
@@ -1214,6 +1466,31 @@ fn main() -> ExitCode {
                 easy::block(&cli.client()?, address, name.as_deref())
             }
             Command::Remote(cmd) => remote::run(cmd),
+            Command::More => {
+                use clap::CommandFactory;
+                let all = Cli::command();
+                let (mut everyday, mut advanced) = (vec![], vec![]);
+                for c in all.get_subcommands().filter(|c| c.get_name() != "more") {
+                    let about = c.get_about().map(|a| a.to_string()).unwrap_or_default();
+                    let line = format!(
+                        "  {:<11}{}",
+                        c.get_name(),
+                        about.lines().next().unwrap_or("")
+                    );
+                    if c.is_hide_set() {
+                        advanced.push(line)
+                    } else {
+                        everyday.push(line)
+                    }
+                }
+                out!(
+                    "Everyday:\n{}\n\nAdvanced:\n{}",
+                    everyday.join("\n"),
+                    advanced.join("\n")
+                );
+                out!("\n`ox <command> --help` explains any of them.");
+                Ok(())
+            }
             Command::Import {
                 backup,
                 out,

@@ -1109,6 +1109,7 @@ dependencies = [
  "ipnet",
  "ox-client",
  "ox-schema",
+ "ox-setup",
  "ratatui",
  "serde_json",
 ]
@@ -1294,6 +1295,7 @@ dependencies = [
  "ox-schema",
  "qrcode",
  "rqrr",
+ "serde",
 ]
 
 [[package]]
@@ -1303,7 +1305,6 @@ dependencies = [
  "ipnet",
  "ox-explain",
  "ox-nft",
- "ox-plan",
  "ox-schema",
  "ox-services",
  "serde",

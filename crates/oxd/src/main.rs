@@ -15,6 +15,7 @@ mod dhcp;
 mod limit;
 mod net;
 mod services;
+mod setup;
 mod tls;
 mod web;
 mod wg;
@@ -504,6 +505,14 @@ async fn serve(args: Args) -> Result<(), String> {
         }
     });
 
+    // A box with no config can be set up from a browser, with this code.
+    let has_config = shared
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .running()
+        .is_ok_and(|r| r.is_some());
+    let setup_code = setup::open(&args.state_dir, has_config);
+
     notify_ready();
     eprintln!(
         "oxd: listening on {} ({})",
@@ -551,10 +560,24 @@ async fn serve(args: Args) -> Result<(), String> {
                 .acceptor(acceptor)
                 .first_request_timeout(patience);
             server.http_builder().http1().header_read_timeout(patience);
-            if let Err(e) = server.serve(app.into_make_service()).await {
+            if let Err(e) = server
+                .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+                .await
+            {
                 eprintln!("oxd: the HTTPS listener stopped: {e}");
             }
         });
+    }
+    if let Some(code) = &setup_code {
+        if args.listen.is_some() || args.listen_http.is_some() {
+            eprintln!(
+                "oxd: this box has no config. Open its web interface from the inside network and enter the setup code {code}"
+            );
+        } else {
+            eprintln!(
+                "oxd: this box has no config. Run `ox init` here, or start the daemon with --listen to set it up from a browser"
+            );
+        }
     }
     if let Some(addr) = args.listen_http {
         let plain = tokio::net::TcpListener::bind(addr)
@@ -563,7 +586,12 @@ async fn serve(args: Args) -> Result<(), String> {
         let app = api::router(shared.clone(), leases.clone(), args.state_dir.clone());
         eprintln!("oxd: HTTP on {addr}, loopback only; every request needs an access token");
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(plain, app).await {
+            if let Err(e) = axum::serve(
+                plain,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
                 eprintln!("oxd: the HTTP listener stopped: {e}");
             }
         });

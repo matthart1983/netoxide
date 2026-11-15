@@ -9,13 +9,14 @@ cargo run --release -- --socket /path/to/oxd.sock
 cargo run --release -- --live        # uses $OX_SOCKET, or /run/netoxide/oxd.sock
 ```
 
-It has six screens, all backed by the daemon: Policy (with kernel packet
-counters), NAT, Interfaces, Changes, Explain and Audit. Keys: `1`…`6` and `tab`
-for screens, `↑↓` and `←→` to move, `x` on a rule to explain a packet it is
-about, `c` and `w` on Changes to commit with a confirm window, `e`, `enter`
-and `m` on Explain, `y` and `r` anywhere to keep or undo an unconfirmed
-commit, `R` to reload, `?` for help, `q` to quit. `docs/interfaces.md` has
-the full table.
+It opens on Home (is the firewall running, the networks, who can reach what)
+with Changes beside it. `A` shows the detailed screens: Policy (with kernel
+packet counters), NAT, Interfaces, Explain and Audit. Keys: digits and `tab`
+for the tabs that are showing, `a` on Home to go to the waiting change, `↑↓`
+and `←→` to move, `x` on a rule to explain a packet it is about, `c` and `w`
+on Changes to commit with a confirm window, `e`, `enter` and `m` on Explain,
+`y` and `r` anywhere to keep or undo an unconfirmed commit, `R` to reload, `?`
+for help, `q` to quit. `docs/interfaces.md` has the full table.
 
 **Mock mode** is the design prototype described below. It covers the same
 eleven screens as the design canvas, with the same sample data, so the two can

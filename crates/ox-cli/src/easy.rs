@@ -280,10 +280,10 @@ pub fn init(args: &InitArgs, oxd: &Client) -> Result<()> {
                 &format!("/v1/candidates/{name}"),
                 Some(("text/plain", &toml)),
             )?;
-            out!("\nSaved as candidate {name}. Nothing has been applied.");
-            out!("Next: ox plan {name}  then  ox commit {name} --confirm 5m");
+            out!("\nSaved as {name}. Nothing has been applied.");
+            out!("Apply it with: ox apply {name}");
             out!(
-                "With --confirm, the change undoes itself unless you run `ox confirm`, so a mistake cannot lock you out."
+                "It undoes itself after 2 minutes unless you run `ox keep`, so a mistake cannot lock you out."
             );
         }
         (None, None) => {
@@ -315,8 +315,7 @@ fn edit(
     for line in done {
         out!("{line}");
     }
-    out!("\nSaved as candidate {candidate}. Nothing has been applied.");
-    out!("Next: ox commit {candidate} --confirm 5m");
+    out!("\nNothing has been applied yet. Apply it with: ox apply {candidate}");
     Ok(())
 }
 

@@ -174,6 +174,23 @@ if [ "$stage" = 1 ]; then
     note "$(systemd-analyze security oxd --no-pager 2>/dev/null | tail -n1)"
     refute "install: nothing is loaded before the first commit" bash -c 'nft list tables | grep -q netoxide'
 
+    # --- first-run setup from a browser, under the unit's sandbox ---
+    # Only as far as the preview: the rest of this test loads its own config.
+    check "setup: the box shows a setup code" bash -c "ox status | grep -q 'setup       code'"
+    mkdir -p /etc/netoxide
+    echo 'OXD_ARGS=--listen-http 127.0.0.1:8098' >/etc/netoxide/oxd.env
+    systemctl restart oxd
+    wait_for 10 ox status
+    code=$(ox status | sed -n 's/^setup *code //p')
+    check "setup: the code is the same after a restart" bash -c "[ ${#code} -eq 9 ] && [ \"\$(cat /var/lib/netoxide/setup-code)\" = '$code' ]"
+    check "setup: without the code nothing is listed" says 401 curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8098/v1/setup/ports
+    check "setup: with it, the daemon lists the machine's ports" bash -c "curl -s --max-time 5 -H 'X-Setup-Code: $code' http://127.0.0.1:8098/v1/setup/ports | grep -q '\"eth0\"'"
+    check "setup: and says what a choice of ports would do" bash -c "curl -s --max-time 5 -H 'X-Setup-Code: $code' -H 'Content-Type: application/json' -d '{\"internet\":\"eth2\",\"inside\":[{\"port\":\"eth0\",\"address\":\"192.168.50.1/24\"}]}' http://127.0.0.1:8098/v1/setup/preview | grep -q 'eth0 is in zone lan'"
+    refute "setup: a preview loads nothing" bash -c 'nft list tables | grep -q netoxide'
+    rm /etc/netoxide/oxd.env
+    systemctl restart oxd
+    wait_for 10 ox status
+
     lab
 
     # --- first commit ---

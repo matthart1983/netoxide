@@ -411,6 +411,7 @@ mod tests {
     fn live_policy_shows_the_running_config_and_kernel_counters() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
+        live_keys(&mut app, &backend, "A2");
         let text = live_text(&mut app, 160, 46).unwrap();
         assert!(text.contains("syd-br-014-a") && text.contains("running #1"));
         assert!(text.contains("r-0388 Finance to file servers") && text.contains("1204"));
@@ -425,11 +426,54 @@ mod tests {
     }
 
     #[test]
+    fn live_opens_on_home_and_keeps_the_detailed_screens_behind_a_switch() {
+        let backend = Fixture::default();
+        let mut app = LiveApp::new(&backend);
+        assert_eq!(app.screen, live::Screen::Home);
+        assert_eq!(app.tabs(), live::SIMPLE);
+        let text = live_text(&mut app, 160, 46).unwrap();
+        // Networks by their everyday names, and the grid.
+        assert!(text.contains("The firewall is running"), "{text}");
+        assert!(
+            text.contains("who can reach what") && text.contains("Internet"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Staff network") && text.contains("Guest Wi-Fi"),
+            "{text}"
+        );
+        // Hand-written rules read as what they do, never as Allowed.
+        assert!(
+            text.contains("3 rules") && text.contains("1 service let in"),
+            "{text}"
+        );
+        assert!(text.contains("1 change is waiting"), "{text}");
+        assert!(
+            !text.contains("Policy") && !text.contains("Audit"),
+            "no detailed tabs yet: {text}"
+        );
+
+        // a goes to the waiting change. A shows the detailed screens, and
+        // hides them again without leaving the user on a hidden one.
+        live_keys(&mut app, &backend, "a");
+        assert_eq!(app.screen, live::Screen::Changes);
+        live_keys(&mut app, &backend, "A");
+        assert_eq!(app.tabs().len(), 7);
+        live_keys(&mut app, &backend, "7");
+        assert_eq!(app.screen, live::Screen::Audit);
+        live_keys(&mut app, &backend, "A");
+        assert_eq!(app.screen, live::Screen::Home);
+        // A digit past the last tab does nothing.
+        live_keys(&mut app, &backend, "9");
+        assert_eq!(app.screen, live::Screen::Home);
+    }
+
+    #[test]
     fn live_commit_asks_for_a_reason_then_commits_with_the_window() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
         // Changes screen, shorten the window twice (5m → 10m → 30s), commit.
-        live_keys(&mut app, &backend, "4wwc");
+        live_keys(&mut app, &backend, "2wwc");
         assert_eq!(app.reason.as_deref(), Some(""));
         // While the prompt is open, q is a letter, not quit.
         live_keys(&mut app, &backend, "q-CHG-2207\n");
@@ -450,7 +494,7 @@ mod tests {
         assert!(app.reason.is_none());
 
         // y works from any screen and the new rule is now the running config.
-        live_keys(&mut app, &backend, "1y");
+        live_keys(&mut app, &backend, "yA2");
         assert!(!backend.0.borrow().pending);
         let text = live_text(&mut app, 160, 46).unwrap();
         assert!(text.contains("kept #2") && text.contains("r-0412 Drop SMB and NetBIOS"));
@@ -460,7 +504,7 @@ mod tests {
     fn live_revert_goes_back_to_the_old_config() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "4c\nr");
+        live_keys(&mut app, &backend, "2c\nr");
         assert!(!backend.0.borrow().applied);
         assert_eq!(app.status.running.as_ref().unwrap().id, 1);
         assert_eq!(app.selected_candidate(), Some("block-legacy-smb"));
@@ -470,7 +514,7 @@ mod tests {
     fn live_x_explains_a_packet_the_rule_is_about() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "x");
+        live_keys(&mut app, &backend, "A2x");
         assert_eq!(app.screen, live::Screen::Explain);
         let (q, candidate) = backend.0.borrow().explained[0].clone();
         assert_eq!(
@@ -496,7 +540,7 @@ mod tests {
     fn live_explain_form_takes_typing_and_reports_bad_input() {
         let backend = Fixture::default();
         let mut app = LiveApp::new(&backend);
-        live_keys(&mut app, &backend, "5e");
+        live_keys(&mut app, &backend, "A6e");
         assert_eq!(app.editing, Some(0));
         live_keys(&mut app, &backend, "nonsense\n");
         assert!(app.running && app.editing.is_none());

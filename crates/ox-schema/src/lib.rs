@@ -304,7 +304,7 @@ impl Config {
         }
     }
 
-    fn checked(self) -> Result<Config, LoadError> {
+    pub fn checked(self) -> Result<Config, LoadError> {
         let problems = self.validate();
         if problems.is_empty() {
             Ok(self)

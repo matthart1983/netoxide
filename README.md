@@ -21,53 +21,56 @@ It is meant for two groups: home-lab users who want one box that is quick to set
 
 `netoxide-tui` is a full-screen terminal interface. Everything on screen comes from the daemon and is read again once a second.
 
-![The Policy screen: zone pairs on the left, the rules of the selected pair with the kernel's packet counters, and the selected rule's details](docs/images/tui-policy.png)
+![Home: the firewall is running, the networks and what each can reach, a grid of who can reach what, and what is let in from the internet](docs/images/tui-home.png)
 
-The Policy screen lists zone pairs and their rules, with the kernel's packet counter beside each rule. Press `x` on a rule to see what it does to a packet.
+It opens on Home: whether the firewall is running, your networks, and who can reach what. A pair with hand-written rules shows what they do in yellow. Press `a` to go to a waiting change.
 
-![The Changes screen: a candidate, its plan with two changes, the running commit and the commit panel with a five-minute confirm window](docs/images/tui-changes.png)
+![Changes: a candidate, its plan with two changes, the running commit and the commit panel with an undo timer](docs/images/tui-changes.png)
 
-The Changes screen shows what a proposed config would change before you apply it. A commit from here always has an undo timer: press `y` to keep it, or do nothing and the box goes back by itself.
+Changes shows what a waiting change would do before you apply it. A commit from here always has an undo timer: press `y` to keep it, or do nothing and the box goes back by itself.
 
-| Screen | Shows |
-| --- | --- |
-| Policy | Zone pairs and rules, with packet counts |
-| NAT | Port forwards and outbound NAT |
-| Interfaces | Interfaces, zones and addresses |
-| Changes | Candidates, the plan for one, commit with an undo timer |
-| Explain | A packet you type, judged by the running config and a candidate side by side |
-| Audit | The audit log, newest first |
+Press `A` for the detailed screens: Policy with the kernel's packet counter beside each rule, NAT, Interfaces, Explain and Audit. Like the switches in the web interface, `A` only shows or hides screens.
 
-The same tool works over SSH on the box or from your own machine with `--remote`. The command line tool `ox` does everything the screens do, and more:
+The same tool works over SSH on the box or from your own machine with `--remote`. The command line tool `ox` follows the same idea. `ox --help` lists a dozen everyday commands, and `ox more` lists the rest:
 
 ```sh
 ox init --save starter                 # guided setup: which port faces the internet?
-ox commit starter --confirm 5m         # apply; undoes itself unless you run `ox confirm`
+ox apply starter                       # applied safely: undoes itself unless you run `ox keep`
+ox access                              # who can reach what
+ox network add "Guest Wi-Fi" --port eth1 --vlan 20   # a network of its own, kept apart
 ox forward --name web --port tcp/443 --to 192.168.10.20
 ox block 192.168.10.66 --name "Smart TV"
-ox vpn add laptop --endpoint home.example.net
-ox explain --src 192.168.10.50 --dst 1.1.1.1 --proto tcp --dport 443 --in eth1
+ox vpn add laptop --endpoint home.example.net --qr
+ox explain --src 192.168.10.50 --dst 1.1.1.1 --proto tcp --dport 443
 ```
 
 Keys and every screen are in [docs/interfaces.md](docs/interfaces.md). Every command is in [docs/reference.md](docs/reference.md).
 
 ## In the browser
 
-The daemon serves a web interface over HTTPS. It is three static files compiled into the daemon, with no build step and nothing loaded from elsewhere.
+The web interface is simple by default. Everyone sees three screens: Home, Access and Settings. Everything else is there, switched off until you want it.
 
-![The Overview page: the running commit, the services, and a list of what the box does in plain sentences](docs/images/web-overview.png)
+![Setup: choose which port goes to the internet and which are your own network](docs/images/web-setup.png)
 
-The Overview says what the box does in plain sentences, generated from the running config.
+**Setup.** A new box is set up from a browser. It shows a setup code on its own console, you enter it, and you answer two questions: which port goes to the internet, and which are yours. You see what the box will do before anything is applied.
 
-![The Rules page: each zone pair as a table of rules with source, destination, service, action and packet count](docs/images/web-rules.png)
+![Home: the firewall is running, the inside network and what it can reach, a form to check whether something is blocked, and common tasks](docs/images/web-home.png)
 
-Rules shows every zone pair with its rules and the default at the bottom of each.
+**Home.** One line of status, your networks and what each can reach, and "Is something blocked?": give two addresses and the box says what it would do and which rule decides.
 
-![The Changes page: a candidate with its two changes listed, and an Apply panel with a reason field and an undo timer](docs/images/web-changes.png)
+![Access: a grid of three networks with Allowed and Blocked cells, and what is let in from the internet](docs/images/web-access.png)
 
-Changes is where you forward a port, block a device, add a VPN device or edit the whole config. Each one becomes a candidate with its plan, and you commit it with an undo timer.
+**Access.** Who can reach what, as a grid. Click to allow or block. The guest network here was added in one step and reaches the internet and nothing else. A pair that has hand-written rules of its own is shown as such and cannot be changed here, so a click never throws rules away.
 
-There are also pages for NAT, the network and the addresses handed out, explaining a packet, the audit log, and settings for access tokens and roles. The pictures were taken against a daemon in dry-run mode, which is why the header says nothing is loaded and the packet counts are empty.
+![Review: adding a guest network, said in two sentences, and Apply safely with a two-minute undo timer](docs/images/web-review.png)
+
+**Review.** Every change is shown in a sentence before it is applied, and applied safely: you get two minutes to check things still work, and if you do not keep it, it undoes itself.
+
+![Settings: seven advanced features as switches, all off](docs/images/web-settings.png)
+
+**Advanced, when you want it.** The full rule list, address translation, interfaces, candidates and the config editor, the packet tracer, the audit log, and tokens and roles are each a switch. A switch only shows or hides a screen. It never changes what the box does.
+
+The interface is three static files compiled into the daemon, with no build step and nothing loaded from elsewhere. A script drives all of the above in a headless Chrome on every change ([`tests/web/`](tests/web/run.sh)); the pictures here come from it.
 
 ## What it does
 
@@ -144,7 +147,7 @@ The short version. The full list is in [docs/status.md](docs/status.md#limits-to
 
 Most of the code, tests and documentation here were written by an AI coding assistant, Claude, working under the direction of one human maintainer who decides what gets built and merges it. Commits made that way carry a `Co-Authored-By` trailer.
 
-A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 164 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
+A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 177 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
 
 There is no AI on the box. The firewall does not call a model, send data anywhere, or include an assistant.
 

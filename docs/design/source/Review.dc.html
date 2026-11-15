@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Netoxide — Review and apply</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0A5FA8}a:hover{color:#074579}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #F5F6F8; font-family: Inter, system-ui, sans-serif; color: #16181D; font-size: 15px; line-height: 1.5">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #E2E5EA">
+    <div style="max-width: 1080px; margin: 0 auto; padding: 0 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px">
+      <div style="display: flex; align-items: center; gap: 28px; flex-wrap: wrap">
+        <span style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px">
+          <svg width="26" height="26" viewBox="0 0 28 28" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="7" fill="#16181D"></rect><path d="M8 19V10m4 9V8m4 11V8m4 11v-9" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path></svg>Netoxide</span>
+        <nav aria-label="Main" style="display: flex; gap: 4px">
+          <a href="Main.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; color: #3A3F4B; text-decoration: none">Home</a>
+          <a href="Access.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; color: #3A3F4B; text-decoration: none">Access</a>
+          <a href="Settings.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; color: #3A3F4B; text-decoration: none">Settings</a>
+        </nav>
+      </div>
+      <span style="font-size: 13px; color: #5B6170">Harbour Dental · Sydney office</span>
+    </div>
+  </header>
+
+  <main style="max-width: 720px; margin: 0 auto; padding: 40px 24px 56px; display: flex; flex-direction: column; gap: 20px">
+    <h1 style="margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.01em">{{heading}}</h1>
+
+    <sc-if value="{{isReview}}" hint-placeholder-val="{{true}}">
+      <div style="display: flex; flex-direction: column; gap: 20px">
+        <section aria-labelledby="ch-h" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 8px">
+          <h2 id="ch-h" style="margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6170">What will change</h2>
+          <p style="margin: 0; font-size: 18px; font-weight: 500">Staff will no longer be able to use old Windows file sharing (SMB) to reach Servers.</p>
+          <p style="margin: 0; font-size: 14px; color: #5B6170">Added by Jun Nguyen today at 10:52 · "Retire SMBv1 shares"</p>
+        </section>
+
+        <section aria-labelledby="im-h" style="background: #FDF0DF; border: 1px solid #F1C98F; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 10px">
+          <h2 id="im-h" style="margin: 0; font-size: 17px; font-weight: 600; color: #6B3403">3 devices used this in the last day and will lose access</h2>
+          <sc-for list="{{impact}}" as="d" hint-placeholder-count="3">
+            <div style="display: flex; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid #F1C98F; color: #6B3403">
+              <span style="font-weight: 600">{{d.name}}</span>
+              <span style="font-size: 14px">{{d.use}}</span>
+            </div>
+          </sc-for>
+        </section>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center">
+          <button type="button" onClick="{{apply}}" style="min-height: 48px; padding: 0 24px; border: none; border-radius: 10px; background: {{accent}}; color: #FFFFFF; font: inherit; font-weight: 600; font-size: 16px; cursor: pointer">Apply</button>
+          <a href="Access.dc.html" style="display: inline-flex; align-items: center; min-height: 48px; padding: 0 20px; border: 1px solid #CDD2DA; border-radius: 10px; background: #FFFFFF; color: #16181D; font-weight: 500; text-decoration: none">Go back and edit</a>
+        </div>
+        <p style="margin: 0; font-size: 14px; color: #5B6170">Safe apply: you'll get 2 minutes to check things still work. If you don't confirm, or this page loses its connection, the change undoes itself.</p>
+        <a href="Commit.dc.html" style="font-size: 13px">Show technical details</a>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isPending}}" hint-placeholder-val="{{false}}">
+      <section role="status" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 28px; display: flex; flex-direction: column; gap: 16px; align-items: flex-start">
+        <span style="font-size: 44px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em">{{remaining}}</span>
+        <p style="margin: 0; font-size: 17px">The change is live. Check that the things you care about still work, then keep it.</p>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px">
+          <button type="button" onClick="{{keep}}" style="min-height: 48px; padding: 0 24px; border: none; border-radius: 10px; background: #17663F; color: #FFFFFF; font: inherit; font-weight: 600; font-size: 16px; cursor: pointer">Keep it</button>
+          <button type="button" onClick="{{undo}}" style="min-height: 48px; padding: 0 20px; border: 1px solid #CDD2DA; border-radius: 10px; background: #FFFFFF; font: inherit; font-weight: 500; cursor: pointer">Undo now</button>
+        </div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isDone}}" hint-placeholder-val="{{false}}">
+      <section role="status" style="background: #E6F4EC; border: 1px solid #A9D7BD; border-radius: 16px; padding: 28px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start">
+        <p style="margin: 0; font-size: 17px; color: #11502F">Done. You can undo this any time from Settings › History.</p>
+        <a href="Main.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 18px; border-radius: 10px; background: #FFFFFF; border: 1px solid #A9D7BD; color: #11502F; font-weight: 600; text-decoration: none">Back to Home</a>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isUndone}}" hint-placeholder-val="{{false}}">
+      <section role="status" style="background: #FFFFFF; border: 1px solid #E2E5EA; border-radius: 16px; padding: 28px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start">
+        <p style="margin: 0; font-size: 17px">{{undoText}}</p>
+        <button type="button" onClick="{{reset}}" style="min-height: 44px; padding: 0 18px; border: 1px solid #CDD2DA; border-radius: 10px; background: #FFFFFF; font: inherit; font-weight: 500; cursor: pointer">Review again</button>
+      </section>
+    </sc-if>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#0A5FA8","options":["#0A5FA8","#16181D","#0F766E"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { phase: 'review', left: 120, auto: false }; this.t = null; }
+  componentWillUnmount() { this.stop(); }
+  stop() { if (this.t) { clearInterval(this.t); this.t = null; } }
+  renderVals() {
+    const s = this.state;
+    const heading = { review: 'Review 1 change', pending: 'Applied. Still working?', done: 'Change kept', undone: 'Change undone' }[s.phase];
+    return {
+      accent: this.props.accent ?? '#0A5FA8',
+      heading,
+      isReview: s.phase === 'review', isPending: s.phase === 'pending', isDone: s.phase === 'done', isUndone: s.phase === 'undone',
+      remaining: Math.floor(s.left / 60) + ':' + String(s.left % 60).padStart(2, '0'),
+      undoText: s.auto ? 'Nobody confirmed in time, so the change undid itself. Everything is back as it was.' : 'Everything is back as it was. The change is saved as a draft.',
+      impact: [
+        { name: 'FIN-PC-12', use: 'Opened shared folders 1,204 times' },
+        { name: 'Scanner (2nd floor)', use: 'Saves scans to a shared folder' },
+        { name: 'Old accounts server', use: 'Nightly file copy' }
+      ],
+      apply: () => {
+        this.stop();
+        this.setState({ phase: 'pending', left: 120, auto: false });
+        this.t = setInterval(() => {
+          const left = this.state.left - 1;
+          if (left <= 0) { this.stop(); this.setState({ phase: 'undone', left: 0, auto: true }); }
+          else this.setState({ left });
+        }, 1000);
+      },
+      keep: () => { this.stop(); this.setState({ phase: 'done' }); },
+      undo: () => { this.stop(); this.setState({ phase: 'undone', auto: false }); },
+      reset: () => { this.stop(); this.setState({ phase: 'review', left: 120 }); }
+    };
+  }
+}
+</script>
+</body>
+</html>
