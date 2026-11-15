@@ -98,6 +98,16 @@ The maintainer's rule for adoption. Expert screens never come first.
 When you add a feature, add its plain-language path first (a sentence on
 Home, a task, a grid cell, an everyday command) and its detailed screen second.
 
+`dist/package.sh` builds the `.deb` and `.rpm` from built programs, with the
+same files and the same behaviour as `dist/install.sh`; change the two
+together. `dist/package-test.sh` installs them in containers of six
+distributions (in CI) and `dist/package-systemd-test.sh` installs each under
+a real systemd (by hand, needs podman). Containers share the host kernel: on
+this development machine's 7.1 kernel the older `nft` in Debian 12 and Ubuntu
+fails to load the compiled rules, and the same test passes in CI. Trust CI for
+those. Release programs are built in a `rust:1-bullseye` container for an old
+glibc.
+
 `dist/install.sh` is the install path the docs lead with; the VM test installs
 and removes with it, so change the two together. `BROWSER=firefox` runs the
 walk-through in Firefox, which is stricter than Chrome about input patterns.
@@ -129,7 +139,7 @@ as a page to capture in a browser. The web pictures are browser captures of a `-
 with `examples/branch.toml` and `examples/branch-candidate.toml`. Retake them
 when a screen changes.
 
-The version is set once, in the workspace `Cargo.toml`. 0.1.0 was tagged on 15 Nov 2026 as a preview. `docs/releasing.md` has the checklist and the
+The version is set once, in the workspace `Cargo.toml`. 0.1.0 and 0.1.1 were tagged on 15 Nov 2026 as previews. `docs/releasing.md` has the checklist and the
 remaining steps.
 `.github/workflows/release.yml` builds a draft release from a `v*` tag. Do not
 tag or publish; that is the maintainer's step.

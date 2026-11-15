@@ -6,7 +6,7 @@ Netoxide is an open-source firewall and router that brings network access, DNS, 
 
 Built for home labs first, Netoxide makes everyday tasks straightforward while keeping detailed rules and configuration available when you need them. Its Rust control plane compiles firewall policy into nftables rules enforced by the Linux kernel.
 
-**0.1.0 preview — available for lab evaluation.** Validated in network namespaces and a systemd VM, with automated CLI, terminal and browser checks. Hardware validation, broader user testing and an independent security audit are still ahead; production use is outside the current release scope. [Release status and supported scope](docs/status.md).
+**0.1.1 preview — available for lab evaluation.** Validated in network namespaces and a systemd VM, with automated CLI, terminal and browser checks. Hardware validation, broader user testing and an independent security audit are still ahead; production use is outside the current release scope. [Release status and supported scope](docs/status.md).
 
 ![A recording of the terminal interface: adding a guest network, reviewing and applying the change, and checking access between networks](docs/images/tui-demo.gif)
 
@@ -70,13 +70,14 @@ The terminal opens against the daemon with the example configuration loaded. Thi
 
 ## Install on a lab box
 
-On an x86-64 Linux machine with systemd, download and unpack the [release archive](https://github.com/matthart1983/netoxide/releases), then run from its directory:
+On an x86-64 Linux machine with systemd, download the package for your distribution from the [latest release](https://github.com/matthart1983/netoxide/releases):
 
 ```sh
-sudo sh dist/install.sh --packages
+sudo apt install ./netoxide_*_amd64.deb      # Debian 12 or later, Ubuntu 22.04 or later
+sudo dnf install ./netoxide-*.x86_64.rpm     # Fedora, RHEL 9 and its rebuilds
 ```
 
-The installer starts the daemon and prints a setup code and browser address. Use a dedicated lab machine or VM with console access: Netoxide manages its network interfaces and firewall. The installation guide covers existing network-manager conflicts and removal with `--remove`.
+Installing starts the daemon. Run `ox status` for the setup code, then open `https://<the box>:8443/` in a browser. On other distributions, unpack the release archive and run `sudo sh dist/install.sh --packages`. Use a dedicated lab machine or VM with console access: Netoxide manages its network interfaces and firewall. The installation guide covers existing network-manager conflicts and removal.
 
 [Installation guide](dist/README.md) · [Proxmox guide](docs/proxmox.md) · [Recovery](docs/recovery.md)
 

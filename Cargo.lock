@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "netoxide-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crossterm",
  "ipnet",
@@ -1194,7 +1194,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "ox-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "nix",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "ox-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rustls",
  "serde",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "ox-explain"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ox-nft",
  "ox-schema",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "ox-import"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipnet",
  "ox-explain",
@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "ox-nft"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipnet",
  "ox-schema",
@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "ox-plan"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ox-explain",
  "ox-nft",
@@ -1263,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "ox-schema"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipnet",
  "schemars",
@@ -1275,14 +1275,14 @@ dependencies = [
 
 [[package]]
 name = "ox-services"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ox-schema",
 ]
 
 [[package]]
 name = "ox-setup"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipnet",
  "nix",
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "ox-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipnet",
  "ox-explain",
@@ -1312,7 +1312,7 @@ dependencies = [
 
 [[package]]
 name = "oxd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "axum-server",

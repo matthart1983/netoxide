@@ -30,23 +30,31 @@ jobs:
         env:
           OX_REQUIRE_KERNEL_TESTS: "1"
         run: cargo test --workspace
-      - name: Build
-        run: cargo build --release --locked
-      - name: Package
+      - name: Build against an old C library
+        # Debian 11's, so the programs run on older distributions too.
+        run: |
+          docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/target/compat \
+            rust:1-bullseye cargo build --release --locked
+      - name: Archive
         run: |
           name="netoxide-$VERSION-x86_64-linux"
           mkdir -p "$name/dist" "$name/examples"
-          cp target/release/oxd target/release/ox target/release/netoxide-tui "$name/"
-          cp dist/oxd.service dist/README.md dist/install.sh "$name/dist/"
+          cp target/compat/release/oxd target/compat/release/ox target/compat/release/netoxide-tui "$name/"
+          cp dist/oxd.service dist/oxd.env dist/README.md dist/install.sh "$name/dist/"
           cp examples/*.toml "$name/examples/"
           cp README.md CHANGELOG.md SECURITY.md LICENSE "$name/"
           cp schema/netoxide-config-1.schema.json "$name/"
           tar -czf "$name.tar.gz" "$name"
-          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+      - name: Packages
+        run: |
+          sudo apt-get install -y rpm binutils
+          dist/package.sh target/compat/release .
+          dist/package-test.sh "$PWD"
+          sha256sum netoxide-*.tar.gz netoxide_*.deb netoxide-*.rpm > "netoxide-$VERSION.sha256"
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --draft --prerelease --title "Netoxide $VERSION" \
             --notes "See CHANGELOG.md in the archive and in the repository." \
-            netoxide-*.tar.gz netoxide-*.tar.gz.sha256
+            netoxide-*.tar.gz netoxide_*.deb netoxide-*.rpm netoxide-*.sha256
