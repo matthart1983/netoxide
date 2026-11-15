@@ -1,208 +1,97 @@
 # Netoxide
 
-Netoxide is an open-source firewall and router for Linux with a control plane written in Rust. You describe the box in one typed config file. A daemon applies it to the kernel through nftables as a transaction that undoes itself if you lock yourself out.
+Netoxide is an open-source firewall and router for Linux, written in Rust. You say which networks can reach each other, and it loads the rules into the kernel through nftables. Every change undoes itself after two minutes unless you keep it, so a mistake cannot lock you out.
 
-It is meant for two groups: home-lab users who want one box that is quick to set up, and teams that run 10 to 300 firewalls across sites, mostly people moving off pfSense or OPNsense.
+It is built for home labs first: one box, set up in a few minutes, clear about what it is doing.
 
-**Status: 0.1.0, a preview.** It is a working single-box firewall and router that passes its tests in network namespaces and in a virtual machine under systemd. It has never run on real hardware, and nobody outside the project has audited it. Do not put it in front of a network you care about yet. See [what works and what does not](docs/status.md).
+**Status: 0.1.0, a preview.** It passes its tests in network namespaces and in a virtual machine. It has never run on real hardware and has had no outside security audit. Do not put it in front of a network you care about yet. [What works and what does not](docs/status.md).
 
-- [In the terminal](#in-the-terminal)
-- [In the browser](#in-the-browser)
-- [What it does](#what-it-does)
-- [Try it in two minutes](#try-it-in-two-minutes)
-- [Install on a box](#install-on-a-box)
-- [Who it is for](#who-it-is-for)
-- [Limits](#limits)
-- [How the code is written](#how-the-code-is-written)
-- [Documents](#documents)
-- [Licence and name](#licence-and-name)
-
-## In the terminal
-
-`netoxide-tui` is a full-screen terminal interface with the same four plain screens as the browser. It fits a terminal as it opens, 80 columns by 24 lines, so it works over SSH on the box.
-
-![A recording: adding a guest network from the Home menu, applying it safely and keeping it, allowing the inside network to reach it on the Access grid, then asking whether a guest device can reach an inside one](docs/images/tui-demo.gif)
-
-The recording is a real daemon with real rules, in a network namespace. [`tests/tui/demo.sh`](tests/tui/demo.sh) makes it.
-
-Home says whether the firewall is running, lists your networks, and offers the things you can do as a menu. There are no keys to learn beyond the arrows and enter.
-
-![Home: the firewall is running, an answer saying a connection is blocked and why, two networks with what each can reach, and a menu of six tasks](docs/images/tui-home.png)
-
-A task is a few lines to fill in. Nothing is applied when you send it. You see the change first.
-
-![Add a network: what it is for, which port, the VLAN number, the box's address, and whether it can reach the internet](docs/images/tui-task.png)
-
-Review says what will change in a sentence, then in detail. Enter applies it with a two-minute undo timer. Press `y` to keep it, or do nothing and the box goes back by itself.
-
-![Review: a new network called Guest Wi-Fi that can reach the internet, the detail underneath, and Apply safely](docs/images/tui-review.png)
-
-Access is the grid of who can reach what. Move to a pair and press enter to allow or block it. A pair with hand-written rules shows what they do in yellow and is not changed from here.
-
-![Access: a grid of three networks with Allowed and Blocked cells, the selected pair in a sentence, and what is let in from the internet](docs/images/tui-access.png)
-
-Settings has a switch for each detailed screen: the full rule list with the kernel's packet counter beside each rule, address translation, ports, the full plan, the packet tracer and the audit log. A switch only shows or hides a screen. The detailed screens need a bigger terminal, 132 by 34.
-
-The same tool works from your own machine with `--remote`. The command line tool `ox` follows the same idea. `ox --help` lists a dozen everyday commands, and `ox more` lists the rest:
-
-```sh
-ox init --save starter                 # guided setup: which port faces the internet?
-ox apply starter                       # applied safely: undoes itself unless you run `ox keep`
-ox access                              # who can reach what
-ox network add "Guest Wi-Fi" --port eth1 --vlan 20   # a network of its own, kept apart
-ox forward --name web --port tcp/443 --to 192.168.10.20
-ox block 192.168.10.66 --name "Smart TV"            # a device, by address
-ox block example.com                                 # a website, by name
-ox vpn add laptop --endpoint home.example.net --qr
-ox explain --src 192.168.10.50 --dst 1.1.1.1 --proto tcp --dport 443
-```
-
-Keys and every screen are in [docs/interfaces.md](docs/interfaces.md). Every command is in [docs/reference.md](docs/reference.md).
-
-## In the browser
-
-The web interface is simple by default. Everyone sees three screens: Home, Access and Settings. Everything else is there, switched off until you want it.
-
-![Setup: choose which port goes to the internet and which are your own network](docs/images/web-setup.png)
-
-**Setup.** A new box is set up from a browser. It shows a setup code on its own console, you enter it, and you answer two questions: which port goes to the internet, and which are yours. You see what the box will do before anything is applied.
-
-![Home: the firewall is running, the inside network and what it can reach, a form to check whether something is blocked, and common tasks](docs/images/web-home.png)
-
-**Home.** One line of status, your networks and what each can reach, and "Is something blocked?": give two addresses and the box says what it would do and which rule decides.
-
-![Access: a grid of three networks with Allowed and Blocked cells, and what is let in from the internet](docs/images/web-access.png)
-
-**Access.** Who can reach what, as a grid. Click to allow or block. The guest network here was added in one step and reaches the internet and nothing else. A pair that has hand-written rules of its own is shown as such and cannot be changed here, so a click never throws rules away.
-
-![Review: adding a guest network, said in two sentences, and Apply safely with a two-minute undo timer](docs/images/web-review.png)
-
-**Review.** Every change is shown in a sentence before it is applied, and applied safely: you get two minutes to check things still work, and if you do not keep it, it undoes itself.
-
-![Settings: seven advanced features as switches, all off](docs/images/web-settings.png)
-
-**Advanced, when you want it.** The full rule list, address translation, interfaces, candidates and the config editor, the packet tracer, the audit log, and tokens and roles are each a switch. A switch only shows or hides a screen. It never changes what the box does.
-
-The interface is three static files compiled into the daemon, with no build step and nothing loaded from elsewhere. A script drives all of the above in headless Chrome and Firefox on every change, and another walks the terminal interface against a real daemon ([`tests/tui/`](tests/tui/run.sh)) ([`tests/web/`](tests/web/run.sh)); the pictures here come from it.
+![A recording of the terminal interface: adding a guest network, applying it safely and keeping it, allowing the inside network to reach it, then asking whether a guest device can reach an inside one](docs/images/tui-demo.gif)
 
 ## What it does
 
-- **Firewall and NAT.** Rules are written between zones, for IPv4 and IPv6 together. Port forwards and outbound NAT. Compiled to nftables sets and verdict maps and loaded as one atomic transaction.
-- **Safe changes.** Every change is a named candidate. `ox plan` shows what it would change. A commit with a confirm window reverts by itself unless you confirm it. Rollback is one command, and every action is in a hash-chained audit log.
-- **Explain.** Ask what happens to one packet and get the rule that decides, under the running config or a candidate that is not applied yet.
-- **A whole router.** DNS with DNSSEC checking, DHCP, IPv6 announcements, an internet-side address from the provider by DHCP, interface addresses and routes.
-- **Networks kept apart.** One step adds a network of its own for guests or cameras, as a VLAN with its own addresses. It reaches the internet if you say so and none of your other networks until you allow it.
-- **Blocking.** `ox block` takes a device's address and drops everything it sends, or a website's name and stops every device looking it up.
-- **VPN.** WireGuard through the kernel's own implementation. One command adds a phone or laptop and prints its config.
-- **Access control.** Access tokens with roles. A role can be held to parts of the config, so a network admin cannot change firewall rules. A commit can require a second person's approval.
-- **Remote management.** `ox --remote <name>` manages a box over HTTPS, with the box's certificate pinned by fingerprint as SSH does with host keys.
-- **Import.** Translates a pfSense backup into a config and checks its own translation.
-- **Monitoring.** Prometheus metrics, and a report of rules that never apply, add nothing or allow everything.
+- **Firewall and NAT** for IPv4 and IPv6, with port forwards, loaded as one atomic change.
+- **A whole router**: DNS, DHCP, IPv6 announcements, VLANs, and a WireGuard VPN.
+- **Safe changes.** You see each change in a sentence before it is applied. Applied changes undo themselves unless you keep them.
+- **One-step tasks**: add a guest network, let a service in, block a device or a website, add a phone to the VPN.
+- **"Is something blocked?"** Give two addresses and it says what the box would do and which rule decides.
+- **Tokens and roles**, an audit log, Prometheus metrics, and a pfSense config importer.
 
-The full list, with how each piece was tested, is in [docs/status.md](docs/status.md).
+Each feature, with how it was tested, is in [docs/status.md](docs/status.md).
+
+## Three ways to use it
+
+All three do the same things to the same config. Each opens on a few plain screens or commands, and the detailed ones are switched off until you want them.
+
+| | |
+| --- | --- |
+| **Terminal** | `netoxide-tui` fits an 80×24 terminal, so it works over SSH. The recording above shows it. |
+| **Browser** | Served by the box over HTTPS. A new box is set up here with a code shown on its console. |
+| **Command line** | `ox --help` lists a dozen everyday commands, and `ox more` lists the rest. |
+
+![The browser's Access screen: a grid of three networks with Allowed and Blocked cells, and what is let in from the internet](docs/images/web-access.png)
+
+```sh
+ox network add "Guest Wi-Fi" --port eth1 --vlan 20   # a network of its own, kept apart
+ox block example.com                                 # a website, by name
+ox apply                                             # undoes itself unless you run `ox keep`
+```
+
+Every screen is in [docs/interfaces.md](docs/interfaces.md) and every command in [docs/reference.md](docs/reference.md).
 
 ## Try it in two minutes
 
-This runs the daemon in a private, rootless network namespace. It loads rules into that namespace's kernel tables and cannot touch your machine's own.
-
-You need Rust 1.88 or later, `libnftables.so.1` (the `nftables` package), `unshare` from util-linux, and a kernel that allows unprivileged user namespaces.
+This runs the daemon in a private, rootless network namespace. It cannot touch your machine's own firewall. You need Rust 1.88 or later, the `nftables` package and `unshare`.
 
 ```sh
 cargo build
 export OX_SOCKET=/tmp/oxd.sock
 unshare -Urn ./target/debug/oxd --state-dir /tmp/ox-state --socket $OX_SOCKET &
-alias ox=./target/debug/ox
 
-ox candidate save base examples/branch.toml
-ox commit base --reason "first config"
-
-ox candidate save block-legacy-smb examples/branch-candidate.toml
-ox plan block-legacy-smb
-ox commit block-legacy-smb --confirm 30s --reason CHG-2207
+./target/debug/ox candidate save demo examples/branch.toml
+./target/debug/ox apply demo        # undoes itself in two minutes...
+./target/debug/ox keep              # ...unless you keep it
+./target/debug/netoxide-tui --live
 ```
 
-Now wait 30 seconds. `ox status` shows commit #1 running again, because nobody confirmed the change. Then open the terminal interface on the same daemon:
-
-```sh
-cargo run -p netoxide-tui --release -- --socket $OX_SOCKET
-```
-
-**Warning.** Outside a namespace, `oxd` replaces the host's `netoxide` nftables table, and the default is to drop. Use `oxd --dry-run` if you want the API and the interfaces without loading anything.
-
-[docs/getting-started.md](docs/getting-started.md) continues from here: the guided setup, forwarding a port and blocking a device.
+Run `oxd` outside a namespace only on a box you mean to turn into a firewall: it blocks by default. [docs/getting-started.md](docs/getting-started.md) continues from here.
 
 ## Install on a box
 
-One script installs it on a Linux machine with systemd, from a release archive or a source build:
+On a Linux machine with systemd:
 
 ```sh
 sudo sh dist/install.sh --packages
 ```
 
-It installs the programs and the service, turns on the web interface, starts the daemon and prints a setup code with the address to open. From there you set the box up in a browser. `sudo sh dist/install.sh --remove` takes it off again.
-
-- [docs/proxmox.md](docs/proxmox.md) walks through a VM on Proxmox with two network cards.
-- [dist/README.md](dist/README.md) has the same steps by hand, plus lockdown, monitoring and removal.
-
-A test boots a virtual machine, runs this script, and checks the result through a reboot and removal, on every run. Nobody has run it on hardware or on Proxmox itself yet. There is no OS image: you install Netoxide on an existing Linux machine, and that machine's own network manager must leave the ports you give to Netoxide alone.
-
-## Who it is for
-
-- **Home-lab users and small offices** running one box, who want a firewall that is quick to set up, clear about what it is doing, and free in full.
-- **Teams and service providers** running 10 to 300 firewalls, who want config as code, safe changes, an audit trail and fleet management. The fleet parts are planned and not built.
-
-The design rule is "easy first, advanced within reach". Each area has an easy path and an advanced path over the same config, so `ox init` and the one-step commands write ordinary config that the advanced tools can read and change. Nothing a single box needs depends on a controller, a login server or a fleet feature.
-
-The research behind the project is in [docs/research/market-gap.md](docs/research/market-gap.md). It found no buyer asking for Rust by name. Rust is here for two reasons: a control plane that never builds a shell command, and memory-safe code on the network-facing side. Packets stay in the Linux kernel, and this project makes no performance claim.
+It starts the daemon and prints a setup code with the address to open in a browser. `--remove` takes it off again. There is no OS image yet. Details are in [dist/README.md](dist/README.md), and [docs/proxmox.md](docs/proxmox.md) covers a VM on Proxmox.
 
 ## Limits
 
-The short version. The full list is in [docs/status.md](docs/status.md#limits-today).
+- **It has never run on real hardware or carried real traffic.**
+- **Nobody outside the project has reviewed its security.**
+- **Nobody but its author has used the interfaces.** Scripts drive them on every change.
+- Not built: multi-WAN, routing protocols, traffic shaping, intrusion detection, high availability, single sign-on, fleet management.
 
-- **It has never run on real hardware or carried real traffic.** The furthest it has been is a virtual machine on one developer's computer, with SELinux off. This needs a person with a spare machine, and it is the next thing the project needs.
-- **Nobody outside the project has reviewed the security of any of it.**
-- **Nobody but its author has used the interface.** Scripts drive it in Chrome and Firefox on every change. No person has been watched setting a box up for the first time.
-- **No phone has scanned the VPN QR code.** A decoder library reads it back in a test.
-- **Website blocking is by name, one at a time.** There are no downloaded blocklists yet, and a device that uses another DNS server is not affected.
-- The daemon creates VLAN interfaces. It does not create bridge, bond or PPPoE interfaces; the operating system still does.
-- No IPv6 prefix delegation, no dynamic DNS, no multi-WAN, no routing protocols, no traffic shaping, no intrusion detection, no high availability.
-- The VPN is WireGuard only. It has been tested between two Netoxide boxes, not against the official WireGuard apps.
-- No single sign-on. Access is by token.
-- No fleet controller, Terraform provider or OS image.
+The full list is in [docs/status.md](docs/status.md#limits-today), and what comes next is in [docs/roadmap.md](docs/roadmap.md).
 
 ## How the code is written
 
-Most of the code, tests and documentation here were written by an AI coding assistant, Claude, working under the direction of one human maintainer who decides what gets built and merges it. Commits made that way carry a `Co-Authored-By` trailer.
+Most of the code, tests and documentation were written by an AI coding assistant, Claude, directed by one human maintainer who decides what gets built and merges it. No second person has reviewed it line by line.
 
-A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 189 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
+What stands in for that today is 189 tests, some of which send real packets through the kernel and compare the result with what the firewall says it will do, and a virtual machine test of the installed system. That is evidence, not an audit. See the [threat model](docs/threat-model.md) and [how it is built and tested](docs/architecture.md).
 
-There is no AI on the box. The firewall does not call a model, send data anywhere, or include an assistant.
+There is no AI on the box. The firewall calls no model and sends no data anywhere.
 
-## Documents
+## Documentation
 
-| | |
-| --- | --- |
-| [docs/getting-started.md](docs/getting-started.md) | Try it in a namespace, then set a box up from nothing |
-| [dist/README.md](dist/README.md) | Install on a machine with systemd |
-| [docs/proxmox.md](docs/proxmox.md) | Run it as a virtual machine on Proxmox |
-| [docs/config.md](docs/config.md) | The config file, how a change reaches the kernel, explain, pfSense import |
-| [docs/interfaces.md](docs/interfaces.md) | The terminal UI and the web UI, screen by screen |
-| [docs/access.md](docs/access.md) | Managing a box from another machine, tokens and roles |
-| [docs/reference.md](docs/reference.md) | Every command and every API route |
-| [docs/status.md](docs/status.md) | What works, the limits, and what is not built |
-| [docs/roadmap.md](docs/roadmap.md) | What comes next, in what order, and what stays free |
-| [docs/threat-model.md](docs/threat-model.md) | What it is built to resist, what it relies on, and what it does not defend against |
-| [docs/recovery.md](docs/recovery.md) | What to do if a change locks you out |
-| [docs/architecture.md](docs/architecture.md) | The crates, the design rules and the tests |
-| [CHANGELOG.md](CHANGELOG.md) | What each release changed |
-| [SECURITY.md](SECURITY.md) | How to report a vulnerability |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, test and send a change |
-| [docs/releasing.md](docs/releasing.md) | How a version goes out, and what blocks the first one |
-| [docs/spec.md](docs/spec.md) | The product spec: scope, non-goals and open questions |
-| [docs/design/](docs/design/README.md) | The web UI design and a browser preview of the terminal UI |
+- **Start:** [getting started](docs/getting-started.md) · [install](dist/README.md) · [Proxmox](docs/proxmox.md)
+- **Use:** [the interfaces](docs/interfaces.md) · [the config file](docs/config.md) · [remote access, tokens and roles](docs/access.md) · [every command and API route](docs/reference.md)
+- **Trust:** [status and limits](docs/status.md) · [threat model](docs/threat-model.md) · [if a change locks you out](docs/recovery.md) · [reporting a vulnerability](SECURITY.md)
+- **Project:** [roadmap](docs/roadmap.md) · [architecture and tests](docs/architecture.md) · [changelog](CHANGELOG.md) · [contributing](CONTRIBUTING.md) · [releasing](docs/releasing.md) · [spec](docs/spec.md) · [design](docs/design/README.md)
 
 ## Licence and name
 
-**No licence has been chosen**, so this repository carries none and nobody may yet use, copy or distribute the code. The choice on the table is AGPL-3.0-or-later for the daemon and tools with Apache-2.0 for the schema and client libraries, or Apache-2.0 throughout.
+**No licence has been chosen yet**, so nobody may use, copy or distribute the code. The choice is between AGPL-3.0-or-later with Apache-2.0 for the schema and client libraries, or Apache-2.0 throughout.
 
-"Netoxide" is a working name. It has not been checked for trademark conflicts, and it sits close to Oxide Computer Company, which also builds networking products in Rust.
+"Netoxide" is a working name and has not been checked for trademark conflicts.
