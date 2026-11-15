@@ -20,7 +20,7 @@ The crates, the design rules, and what the tests cover.
                  │   ox-nft     config → Ruleset → nft JSON     │
                  │   ox-schema  typed config, validation        │
                  └────┬─────────────────────────────────────────┘
-                      │ one transaction through libnftables (ox-libnft)
+                      │ one transaction through the nft program
                  ┌────▼─────────────────────────────────────────┐
                  │ Linux kernel: table inet netoxide            │
                  └──────────────────────────────────────────────┘
@@ -33,7 +33,6 @@ The crates, the design rules, and what the tests cover.
 | `ox-explain` | Evaluates a packet against a `Ruleset` |
 | `ox-plan` | Diffs two configs and replays flows through both |
 | `ox-store` | The commit engine and audit log. It never touches the kernel; it hands rulesets to an `Applier` |
-| `ox-libnft` | The FFI call into libnftables. The only crate that contains `unsafe` |
 | `oxd` | The daemon |
 | `ox-cli` | The `ox` binary |
 | `ox-import` | The pfSense importer and its model of the pfSense ruleset |
@@ -65,7 +64,7 @@ These decide design arguments. When two conflict, the earlier one wins.
 
 Rules for the code:
 
-- `unsafe` is forbidden in every crate except `ox-libnft`, where each block carries an audit note.
+- `unsafe` is forbidden in every crate. The daemon loads rules by running the `nft` program with a fixed argument list and the ruleset on standard input, and it runs dnsmasq the same way. Those are the only two programs it starts.
 - The daemon and its libraries never start a process to change system state.
 - Every rule, NAT and import test runs for IPv4 and IPv6.
 - No throughput or performance claim appears anywhere until a benchmark rig publishes numbers.

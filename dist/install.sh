@@ -71,7 +71,7 @@ fi
 [ -n "$bin_dir" ] && [ -x "$bin_dir/oxd" ] && [ -x "$bin_dir/ox" ] ||
     stop "cannot find the oxd and ox programs. Unpack a release archive, or build with: cargo build --release"
 
-has_nftables() { ldconfig -p 2>/dev/null | grep -q 'libnftables\.so\.1'; }
+has_nftables() { [ -x /usr/sbin/nft ] || [ -x /usr/bin/nft ] || [ -x /sbin/nft ] || [ -x /usr/local/sbin/nft ]; }
 has_dnsmasq() { command -v dnsmasq >/dev/null 2>&1; }
 if ! has_nftables || ! has_dnsmasq; then
     if command -v apt-get >/dev/null 2>&1; then
@@ -85,7 +85,7 @@ if ! has_nftables || ! has_dnsmasq; then
         say "Installing what Netoxide needs: $how"
         $how
     fi
-    has_nftables || stop "libnftables.so.1 is missing. Install the nftables package${how:+ ($how)}, or run this script with --packages"
+    has_nftables || stop "the nft program is missing. Install the nftables package${how:+ ($how)}, or run this script with --packages"
     has_dnsmasq || say "Note: dnsmasq is not installed, so the box cannot answer DNS or hand out addresses yet${how:+. Install it with: $how}"
 fi
 

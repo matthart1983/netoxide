@@ -1,19 +1,19 @@
 # Netoxide: brief for Claude
 
-Netoxide is an open-source firewall and router OS on Linux with a Rust control
-plane. It is for teams that run 10 to 300 firewalls across sites, mostly people
-moving off pfSense or OPNsense. The pitch is "every claim checkable": public
-source, a published config schema, signed A/B upgrades, and published HA test
-results.
+Netoxide is an open-source firewall and router on Linux with a Rust control
+plane, under the MIT licence. It is for home labs first: one box, quick to set
+up, clear about what it is doing. The same config and tools are meant to scale
+to people who run many boxes. The pitch is "every claim checkable": public
+source, a published config schema, and tests anyone can run.
 
-The full spec is in `docs/spec.md`. Read it before any design or architecture
-decision. This file gives you what you need to start working.
+The repository is public as a preview. This file gives you what you need to
+start working. `docs/roadmap.md` is the plan and `docs/status.md` is what
+works today.
 
 ## Current state (15 Nov 2026)
 
 | What | Where | State |
 | --- | --- | --- |
-| Spec | `docs/spec.md` | Complete draft; open questions at the end |
 | Web UI design | `docs/design/` | 11 screens as Claude Design source, mock data |
 | TUI | `tui/` | ratatui 0.29. Live mode (`--socket`, `--live`, `--remote`): four plain screens (Home, Access, Review, Settings) that fit 80×24 and do the web UI's tasks, and six detailed screens as switches. Mock mode: the 11 designed screens with sample data |
 | Config schema | `crates/ox-schema` | Schema 1: zones, interfaces, groups, services, filter policy, NAT, DNS resolver, DHCP pools |
@@ -21,7 +21,7 @@ decision. This file gives you what you need to start working.
 | Explain | `crates/ox-explain` | One packet against a ruleset: forward, route, zone pair, rule, source NAT |
 | Plan | `crates/ox-plan` | Config diff, and which observed flows change verdict |
 | Commit engine | `crates/ox-store` | Candidates, commits, commit-confirm, auto revert, rollback, hash-chained audit log |
-| Kernel apply | `crates/ox-libnft` | FFI to libnftables. The only crate with `unsafe` |
+| Kernel apply | `crates/oxd/src/nft.rs` | Runs the `nft` program with a fixed argument list and the ruleset as JSON on standard input. No FFI and no `unsafe` anywhere |
 | Daemon | `crates/oxd` | HTTP+JSON API on a Unix socket and on HTTPS (`--listen`), applies to the kernel, runs dnsmasq, serves the web UI and `/metrics` |
 | Interfaces | `crates/oxd/src/net.rs` | On apply: add the config's addresses over netlink, bring links up, set default routes (`gateway`), enable forwarding. Remembers what it added (`managed.json`) and removes only that, when a config drops it or a commit fails. Missing interfaces are reported in status, not fatal |
 | DHCP client | `crates/oxd/src/dhcp.rs` | `dhcp_client = true` on the uplink: a tokio task per interface speaks DHCP in raw Ethernet frames on a packet socket, installs address and default route, renews, and re-requests its old address after a restart. The validator requires a visible accept rule for udp/68 |
@@ -73,8 +73,7 @@ probe test must still pass with only the known "Pass association" difference.
 
 ## Simple by default, advanced by opt-in (decided 15 Nov 2026)
 
-Matt's rule for adoption. It overrides any reading of the spec that puts
-expert screens first.
+The maintainer's rule for adoption. Expert screens never come first.
 
 - **Default layer:** Setup, Home, Access, Review and Settings in the web UI;
   Home, Access, Review and Settings in the terminal UI, with the same tasks
@@ -132,16 +131,16 @@ when a screen changes.
 
 The version is 0.1.0 and is set once, in the workspace `Cargo.toml`. Nothing
 has been tagged or released. `docs/releasing.md` has the checklist and the
-blockers (no licence, no name check, stacked PRs unmerged, repo private).
+remaining steps.
 `.github/workflows/release.yml` builds a draft release from a `v*` tag. Do not
-tag or publish; that is Matt's step.
+tag or publish; that is the maintainer's step.
 
 ## Names
 
 - Product: **Netoxide** (capital N in prose)
 - Daemon: `oxd`. CLI: `ox` (`ox commit`, `ox explain`, `ox plan`, `ox import`, `ox trace`, `ox diff`, `ox rollback`)
 - TUI crate: `netoxide-tui`
-- The name has not been checked for trademark conflicts. It sits close to Oxide Computer Company. Don't register domains or crates.io names without asking.
+- The name is settled (15 Nov 2026). Don't register domains or crates.io names without asking.
 
 ## The seven principles (earlier wins when two conflict)
 
@@ -155,24 +154,22 @@ tag or publish; that is Matt's step.
 
 ## Two audiences, one product
 
-Matt's design goal (14 Nov 2026): Netoxide has to appeal to home-lab users and to commercial fleets. It must be easy to use and still offer the advanced features.
+The design goal: Netoxide has to appeal to home-lab users and to people who run fleets. It must be easy to use and still offer the advanced features.
 
 - **Easy first, advanced within reach.** A single box gets a working, safe setup from a short guided flow with no config file to write. A fleet operator gets the full model. Both use the same config and tools: the easy path writes ordinary config that the advanced path can read and change.
 - Nothing a single box needs may depend on the controller, a login server or a fleet feature.
 - When you add a feature, give it a sensible default and a one-step way to do the common case, then expose the full control. Do not add a second, simpler config format.
-- Error messages and UI text are written for someone who has not read the spec.
-- The research found home-lab users are the test bed and contributor pool, not the paying segment. Serve them anyway; they bring the product to work.
+- Error messages and UI text are written for someone who has read no documentation.
 
 ## Hard rules for code
 
-- `#![forbid(unsafe_code)]` in every first-party crate, except one small audited FFI crate. Each `unsafe` block there gets an audit note.
-- The only crate with `unsafe` is `ox-libnft`. `nix` gives safe wrappers for the few system calls the rest needs.
-- Never call `std::process::Command` with shell strings from `oxd` or its libraries. `oxd` starts dnsmasq with a fixed argument list (`crates/oxd/src/services.rs`); that is the only process it starts. The spec wants services as systemd units; that is not done yet.
+- `unsafe` is forbidden in every crate (workspace lint). `nix` gives safe wrappers for the few system calls the daemon needs. Do not link libnftables again: it is GPL-2.0-only.
+- Never call `std::process::Command` with shell strings from `oxd` or its libraries. `oxd` starts two programs, each with a fixed argument list: dnsmasq (`crates/oxd/src/services.rs`) and `nft` (`crates/oxd/src/nft.rs`), which gets the ruleset on standard input and is looked up in fixed places, never on `PATH`. The spec wants services as systemd units; that is not done yet.
 - Every dependency change passes `cargo-deny` and `cargo-vet`. `deny.toml` is in place and `cargo deny check` passes. `cargo-vet` is not set up yet.
 - The firewall ruleset swaps in one nftables transaction. The rule compiler emits sets, maps and verdict maps, never a linear chain longer than 32 rules. A zone pair over 32 is merged (`Chain::layout` in `ox-nft`): neighbouring rules with the same action share one concatenated-set lookup. Only neighbours merge, so first-match order holds, and nftables refuses overlapping set entries, so an overlapping rule starts a new run. Merged rules share a counter. A pair still over 32 is refused.
 - Every rule, NAT and VPN test runs for both IPv4 and IPv6.
 - Make no throughput or performance claim in code, docs or UI until the Phase 0 benchmark rig publishes numbers.
-- Licence decision is pending: AGPL-3.0-or-later for `oxd`, CLI, UI and controller, Apache-2.0 for client libraries, schema and Terraform provider. Don't add licence headers until that is decided.
+- The licence is MIT (decided 15 Nov 2026), set once in the workspace `Cargo.toml`. No licence headers in source files.
 
 ## Out of scope for 1.0 (don't build these)
 
@@ -187,7 +184,6 @@ crates/
   ox-explain/     evaluate a packet against a Ruleset
   ox-plan/        diff two configs; replay flows through both
   ox-store/       commit engine and audit log; no kernel access
-  ox-libnft/      the audited FFI crate for libnftables
   oxd/            the daemon: API on a Unix socket, commit-confirm clock
   ox-cli/         the `ox` binary
   ox-client/      HTTP client for oxd, shared by ox and the TUI: the Unix socket, or HTTPS with a pinned certificate
@@ -203,7 +199,7 @@ Proposed next, not decided, roughly in this order:
 1. Run it on real hardware with SELinux enforcing, and a first watched deployment. DHCPv6 prefix delegation for the inside network. VLAN and PPPoE interfaces.
 2. Services as sandboxed systemd units instead of direct children of `oxd`; Unbound and Kea renderers beside dnsmasq. The schema must stay backend-neutral.
 3. Rule editing and first-run setup in the TUI, more one-step actions (allow one service between networks) in `ox-setup`, and `ox trace`.
-4. IPsec (strongSwan over VICI; not installed on Matt's machine). WireGuard follow-ups: full-tunnel peers (needs policy routing), preshared keys, a test against the official `wg` tools.
+4. IPsec (strongSwan over VICI; not installed on the development machine). WireGuard follow-ups: full-tunnel peers (needs policy routing), preshared keys, a test against the official `wg` tools.
 5. OIDC sign-in (needs an outbound HTTPS client and JWT checks in the daemon, and a test identity provider). Roles held to one zone pair or interface.
 6. Multi-WAN, FRR, CAKE, Suricata.
 7. OPNsense import, and testing the pfSense importer against real backups.
@@ -241,7 +237,7 @@ To run the daemon by hand without touching the host, start it under
 `--keep-service-privileges` and create the inside interface first (see
 `start_home` in `crates/oxd/tests/daemon.rs`). In zsh, do not put a command in
 a variable and run `$VAR args`: zsh does not split it. Never start `oxd` without `--dry-run`
-outside a namespace on Matt's machine: it would replace the host's `netoxide`
+outside a namespace on a development machine: it would replace the host's `netoxide`
 nftables table.
 
 ## The TUI
@@ -270,7 +266,7 @@ Live mode:
 Mock mode is the design reference and has not changed role:
 
 - `src/app.rs` holds state and keys, `src/ui.rs` one draw function per screen, `src/data.rs` the sample data, `src/html.rs` the HTML export.
-- Its HA screen says state sync runs over an "encrypted link". The spec requires an authenticated, encrypted channel and nobody has designed the mechanism. conntrackd has no TLS of its own.
+- Its HA screen says state sync runs over an "encrypted link". The design calls for an authenticated, encrypted channel and nobody has designed the mechanism. conntrackd has no TLS of its own.
 
 `cargo test` compares mock screens with `tui/snapshots.txt` and live screens with `tui/snapshots-live.txt`. Regenerate them with `cargo run -- --snapshot all --size 160x46 > snapshots.txt` and `UPDATE_SNAPSHOTS=1 cargo test -p netoxide-tui` when a layout change is intended.
 
@@ -278,14 +274,6 @@ Mock mode is the design reference and has not changed role:
 
 `docs/design/README.md` lists the 11 screens and what each one shows. The `.dc.html` files are Claude Design source. They need the Design runtime to render, so treat them as a reference for layout, copy and data, not as front-end code. `docs/design/tui-preview.html` opens in any browser.
 
-## Open decisions (ask Matt; don't assume)
-
-- Licence: AGPL + Apache split, or Apache throughout
-- Funded company with about six engineers, or a solo project. A solo scope would be the config engine plus `ox explain` on one box, with no controller.
-- Whether to reuse NetWatch's diagnosis work for health verdicts. NetWatch is a separate product.
-- Location of the steward entity and its board
-- Trademark check on "Netoxide"
-
 ## Working style
 
-Matt wants directness and precision. Flag inaccuracies and weak evidence explicitly rather than smoothing them over. The spec marks thin evidence (segment size, willingness to pay, all performance comparisons). Keep it marked.
+Be direct and precise. Flag inaccuracies and weak evidence explicitly rather than smoothing them over. Never claim the project is production ready.

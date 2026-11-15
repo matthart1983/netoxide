@@ -26,7 +26,7 @@ Each area has an easy path and an advanced path over the same config.
 | --- | --- |
 | Config schema | One typed TOML or JSON document per box: zones, interfaces, address groups, services, zone-pair filter rules, port forwards, outbound NAT, a DNS resolver and DHCP pools. Validation reports every problem with its location. The JSON Schema is published in [`schema/`](../schema/netoxide-config-1.schema.json). |
 | Rule compiler | Turns a config into an nftables ruleset built from sets and verdict maps, loaded as one atomic transaction. IPv4 and IPv6 in the same rules. |
-| Daemon `oxd` | Owns the config. Stores candidates, applies commits to the kernel through libnftables, runs the confirm clock, and serves an HTTP and JSON API on a Unix socket. |
+| Daemon `oxd` | Owns the config. Stores candidates, applies commits to the kernel through the `nft` program, runs the confirm clock, and serves an HTTP and JSON API on a Unix socket. |
 | Commit-confirm | A commit made with a confirm window reverts by itself unless confirmed. The revert replays the previous commit. It does not reboot. A daemon restart with a commit still unconfirmed also reverts it. |
 | Rollback and history | The last 100 commits are kept with author, time, reason and the SHA-256 of the config. Rollback is a new commit with an old config. |
 | DNS and DHCP | The box answers DNS for its inside networks, with DNSSEC checking and local names, and hands out IPv4 addresses with fixed addresses per device. They are applied and reverted together with the firewall rules. Served by dnsmasq, which the daemon starts and restarts. |
@@ -64,7 +64,7 @@ Each area has an easy path and an advanced path over the same config.
 - **The web UI is driven by a script, not yet by people.** `tests/web/run.sh` sets a blank box up from the setup code and walks every screen in headless Chrome and Firefox, against real rules in a namespace. Nobody other than its author has used it, and no person has been watched setting a box up for the first time.
 - **Nothing is loaded before the first commit** unless you start `oxd --lockdown`, so by default the kernel's own defaults apply until then.
 - **DNS and DHCP are new.** They are tested end to end in a namespace: `dig` against the resolver over IPv4 and IPv6, and a small DHCP client that gets a pool address and a fixed address through the firewall. No real device has used them. Websites can be blocked by name one at a time; there are no downloaded blocklists, and a device that uses another DNS server is not affected. There is no dynamic DNS, IPv6 is announce-only (no DHCPv6), and the daemon runs dnsmasq directly, not as a sandboxed systemd unit as the spec asks.
-- **dnsmasq is the only backend.** The spec names Unbound and Kea. The config does not name the program, so they can be added without changing configs.
+- **dnsmasq is the only backend.** Unbound and Kea are planned. The config does not name the program, so they can be added without changing configs.
 - **Interfaces are only partly managed.** The daemon creates VLAN interfaces and removes the ones it made. It does not create bridge, bond or PPPoE interfaces; the operating system still does. VLANs cannot be stacked. Stop the operating system's own network manager on the ports you give to Netoxide, or the two will both set addresses.
 - **The internet side is IPv4 DHCP or fixed addresses.** For IPv6 the box takes an address from the provider's router advertisements. It does not ask for a delegated prefix (DHCPv6-PD), so the inside network gets IPv6 only if you have a fixed prefix. The DNS servers a lease names are shown and not used; the resolver forwards to the servers in the config.
 - **The box's own traffic is allowed out unless you filter it.** Write a policy from `self` to a zone to filter what the box sends there.
@@ -90,4 +90,4 @@ Roughly in the order planned:
 8. HA, the fleet controller, a Terraform provider, and the OS image with signed A/B upgrades.
 9. An independent security audit before any 1.0.
 
-The spec dates a 1.0 at August 2028 for a team of six. That date is a plan, not a commitment.
+There is no date for a 1.0.

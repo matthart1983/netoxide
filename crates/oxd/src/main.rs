@@ -14,6 +14,7 @@ mod api;
 mod dhcp;
 mod limit;
 mod net;
+mod nft;
 mod services;
 mod setup;
 mod tls;
@@ -246,7 +247,7 @@ impl SystemApplier {
 }
 
 fn load(ruleset: &Value) -> Result<(), String> {
-    ox_libnft::run_json(&ruleset.to_string())
+    nft::run_json(&ruleset.to_string())
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -300,7 +301,7 @@ impl Applier for SystemApplier {
         Ok(())
     }
     fn dump(&mut self) -> Result<Value, String> {
-        let out = ox_libnft::run_json(&list_command().to_string()).map_err(|e| e.to_string())?;
+        let out = nft::run_json(&list_command().to_string()).map_err(|e| e.to_string())?;
         serde_json::from_str(&out).map_err(|e| format!("nftables printed invalid JSON: {e}"))
     }
     fn name(&self) -> &'static str {
@@ -459,6 +460,10 @@ async fn serve(args: Args) -> Result<(), String> {
     let applier: Box<dyn Applier> = if args.dry_run {
         Box::new(NullApplier::default())
     } else {
+        // Say so at once, not at the first change someone tries to apply.
+        if !nft::installed() {
+            return Err(nft::NftError::Missing.to_string());
+        }
         Box::new(SystemApplier::new(
             &args.state_dir,
             services::Dnsmasq::new(

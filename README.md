@@ -88,10 +88,8 @@ There is no AI on the box. The firewall calls no model and sends no data anywher
 - **Start:** [getting started](docs/getting-started.md) · [install](dist/README.md) · [Proxmox](docs/proxmox.md)
 - **Use:** [the interfaces](docs/interfaces.md) · [the config file](docs/config.md) · [remote access, tokens and roles](docs/access.md) · [every command and API route](docs/reference.md)
 - **Trust:** [status and limits](docs/status.md) · [threat model](docs/threat-model.md) · [if a change locks you out](docs/recovery.md) · [reporting a vulnerability](SECURITY.md)
-- **Project:** [roadmap](docs/roadmap.md) · [architecture and tests](docs/architecture.md) · [changelog](CHANGELOG.md) · [contributing](CONTRIBUTING.md) · [releasing](docs/releasing.md) · [spec](docs/spec.md) · [design](docs/design/README.md)
+- **Project:** [roadmap](docs/roadmap.md) · [architecture and tests](docs/architecture.md) · [changelog](CHANGELOG.md) · [contributing](CONTRIBUTING.md) · [releasing](docs/releasing.md) · [design](docs/design/README.md)
 
-## Licence and name
+## Licence
 
-**No licence has been chosen yet**, so nobody may use, copy or distribute the code. The choice is between AGPL-3.0-or-later with Apache-2.0 for the schema and client libraries, or Apache-2.0 throughout.
-
-"Netoxide" is a working name and has not been checked for trademark conflicts.
+MIT. See [LICENSE](LICENSE).

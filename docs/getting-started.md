@@ -7,7 +7,7 @@ Try Netoxide in a private namespace, then set a box up from nothing.
 
 ## Try it without touching your machine
 
-You need Rust 1.88 or later, `libnftables.so.1` (part of the `nftables` package), `unshare` from util-linux, and a kernel that allows unprivileged user namespaces.
+You need Rust 1.88 or later, the `nft` program (the `nftables` package), `unshare` from util-linux, and a kernel that allows unprivileged user namespaces.
 
 Run the daemon in a private, rootless network namespace. It loads rules into that namespace's kernel tables, not the host's.
 

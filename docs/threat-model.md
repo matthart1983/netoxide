@@ -25,6 +25,7 @@ What Netoxide is built to resist, what it relies on, and what it does not defend
 - **The compiler being right.** The rules loaded are whatever the compiler writes for a config. `ox explain` evaluates the same compiled form the kernel gets, so it cannot disagree with the loaded rules, but both would share a compiler mistake. Tests send real packets and compare the result with explain.
 - **TLS and the token.** An access token is as powerful as its role. It is sent on every request, so a stolen token works until it expires or is revoked. Only its SHA-256 is stored on the box.
 - **The fingerprint check.** `ox --remote` trusts a box by the fingerprint saved when it was added. If the wrong fingerprint is accepted at that moment, everything after is sent to the wrong machine.
+- **The `nft` program.** The daemon loads rules by running the distribution's `nft` with a fixed argument list and the ruleset on standard input. It looks for it in fixed system directories and never on `PATH`. Whoever can replace that file is already root.
 - **dnsmasq.** The daemon starts it with a fixed argument list and a config it wrote. A flaw in dnsmasq is exposed to whichever zones may use DNS or DHCP.
 - **The build.** Dependencies are checked against an advisory database and a licence list in CI. They have not been reviewed line by line.
 
@@ -47,6 +48,6 @@ If you review the code, these carry the most weight:
 - `crates/oxd/src/api.rs`: every route, the role check and the section check.
 - `crates/ox-store/src/auth.rs`: roles, and which config keys belong to which section.
 - `crates/ox-client/src/tls.rs`: the certificate pinning.
-- `crates/ox-libnft`: the only crate allowed `unsafe`.
+- `crates/oxd/src/nft.rs`: the one place the daemon runs `nft`, with a fixed argument list and the ruleset on standard input.
 
 Report a problem privately. See [SECURITY.md](../SECURITY.md).

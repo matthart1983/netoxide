@@ -2,6 +2,7 @@
 name = "ox-store"
 description = "Commit history, candidates, commit-confirm and the audit log"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

@@ -2,11 +2,11 @@
 
 Where Netoxide is going and in what order. The order is set by trust, not by features: each phase ends when there is evidence a stranger can check, such as a run on real hardware, outside users, a handled security report or a published audit. Dates are estimates for one maintainer.
 
-The research behind this order is summarised in [research/market-gap.md](research/market-gap.md). Home-lab users come first. Paid things come later and are aimed at businesses.
+Home-lab users come first. Paid things come later and are aimed at businesses.
 
 ## What stays free
 
-This is a proposal until the licence is chosen, and it will then be a commitment.
+The code is under the MIT licence. This is what the project commits to on top of that.
 
 - Every feature that runs on the box.
 - Every security fix, at the same time for everyone.
@@ -18,7 +18,7 @@ What may cost money later: support with a response time, hosted services a busin
 
 No new users yet. The project gets what it needs to be used at all.
 
-- A licence, and a name that has been checked.
+- A licence and a settled name. **Done:** MIT, and the name stays.
 - 30 days on real hardware with SELinux enforcing.
 - WireGuard tested against the official apps, and the importer against a real pfSense backup.
 - Signed release archives.

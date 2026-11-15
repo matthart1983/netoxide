@@ -4,12 +4,10 @@ How a version goes out. The workflow in `.github/workflows/release.yml` does the
 
 ## Before the first release
 
-These block 0.1.0 and none of them is code:
+The licence is MIT and the name is settled. What is left before 0.1.0 is tagged:
 
-1. **Choose a licence.** The repository has none, so nobody may use what a release contains. Add `LICENSE`, set `license` in the workspace `Cargo.toml`, and remove `[licenses.private] ignore = true` from `deny.toml`.
-2. **Check the name.** "Netoxide" has had no trademark check and sits close to Oxide Computer Company.
-3. **Merge the stacked pull requests** into `master`, oldest first.
-4. **Decide whether the repository goes public.** It is private today.
+1. Make the repository public, then turn on private vulnerability reporting and require CI on `master`. Neither can be switched on while it is private.
+2. Run the checks below on the commit to release.
 
 ## Each release
 
@@ -38,7 +36,7 @@ These block 0.1.0 and none of them is code:
 
 ## What a release contains
 
-`oxd`, `ox` and `netoxide-tui` built for x86-64 Linux against glibc, the systemd unit, the install steps, the example configs and the JSON Schema. The binaries load `libnftables.so.1` at run time, so the `nftables` package must be installed on the box.
+`oxd`, `ox` and `netoxide-tui` built for x86-64 Linux against glibc, the systemd unit, the install steps, the example configs and the JSON Schema. The daemon runs the `nft` program to load rules, so the `nftables` package must be installed on the box.
 
 The archive is not signed. Signing keys belong to the steward entity, which does not exist yet.
 
