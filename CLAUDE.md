@@ -109,9 +109,11 @@ walk-through in Firefox, which is stricter than Chrome about input patterns.
 
 ## Docs and releases
 
-The top-level `README.md` is the front page: status, the terminal and browser
-overviews with pictures, a short feature list, a two-minute try, limits. Keep
-it short. Detail lives in `docs/`: `getting-started.md`, `config.md`,
+The top-level `README.md` is the front page, under 900 words: what it is,
+status, the demo recording, a short feature list, the three interfaces with
+one picture, a two-minute try, install, limits, and grouped links. Keep it
+that short. A new feature gets at most a few words there; screens, pictures
+and detail go in `docs/`. Detail lives in `docs/`: `getting-started.md`, `config.md`,
 `interfaces.md`, `access.md`, `reference.md` (every command and route),
 `status.md` (what works, limits, not built), `architecture.md` (crates, design
 rules, tests). `roadmap.md` is the public plan (trust-gated phases; the build order for

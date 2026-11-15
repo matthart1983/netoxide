@@ -28,11 +28,19 @@ These fit a terminal of 80×24.
 | Review | One waiting change in sentences, then in detail | `enter` applies it safely, `d` twice discards it |
 | Settings | The basics, and a switch for each detailed screen | `↑↓` choose, `enter` switch |
 
+![Home](images/tui-home.png)
+
 The Home menu has the same tasks as the web UI: add a network, let something in from the internet, give a phone or laptop remote access, block a device or a website, and check whether something is blocked. A task is a short form. `tab` moves between its lines, the left and right arrows change an answer that has a fixed set, `enter` sends it and `esc` leaves without changing anything. Sending a form saves a waiting change and takes you to Review. Nothing is applied until you press enter there.
+
+![A task: add a network](images/tui-task.png)
+
+![Review](images/tui-review.png)
 
 Applying from Review always uses a two-minute timer. While it runs, a bar at the top counts down: `y` keeps the change and `r` undoes it, from any screen.
 
 Adding a VPN device shows its settings once, with a code to scan when the terminal is big enough (about 80×45) and as text otherwise. `esc` closes them for good.
+
+![Access](images/tui-access.png)
 
 A grid cell is Allowed, Blocked, or it names what its own rules do. The last kind, and anything from the internet, is not changed from the grid.
 
@@ -79,6 +87,14 @@ Start the daemon with an HTTPS listener (`OXD_ARGS=--listen [::]:8443` in `/etc/
 | Settings | The basics, and the switches for the advanced screens |
 
 A grid cell is Allowed, Blocked, or it names what its own rules do ("Only web, ping", "3 rules", "1 service let in"). The last kind cannot be changed from the grid.
+
+![Setup: choose which port goes to the internet and which are your own network](images/web-setup.png)
+
+![Access: a grid of networks with Allowed and Blocked cells](images/web-access.png)
+
+![Review: a change said in two sentences, and Apply safely](images/web-review.png)
+
+![Settings: the advanced features as switches, all off](images/web-settings.png)
 
 Applying a change always starts a two-minute timer. A bar at the top of every screen counts down with Keep it and Undo now.
 
