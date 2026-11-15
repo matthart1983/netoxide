@@ -1,5 +1,6 @@
-// Drives the web interface in a headless Chrome, as a person would: types,
-// clicks, reads the page. It needs only Node 22 or later and Chrome.
+// Drives the web interface in a headless browser, as a person would: types,
+// clicks, reads the page. It needs only Node 22 or later and Chrome, or
+// Firefox with BROWSER=firefox.
 //
 //   node tests/web/drive.mjs <base-url> <setup-code> <out-dir>
 //
@@ -18,57 +19,108 @@ if (!base || !code || !out) {
 }
 mkdirSync(out, { recursive: true });
 
-const chrome = spawn(process.env.CHROME || 'google-chrome', [
-  '--headless=new', '--disable-gpu', '--no-first-run', '--remote-debugging-port=0',
-  // Inside a user namespace Chrome cannot build its own sandbox.
-  ...(process.env.CHROME_ARGS ? process.env.CHROME_ARGS.split(' ') : []),
-  '--window-size=1280,900', '--user-data-dir=' + mkdtempSync(join(tmpdir(), 'ox-web-')), 'about:blank',
-], { stdio: ['ignore', 'ignore', 'pipe'] });
-const wsUrl = await new Promise((resolve, reject) => {
+// Two browsers, two remote-control protocols, one small interface:
+// `evaluate(expression)` returns the JSON text of the expression's value,
+// `capture()` a PNG as base64, `open(url)` loads a page.
+const which = process.env.BROWSER || 'chrome';
+const profile = mkdtempSync(join(tmpdir(), 'ox-web-'));
+const extra = process.env.BROWSER_ARGS ? process.env.BROWSER_ARGS.split(' ') : [];
+const errors = [];
+const listening = (child, pattern) => new Promise((resolve, reject) => {
   let err = '';
-  chrome.stderr.on('data', (d) => {
+  child.stderr.on('data', (d) => {
     err += d;
-    const m = err.match(/DevTools listening on (ws:\/\/\S+)/);
+    const m = err.match(pattern);
     if (m) resolve(m[1]);
   });
-  setTimeout(() => reject(new Error('Chrome did not start: ' + err)), 15000);
+  setTimeout(() => reject(new Error(which + ' did not start: ' + err.slice(-600))), 30000);
 });
-const port = new URL(wsUrl).port;
-const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
-await new Promise((r) => ws.addEventListener('open', r));
-let next = 1;
-const waiting = new Map();
-const errors = [];
-ws.addEventListener('message', (m) => {
-  const msg = JSON.parse(m.data);
-  if (msg.id && waiting.has(msg.id)) { waiting.get(msg.id)(msg); waiting.delete(msg.id); }
-  if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text);
-  if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') errors.push(msg.params.args.map((a) => a.value).join(' '));
-});
-const send = (method, params = {}) => new Promise((resolve) => {
-  const id = next++;
-  waiting.set(id, resolve);
-  ws.send(JSON.stringify({ id, method, params }));
-});
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const js = async (expression) => {
-  const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-  if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || 'script failed');
-  return r.result.result.value;
+const socket = async (url) => {
+  const ws = new WebSocket(url);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve);
+    ws.addEventListener('error', () => reject(new Error('cannot connect to ' + url)));
+  });
+  let next = 1;
+  const waiting = new Map();
+  const events = [];
+  ws.addEventListener('message', (m) => {
+    const msg = JSON.parse(m.data);
+    if (msg.id && waiting.has(msg.id)) { waiting.get(msg.id)(msg); waiting.delete(msg.id); } else events.forEach((f) => f(msg));
+  });
+  return {
+    send: (method, params = {}) => new Promise((resolve) => {
+      const id = next++;
+      waiting.set(id, resolve);
+      ws.send(JSON.stringify({ id, method, params }));
+    }),
+    on: (f) => events.push(f),
+  };
 };
+
+let browser;
+let evaluate;
+let capture;
+let open;
+if (which === 'firefox') {
+  // WebDriver BiDi.
+  browser = spawn(process.env.FIREFOX || 'firefox', ['--headless', '--remote-debugging-port=0', '--profile', profile,
+    '--width=1280', '--height=900', ...extra, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const ws = await socket((await listening(browser, /WebDriver BiDi listening on (ws:\/\/\S+)/)) + '/session');
+  const must = async (method, params) => {
+    const r = await ws.send(method, params);
+    if (r.type === 'error') throw new Error(method + ': ' + r.message);
+    return r.result;
+  };
+  await must('session.new', { capabilities: {} });
+  await must('session.subscribe', { events: ['log.entryAdded'] });
+  ws.on((msg) => {
+    if (msg.method === 'log.entryAdded' && msg.params.level === 'error') errors.push(msg.params.text);
+  });
+  const context = (await must('browsingContext.getTree', {})).contexts[0].context;
+  open = (url) => must('browsingContext.navigate', { context, url, wait: 'complete' });
+  evaluate = async (expression) => {
+    const r = await must('script.evaluate', { expression, target: { context }, awaitPromise: true, resultOwnership: 'none' });
+    if (r.type !== 'success') throw new Error(r.exceptionDetails?.text || 'script failed');
+    return r.result.value;
+  };
+  capture = async () => (await must('browsingContext.captureScreenshot', { context, origin: 'document' })).data;
+} else {
+  // The Chrome DevTools Protocol.
+  browser = spawn(process.env.CHROME || 'google-chrome', ['--headless=new', '--disable-gpu', '--no-first-run',
+    '--remote-debugging-port=0', '--window-size=1280,900', '--user-data-dir=' + profile, ...extra, 'about:blank'],
+  { stdio: ['ignore', 'ignore', 'pipe'] });
+  const root = await listening(browser, /DevTools listening on (ws:\/\/\S+)/);
+  const targets = await (await fetch(`http://127.0.0.1:${new URL(root).port}/json`)).json();
+  const ws = await socket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
+  ws.on((msg) => {
+    if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text);
+    if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') errors.push(msg.params.args.map((a) => a.value).join(' '));
+  });
+  await ws.send('Page.enable');
+  await ws.send('Runtime.enable');
+  open = (url) => ws.send('Page.navigate', { url });
+  evaluate = async (expression) => {
+    const r = await ws.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || 'script failed');
+    return r.result.result.value;
+  };
+  capture = async () => (await ws.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })).result.data;
+}
+const quit = (status) => { browser.kill(); process.exit(status); };
+// Every value crosses as JSON text, which both protocols carry the same way.
+const js = async (expression) => JSON.parse(await evaluate(`Promise.resolve(${expression}).then((v) => JSON.stringify(v === undefined ? null : v))`));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const text = () => js('document.body.innerText');
 let step = 0;
 const shot = async (name) => {
-  const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
   step += 1;
-  writeFileSync(join(out, String(step).padStart(2, '0') + '-' + name + '.png'), Buffer.from(r.result.data, 'base64'));
+  writeFileSync(join(out, String(step).padStart(2, '0') + '-' + name + '.png'), Buffer.from(await capture(), 'base64'));
 };
 const fail = async (why) => {
   await shot('FAILED');
   console.error('FAILED: ' + why + '\n--- page ---\n' + (await text()).slice(0, 1500));
-  chrome.kill();
-  process.exit(1);
+  quit(1);
 };
 // Waits until the page says something, as a person waits for it to appear.
 const see = async (what, secs = 6) => {
@@ -113,9 +165,7 @@ const flip = async (id) => {
 };
 const tabs = () => js(`[...document.querySelectorAll('nav button')].map((b) => b.innerText)`);
 
-await send('Page.enable');
-await send('Runtime.enable');
-await send('Page.navigate', { url: base + '/' });
+await open(base + '/');
 
 // ── first-run setup ──
 await see('Set up this box');
@@ -285,6 +335,5 @@ await notSee('Save your access token now');
 await shot('home-clean');
 
 if (errors.length) await fail('the page reported errors: ' + errors.join(' | '));
-console.log('ok: setup, Home, Access, Review, Settings and every advanced screen; ' + step + ' pictures in ' + out);
-chrome.kill();
-process.exit(0);
+console.log('ok (' + which + '): setup, Home, Access, Review, Settings and every advanced screen; ' + step + ' pictures in ' + out);
+quit(0);

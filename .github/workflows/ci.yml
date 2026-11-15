@@ -46,6 +46,8 @@ jobs:
         env:
           OX_WEB_KERNEL: "1"
         run: tests/web/run.sh "$RUNNER_TEMP/web-pictures"
+      - name: Web UI in Firefox
+        run: BROWSER=firefox tests/web/run.sh "$RUNNER_TEMP/web-pictures-firefox"
       - name: Keep the pictures
         if: always()
         uses: actions/upload-artifact@v4

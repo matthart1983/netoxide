@@ -166,11 +166,16 @@ note "stage $stage on $(uname -r), systemd $(systemctl --version | head -n1 | cu
 
 if [ "$stage" = 1 ]; then
     # --- install, as dist/README.md says ---
-    install -m 0755 $T/bin/oxd $T/bin/ox /usr/bin/
-    install -m 0644 $T/dist/oxd.service /etc/systemd/system/oxd.service
-    systemctl daemon-reload
-    check "install: systemctl enable --now oxd" systemctl enable --now oxd
+    refute "install: the script refuses to guess when it cannot find the programs" sh $T/dist/install.sh --bin-dir=/nonexistent
+    check "install: dist/install.sh installs and starts the daemon" bash -c "sh $T/dist/install.sh --bin-dir=$T/bin >/tmp/install.out 2>&1"
+    check "install: it prints the setup code and where to open the page" bash -c "grep -q 'enter the setup code:  [A-Z0-9]\{4\}-[A-Z0-9]\{4\}' /tmp/install.out && grep -q ':8443/' /tmp/install.out"
+    check "install: the service is enabled" systemctl is-enabled oxd
     check "install: the daemon answers" wait_for 5 ox status
+    check "install: running the script again changes nothing and still works" bash -c "sh $T/dist/install.sh --bin-dir=$T/bin >/tmp/install2.out 2>&1 && ox status >/dev/null"
+    # The rest of this test turns the web interface on itself, later.
+    rm /etc/netoxide/oxd.env
+    systemctl restart oxd
+    wait_for 10 ox status
     note "$(systemd-analyze security oxd --no-pager 2>/dev/null | tail -n1)"
     refute "install: nothing is loaded before the first commit" bash -c 'nft list tables | grep -q netoxide'
 
@@ -398,12 +403,10 @@ check "reboot: the audit log still verifies" ox audit
 pkill -f "oxd --state-dir $STATE/remote"
 sleep 1
 
-# --- remove it, as dist/README.md says ---
-systemctl disable --now oxd
-nft delete table inet netoxide
-rm /etc/systemd/system/oxd.service /usr/bin/oxd /usr/bin/ox
-rm -r /var/lib/netoxide
-ip link del wg0
+# --- remove it, with the same script ---
+check "remove: dist/install.sh --remove" sh $T/dist/install.sh --remove
+refute "remove: the programs are gone" bash -c 'command -v oxd || command -v ox'
+refute "remove: its state is gone" test -e /var/lib/netoxide
 refute "remove: no daemon left" pgrep -x oxd
 refute "remove: no dnsmasq of ours left" pgrep -f 'dnsmasq.*netoxide'
 refute "remove: no tunnel left" ip link show wg0

@@ -37,7 +37,7 @@ jobs:
           name="netoxide-$VERSION-x86_64-linux"
           mkdir -p "$name/dist" "$name/examples"
           cp target/release/oxd target/release/ox target/release/netoxide-tui "$name/"
-          cp dist/oxd.service dist/README.md "$name/dist/"
+          cp dist/oxd.service dist/README.md dist/install.sh "$name/dist/"
           cp examples/*.toml "$name/examples/"
           cp README.md CHANGELOG.md SECURITY.md "$name/"
           cp schema/netoxide-config-1.schema.json "$name/"

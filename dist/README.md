@@ -11,14 +11,24 @@ console access, not on a box you can only reach over the network.
 - `dnsmasq`, if the box will answer DNS or hand out addresses
 - Rust 1.88 or later to build
 
-## Build and install
+## Install
 
-From a release archive, unpack it and use `oxd` and `ox` from its top
-directory in place of `target/release/` below; there is nothing to build.
-From source:
+One script does it, from an unpacked release archive or from a source tree
+built with `cargo build --release`:
 
 ```sh
-cargo build --release
+sudo sh dist/install.sh              # add --packages to install nftables and dnsmasq too
+```
+
+It installs the programs and the service, turns on the web interface, starts
+the daemon, and prints a setup code with the addresses to open. It tells you
+about anything on the machine that would conflict. `sudo sh dist/install.sh
+--remove` takes it all off again. For a VM on Proxmox, see
+[`docs/proxmox.md`](../docs/proxmox.md).
+
+By hand, the same thing is:
+
+```sh
 sudo install -m 0755 target/release/oxd target/release/ox /usr/bin/
 sudo install -m 0644 dist/oxd.service /etc/systemd/system/oxd.service
 sudo systemctl daemon-reload
@@ -134,6 +144,8 @@ bytes per rule, and connection-tracking table use. On the HTTPS listener it
 needs a token; a viewer token is enough.
 
 ## Removing it
+
+`sudo sh dist/install.sh --remove` does all of this. By hand:
 
 ```sh
 sudo systemctl disable --now oxd

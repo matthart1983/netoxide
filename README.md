@@ -39,7 +39,8 @@ ox apply starter                       # applied safely: undoes itself unless yo
 ox access                              # who can reach what
 ox network add "Guest Wi-Fi" --port eth1 --vlan 20   # a network of its own, kept apart
 ox forward --name web --port tcp/443 --to 192.168.10.20
-ox block 192.168.10.66 --name "Smart TV"
+ox block 192.168.10.66 --name "Smart TV"            # a device, by address
+ox block example.com                                 # a website, by name
 ox vpn add laptop --endpoint home.example.net --qr
 ox explain --src 192.168.10.50 --dst 1.1.1.1 --proto tcp --dport 443
 ```
@@ -70,7 +71,7 @@ The web interface is simple by default. Everyone sees three screens: Home, Acces
 
 **Advanced, when you want it.** The full rule list, address translation, interfaces, candidates and the config editor, the packet tracer, the audit log, and tokens and roles are each a switch. A switch only shows or hides a screen. It never changes what the box does.
 
-The interface is three static files compiled into the daemon, with no build step and nothing loaded from elsewhere. A script drives all of the above in a headless Chrome on every change ([`tests/web/`](tests/web/run.sh)); the pictures here come from it.
+The interface is three static files compiled into the daemon, with no build step and nothing loaded from elsewhere. A script drives all of the above in headless Chrome and Firefox on every change ([`tests/web/`](tests/web/run.sh)); the pictures here come from it.
 
 ## What it does
 
@@ -78,6 +79,8 @@ The interface is three static files compiled into the daemon, with no build step
 - **Safe changes.** Every change is a named candidate. `ox plan` shows what it would change. A commit with a confirm window reverts by itself unless you confirm it. Rollback is one command, and every action is in a hash-chained audit log.
 - **Explain.** Ask what happens to one packet and get the rule that decides, under the running config or a candidate that is not applied yet.
 - **A whole router.** DNS with DNSSEC checking, DHCP, IPv6 announcements, an internet-side address from the provider by DHCP, interface addresses and routes.
+- **Networks kept apart.** One step adds a network of its own for guests or cameras, as a VLAN with its own addresses. It reaches the internet if you say so and none of your other networks until you allow it.
+- **Blocking.** `ox block` takes a device's address and drops everything it sends, or a website's name and stops every device looking it up.
 - **VPN.** WireGuard through the kernel's own implementation. One command adds a phone or laptop and prints its config.
 - **Access control.** Access tokens with roles. A role can be held to parts of the config, so a network admin cannot change firewall rules. A commit can require a second person's approval.
 - **Remote management.** `ox --remote <name>` manages a box over HTTPS, with the box's certificate pinned by fingerprint as SSH does with host keys.
@@ -118,9 +121,18 @@ cargo run -p netoxide-tui --release -- --socket $OX_SOCKET
 
 ## Install on a box
 
-[dist/README.md](dist/README.md) has the steps for a Linux machine with systemd: install the binaries and the unit, first start, the web interface, lockdown, monitoring and removal. A test boots a virtual machine and runs those steps on every run. Nobody has run them on hardware yet.
+One script installs it on a Linux machine with systemd, from a release archive or a source build:
 
-There is no installer and no OS image. You install Netoxide on an existing Linux machine, and that machine's own network manager must leave the ports you give to Netoxide alone.
+```sh
+sudo sh dist/install.sh --packages
+```
+
+It installs the programs and the service, turns on the web interface, starts the daemon and prints a setup code with the address to open. From there you set the box up in a browser. `sudo sh dist/install.sh --remove` takes it off again.
+
+- [docs/proxmox.md](docs/proxmox.md) walks through a VM on Proxmox with two network cards.
+- [dist/README.md](dist/README.md) has the same steps by hand, plus lockdown, monitoring and removal.
+
+A test boots a virtual machine, runs this script, and checks the result through a reboot and removal, on every run. Nobody has run it on hardware or on Proxmox itself yet. There is no OS image: you install Netoxide on an existing Linux machine, and that machine's own network manager must leave the ports you give to Netoxide alone.
 
 ## Who it is for
 
@@ -135,10 +147,13 @@ The research behind the project is in [docs/research/market-gap.md](docs/researc
 
 The short version. The full list is in [docs/status.md](docs/status.md#limits-today).
 
-- It has never run on real hardware or carried real traffic. The furthest it has been is a virtual machine on one developer's computer, with SELinux off.
-- Nobody outside the project has reviewed the security of any of it.
+- **It has never run on real hardware or carried real traffic.** The furthest it has been is a virtual machine on one developer's computer, with SELinux off. This needs a person with a spare machine, and it is the next thing the project needs.
+- **Nobody outside the project has reviewed the security of any of it.**
+- **Nobody but its author has used the interface.** Scripts drive it in Chrome and Firefox on every change. No person has been watched setting a box up for the first time.
+- **No phone has scanned the VPN QR code.** A decoder library reads it back in a test.
+- **Website blocking is by name, one at a time.** There are no downloaded blocklists yet, and a device that uses another DNS server is not affected.
 - The daemon creates VLAN interfaces. It does not create bridge, bond or PPPoE interfaces; the operating system still does.
-- No IPv6 prefix delegation, no multi-WAN, no routing protocols, no traffic shaping, no intrusion detection, no high availability.
+- No IPv6 prefix delegation, no dynamic DNS, no multi-WAN, no routing protocols, no traffic shaping, no intrusion detection, no high availability.
 - The VPN is WireGuard only. It has been tested between two Netoxide boxes, not against the official WireGuard apps.
 - No single sign-on. Access is by token.
 - No fleet controller, Terraform provider or OS image.
@@ -147,7 +162,7 @@ The short version. The full list is in [docs/status.md](docs/status.md#limits-to
 
 Most of the code, tests and documentation here were written by an AI coding assistant, Claude, working under the direction of one human maintainer who decides what gets built and merges it. Commits made that way carry a `Co-Authored-By` trailer.
 
-A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 177 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
+A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 179 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
 
 There is no AI on the box. The firewall does not call a model, send data anywhere, or include an assistant.
 
@@ -157,6 +172,7 @@ There is no AI on the box. The firewall does not call a model, send data anywher
 | --- | --- |
 | [docs/getting-started.md](docs/getting-started.md) | Try it in a namespace, then set a box up from nothing |
 | [dist/README.md](dist/README.md) | Install on a machine with systemd |
+| [docs/proxmox.md](docs/proxmox.md) | Run it as a virtual machine on Proxmox |
 | [docs/config.md](docs/config.md) | The config file, how a change reaches the kernel, explain, pfSense import |
 | [docs/interfaces.md](docs/interfaces.md) | The terminal UI and the web UI, screen by screen |
 | [docs/access.md](docs/access.md) | Managing a box from another machine, tokens and roles |
