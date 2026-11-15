@@ -19,10 +19,10 @@ The first preview. A single-box firewall and router that passes its tests in net
 - **Backup and restore.** `ox backup` and `ox restore` move a box to other hardware with its VPN keys, roles and settings.
 - **VPN.** WireGuard over the kernel's netlink interface, with `ox vpn add` to add a device in one step, and a QR code for phones.
 - **Explain and plan.** What happens to one packet and which rule decides; what a candidate changes and which observed flows would get a different verdict.
-- **Simple by default.** The web interface opens on Home, Access and Settings; the detailed screens are opt-in switches. `ox --help` shows the everyday commands, with `ox apply`, `ox keep` and `ox undo` in plain words.
+- **Simple by default.** The web interface and the terminal UI open on Home, Access, Review and Settings; the detailed screens are opt-in switches. The terminal UI does the everyday tasks from a menu and fits an 80×24 terminal. `ox --help` shows the everyday commands, with `ox apply`, `ox keep` and `ox undo` in plain words.
 - **Setup from a browser**, with a one-time code shown on the box.
 - **Guided setup and one-step changes.** `ox init`, `ox forward`, `ox block`, `ox access`, and `ox network add` for a guest or camera network kept apart from the rest.
-- **Interfaces.** The `ox` command line tool, a terminal UI that opens on a Home screen, and a web UI served by the daemon over HTTPS.
+- **Interfaces.** The `ox` command line tool, a terminal UI, and a web UI served by the daemon over HTTPS.
 - **Access control.** The Unix socket identifies the caller from the kernel. The HTTPS listener takes access tokens with roles. A role is a set of actions that can be held to the firewall, network, services or VPN part of the config. Four-eyes approval is optional.
 - **Remote management.** `ox --remote <name>` and the terminal UI over HTTPS, with the box's certificate pinned by fingerprint.
 - **Listener limits.** 256 connections, 32 per IPv4 address or IPv6 /64, 30 seconds for request headers, closed after 120 seconds with no bytes.

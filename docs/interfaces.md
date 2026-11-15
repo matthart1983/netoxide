@@ -7,31 +7,53 @@ Both show the same daemon. Use whichever you like; they can be open at once.
 
 ## The terminal UI
 
-![Home](images/tui-home.png)
+![A recording of the terminal UI](images/tui-demo.gif)
 
 ```sh
-cargo run -p netoxide-tui --release -- --socket $OX_SOCKET
+netoxide-tui --live                 # on the box
+netoxide-tui --remote <name>        # from another machine, a box saved with `ox remote add`
+cargo run -p netoxide-tui --release -- --socket $OX_SOCKET   # from a checkout
 ```
 
-It needs a terminal of at least 132×34. Everything on screen comes from the daemon and is read again once a second.
+Everything on screen comes from the daemon and is read again once a second. Like the web UI it has two layers.
 
-It opens with two tabs, Home and Changes. `A` shows the detailed screens as further tabs and hides them again. It changes nothing on the box.
+### The plain screens
+
+These fit a terminal of 80×24.
 
 | Screen | Shows | Keys |
 | --- | --- | --- |
-| Home | Whether the firewall is running, the networks and what each can reach, the grid of who can reach what, what is let in | `a` go to the waiting change |
-| Changes | Candidates, the plan for the selected one, the running commit | `c` commit, `w` confirm window |
-| Policy (advanced) | Zone pairs and their rules from the running config, with the kernel's packet counter per rule | `←→` pair, `↑↓` rule, `x` explain a packet the rule is about |
-| NAT (advanced) | Port forwards and outbound NAT | |
-| Interfaces (advanced) | Interfaces, zones and addresses from the running config | |
-| Explain (advanced) | A packet you type, judged by the running config and the selected candidate side by side | `e` edit, `enter` run, `m` compare on or off |
-| Audit (advanced) | The audit log, newest first | `↑↓` |
+| Home | Whether the firewall is running, your networks with what each can reach and how many devices have an address, and a menu of things to do | `↑↓` choose, `enter` open, `a` go to the waiting change |
+| Access | Who can reach what, as a grid, the selected pair in a sentence, and what is let in from the internet | arrows move, `enter` allows or blocks the pair |
+| Review | One waiting change in sentences, then in detail | `enter` applies it safely, `d` twice discards it |
+| Settings | The basics, and a switch for each detailed screen | `↑↓` choose, `enter` switch |
+
+The Home menu has the same tasks as the web UI: add a network, let something in from the internet, give a phone or laptop remote access, block a device or a website, and check whether something is blocked. A task is a short form. `tab` moves between its lines, the left and right arrows change an answer that has a fixed set, `enter` sends it and `esc` leaves without changing anything. Sending a form saves a waiting change and takes you to Review. Nothing is applied until you press enter there.
+
+Applying from Review always uses a two-minute timer. While it runs, a bar at the top counts down: `y` keeps the change and `r` undoes it, from any screen.
+
+Adding a VPN device shows its settings once, with a code to scan when the terminal is big enough (about 80×45) and as text otherwise. `esc` closes them for good.
+
+A grid cell is Allowed, Blocked, or it names what its own rules do. The last kind, and anything from the internet, is not changed from the grid.
+
+### The detailed screens
+
+Each is a switch on Settings and adds a tab. `A` switches all of them on or off at once. The choice is kept in `~/.config/netoxide/tui-screens`. A switch changes nothing on the box. These screens need a terminal of at least 132×34.
+
+| Screen | Shows | Keys |
+| --- | --- | --- |
+| Policy | Zone pairs and their rules from the running config, with the kernel's packet counter per rule | `←→` pair, `↑↓` rule, `x` explain a packet the rule is about |
+| NAT | Port forwards and outbound NAT | |
+| Interfaces | Interfaces, zones and addresses from the running config | |
+| Changes | Candidates, the technical plan for the selected one, the running commit | `c` commit with a reason, `w` confirm window (30 s, 2, 5 or 10 min) |
+| Explain | A packet you type, judged by the running config and the selected candidate side by side | `e` edit, `enter` run, `m` compare on or off |
+| Audit | The audit log, newest first | `↑↓` |
 
 ![The Policy screen](images/tui-policy.png)
 
-`tab` and the digits move between the tabs that are showing. `y` keeps an unconfirmed commit and `r` undoes it, from any screen. A commit from the TUI always has a confirm window (30 s, 2, 5 or 10 min) and asks for a reason first.
+`tab` and the digits move between the tabs that are showing, and `?` lists the keys.
 
-The TUI cannot edit rules or save candidates yet. Write the config in a file and use `ox candidate save`. Run it without `--socket` to see the eleven designed screens with sample data.
+The terminal UI cannot edit a single rule yet, and it has no first-run setup: set a new box up with `ox init` or from a browser. Run it without `--socket`, `--live` or `--remote` to see the eleven designed screens with sample data.
 
 ## The web UI
 
