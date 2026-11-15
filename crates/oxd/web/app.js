@@ -447,11 +447,12 @@ function startTask(form) {
 }
 
 function task() {
-  const forms = { forward: forwardForm, block: blockForm, vpn: vpnForm };
+  const forms = { forward: forwardForm, block: blockForm, vpn: vpnForm, network: networkForm };
   return [vpnDevicePanel(), (forms[state.form] || forwardForm)()];
 }
 
 const TASKS = [
+  ['network', 'Add a network, such as one for guests'],
   ['forward', 'Let something in from the internet'],
   ['vpn', 'Give a phone or laptop remote access'],
   ['block', 'Block a device'],
@@ -614,6 +615,7 @@ function access() {
         ? table(['What', 'Outside port', 'Goes to'], hm.let_in.map((f) => [f.name, f.service, f.to]))
         : h('p', { class: 'dim' }, 'Nothing. Everything arriving from the internet is blocked.'),
       may('edit') ? h('div', { class: 'row' },
+        h('button', { onclick: () => startTask('network') }, 'Add a network'),
         h('button', { onclick: () => startTask('forward') }, 'Let something in'),
         h('button', { onclick: () => startTask('vpn') }, 'Give a phone or laptop remote access'),
         h('button', { onclick: () => startTask('block') }, 'Block a device')) : null),
@@ -865,6 +867,7 @@ function vpnDevicePanel() {
 const draftForward = { name: '', port: 'tcp/443', to: '', to_port: '', address: '' };
 const draftBlock = { address: '', name: '' };
 const draftVpn = { name: '', endpoint: '', public_key: '' };
+const draftNetwork = { name: '', port: '', vlan: '', address: '', internet: true };
 
 function saved(result) {
   const fromTask = state.view === 'task';
@@ -915,6 +918,35 @@ function blockForm() {
       field('Device address', 'address', draftBlock, { required: true, placeholder: '192.168.10.66' }),
       field('What is it?', 'name', draftBlock, { placeholder: 'Smart TV' })),
     h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit' }, 'Review'),
+      h('button', { type: 'button', onclick: cancelTask }, 'Cancel')));
+}
+
+function networkForm() {
+  // An inside port that is a real port: not the internet side, not a VLAN.
+  const ifaces = Object.entries((state.running && state.running.config.interfaces) || {})
+    .filter(([, i]) => !i.default_route && !i.vlan).map(([name]) => name);
+  if (!ifaces.includes(draftNetwork.port)) draftNetwork.port = ifaces[0] || '';
+  const go = (e) => {
+    e.preventDefault();
+    const body = { name: draftNetwork.name, port: draftNetwork.port, vlan: Number(draftNetwork.vlan), internet: draftNetwork.internet };
+    if (draftNetwork.address) body.address = draftNetwork.address;
+    act(() => call('POST', '/v1/actions/network', body), (r) => { draftNetwork.name = ''; draftNetwork.vlan = ''; draftNetwork.address = ''; return saved(r); });
+  };
+  return h('form', { class: 'panel', onsubmit: go },
+    h('h2', null, 'Add a network'),
+    h('p', { class: 'dim' }, 'A network of its own for guests, cameras or anything you want kept apart. Devices on it get an address and DNS from the box. It reaches none of your other networks, and they do not reach it, until you allow that under Access.'),
+    h('div', { class: 'fields' },
+      field('What is it for?', 'name', draftNetwork, { required: true, maxlength: '40', placeholder: 'Guest Wi-Fi' }),
+      h('div', null, h('label', { for: 'f-port' }, 'On which port?'),
+        h('select', { id: 'f-port', onchange: (e) => { draftNetwork.port = e.target.value; } },
+          ifaces.map((n) => h('option', { value: n, selected: n === draftNetwork.port }, n)))),
+      field('VLAN number', 'vlan', draftNetwork, { required: true, inputmode: 'numeric', pattern: '[0-9]{1,4}', placeholder: '20' }),
+      field("The box's address on it", 'address', draftNetwork, { placeholder: 'chosen for you' })),
+    h('div', { class: 'check' },
+      h('input', { type: 'checkbox', id: 'f-internet', checked: draftNetwork.internet, onchange: (e) => { draftNetwork.internet = e.target.checked; } }),
+      h('label', { for: 'f-internet' }, 'Devices on it can reach the internet')),
+    h('p', { class: 'dim' }, 'The network travels on that port as a VLAN. Set the switch or access point there to use the same VLAN number for it.'),
+    h('div', { class: 'row' }, h('button', { class: 'primary', type: 'submit', disabled: !ifaces.length }, 'Review'),
       h('button', { type: 'button', onclick: cancelTask }, 'Cancel')));
 }
 

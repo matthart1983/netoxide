@@ -93,6 +93,7 @@ Everyday changes are single commands. Each reads the running config, makes the c
 ```sh
 ox forward --name "Home Assistant" --port tcp/443 --to 192.168.10.20:8123
 ox block 192.168.10.66 --name "Smart TV"
+ox network add "Guest Wi-Fi" --port eth1 --vlan 20   # a network of its own
 ox access                          # who can reach what, as a grid
 ox access block lan wan            # stop one network reaching another
 ox apply                           # apply the waiting change, with a two-minute undo timer

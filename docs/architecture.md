@@ -80,7 +80,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 174 tests. Thirteen of them run a daemon inside a private, rootless network namespace, most of those against the real kernel:
+There are 177 tests. Thirteen of them run a daemon inside a private, rootless network namespace, most of those against the real kernel:
 
 - The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
 - The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.

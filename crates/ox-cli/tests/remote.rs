@@ -662,6 +662,42 @@ fn ox_manages_a_box_from_another_machine() {
     good(&b.ox(&["-r", "home", "apply", "allow-lan-wan"]));
     good(&b.ox(&["-r", "home", "keep"]));
     assert_eq!(inside_to_internet(), "Allowed");
+    // A guest network in one step, then seen in the grid.
+    let guest = b.ox(&[
+        "-r",
+        "home",
+        "network",
+        "add",
+        "Guest Wi-Fi",
+        "--port",
+        "eth1",
+        "--vlan",
+        "20",
+    ]);
+    assert!(
+        good(&guest).contains("VLAN 20 on eth1, where the box is 192.168.20.1/24"),
+        "{}",
+        guest.out
+    );
+    assert!(
+        guest.out.contains("ox apply network-guest-wi-fi"),
+        "{}",
+        guest.out
+    );
+    refused(
+        &b.ox(&[
+            "-r", "home", "network", "add", "Bad", "--port", "eth0", "--vlan", "30",
+        ]),
+        "faces the internet",
+    );
+    let applied = b.ox(&["-r", "home", "apply", "network-guest-wi-fi"]);
+    assert!(
+        good(&applied).contains("A new network: Guest Wi-Fi"),
+        "{}",
+        applied.out
+    );
+    good(&b.ox(&["-r", "home", "keep"]));
+    assert!(good(&b.ox(&["-r", "six", "access"])).contains("Guest Wi-Fi"));
     // Explain needs no interface name: the box places the device itself.
     let why = b.ox(&[
         "-r",

@@ -40,15 +40,15 @@ Done:
 - Setup from a browser, with a code shown on the box.
 - The simple layer of the web interface: Home, Access, Review, Settings, with the detailed screens as switches.
 - Everyday commands in `ox --help`.
+- The same two layers in the terminal UI.
+- Adding a network (a VLAN with its own address pool) as one step.
 
 Next, in this order:
 
-1. The same two layers in the terminal UI.
-2. A VM image, with steps for Proxmox.
-3. Adding a network (a VLAN with its own address pool) as one step.
-4. DNS blocklists.
-5. Dynamic DNS.
-6. Bridge interfaces, PPPoE and IPv6 prefix delegation.
+1. A VM image, with steps for Proxmox.
+2. DNS blocklists.
+3. Dynamic DNS.
+4. Bridge interfaces, PPPoE and IPv6 prefix delegation.
 
 Ends when 25 people outside the project have run it for 30 days and said how it went, and the first outside security report has been handled in public.
 

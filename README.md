@@ -21,22 +21,15 @@ It is meant for two groups: home-lab users who want one box that is quick to set
 
 `netoxide-tui` is a full-screen terminal interface. Everything on screen comes from the daemon and is read again once a second.
 
-![The Policy screen: zone pairs on the left, the rules of the selected pair with the kernel's packet counters, and the selected rule's details](docs/images/tui-policy.png)
+![Home: the firewall is running, the networks and what each can reach, a grid of who can reach what, and what is let in from the internet](docs/images/tui-home.png)
 
-The Policy screen lists zone pairs and their rules, with the kernel's packet counter beside each rule. Press `x` on a rule to see what it does to a packet.
+It opens on Home: whether the firewall is running, your networks, and who can reach what. A pair with hand-written rules shows what they do in yellow. Press `a` to go to a waiting change.
 
-![The Changes screen: a candidate, its plan with two changes, the running commit and the commit panel with a five-minute confirm window](docs/images/tui-changes.png)
+![Changes: a candidate, its plan with two changes, the running commit and the commit panel with an undo timer](docs/images/tui-changes.png)
 
-The Changes screen shows what a proposed config would change before you apply it. A commit from here always has an undo timer: press `y` to keep it, or do nothing and the box goes back by itself.
+Changes shows what a waiting change would do before you apply it. A commit from here always has an undo timer: press `y` to keep it, or do nothing and the box goes back by itself.
 
-| Screen | Shows |
-| --- | --- |
-| Policy | Zone pairs and rules, with packet counts |
-| NAT | Port forwards and outbound NAT |
-| Interfaces | Interfaces, zones and addresses |
-| Changes | Candidates, the plan for one, commit with an undo timer |
-| Explain | A packet you type, judged by the running config and a candidate side by side |
-| Audit | The audit log, newest first |
+Press `A` for the detailed screens: Policy with the kernel's packet counter beside each rule, NAT, Interfaces, Explain and Audit. Like the switches in the web interface, `A` only shows or hides screens.
 
 The same tool works over SSH on the box or from your own machine with `--remote`. The command line tool `ox` follows the same idea. `ox --help` lists a dozen everyday commands, and `ox more` lists the rest:
 
@@ -44,6 +37,7 @@ The same tool works over SSH on the box or from your own machine with `--remote`
 ox init --save starter                 # guided setup: which port faces the internet?
 ox apply starter                       # applied safely: undoes itself unless you run `ox keep`
 ox access                              # who can reach what
+ox network add "Guest Wi-Fi" --port eth1 --vlan 20   # a network of its own, kept apart
 ox forward --name web --port tcp/443 --to 192.168.10.20
 ox block 192.168.10.66 --name "Smart TV"
 ox vpn add laptop --endpoint home.example.net --qr
@@ -64,11 +58,11 @@ The web interface is simple by default. Everyone sees three screens: Home, Acces
 
 **Home.** One line of status, your networks and what each can reach, and "Is something blocked?": give two addresses and the box says what it would do and which rule decides.
 
-![Access: a grid of networks with Allowed and Blocked cells, and what is let in from the internet](docs/images/web-access.png)
+![Access: a grid of three networks with Allowed and Blocked cells, and what is let in from the internet](docs/images/web-access.png)
 
-**Access.** Who can reach what, as a grid. Click to allow or block. A pair that has hand-written rules of its own is shown as such and cannot be changed here, so a click never throws rules away.
+**Access.** Who can reach what, as a grid. Click to allow or block. The guest network here was added in one step and reaches the internet and nothing else. A pair that has hand-written rules of its own is shown as such and cannot be changed here, so a click never throws rules away.
 
-![Review: the change in one sentence, and Apply safely with a two-minute undo timer](docs/images/web-review.png)
+![Review: adding a guest network, said in two sentences, and Apply safely with a two-minute undo timer](docs/images/web-review.png)
 
 **Review.** Every change is shown in a sentence before it is applied, and applied safely: you get two minutes to check things still work, and if you do not keep it, it undoes itself.
 
@@ -153,7 +147,7 @@ The short version. The full list is in [docs/status.md](docs/status.md#limits-to
 
 Most of the code, tests and documentation here were written by an AI coding assistant, Claude, working under the direction of one human maintainer who decides what gets built and merges it. Commits made that way carry a `Co-Authored-By` trailer.
 
-A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 174 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
+A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 177 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
 
 There is no AI on the box. The firewall does not call a model, send data anywhere, or include an assistant.
 

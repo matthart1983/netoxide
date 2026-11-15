@@ -7,7 +7,7 @@ Both show the same daemon. Use whichever you like; they can be open at once.
 
 ## The terminal UI
 
-![The Policy screen](images/tui-policy.png)
+![Home](images/tui-home.png)
 
 ```sh
 cargo run -p netoxide-tui --release -- --socket $OX_SOCKET
@@ -15,16 +15,21 @@ cargo run -p netoxide-tui --release -- --socket $OX_SOCKET
 
 It needs a terminal of at least 132×34. Everything on screen comes from the daemon and is read again once a second.
 
+It opens with two tabs, Home and Changes. `A` shows the detailed screens as further tabs and hides them again. It changes nothing on the box.
+
 | Screen | Shows | Keys |
 | --- | --- | --- |
-| Policy | Zone pairs and their rules from the running config, with the kernel's packet counter per rule | `←→` pair, `↑↓` rule, `x` explain a packet the rule is about |
-| NAT | Port forwards and outbound NAT | |
-| Interfaces | Interfaces, zones and addresses from the running config | |
+| Home | Whether the firewall is running, the networks and what each can reach, the grid of who can reach what, what is let in | `a` go to the waiting change |
 | Changes | Candidates, the plan for the selected one, the running commit | `c` commit, `w` confirm window |
-| Explain | A packet you type, judged by the running config and the selected candidate side by side | `e` edit, `enter` run, `m` compare on or off |
-| Audit | The audit log, newest first | `↑↓` |
+| Policy (advanced) | Zone pairs and their rules from the running config, with the kernel's packet counter per rule | `←→` pair, `↑↓` rule, `x` explain a packet the rule is about |
+| NAT (advanced) | Port forwards and outbound NAT | |
+| Interfaces (advanced) | Interfaces, zones and addresses from the running config | |
+| Explain (advanced) | A packet you type, judged by the running config and the selected candidate side by side | `e` edit, `enter` run, `m` compare on or off |
+| Audit (advanced) | The audit log, newest first | `↑↓` |
 
-`y` keeps an unconfirmed commit and `r` undoes it, from any screen. A commit from the TUI always has a confirm window (30 s, 2, 5 or 10 min) and asks for a reason first.
+![The Policy screen](images/tui-policy.png)
+
+`tab` and the digits move between the tabs that are showing. `y` keeps an unconfirmed commit and `r` undoes it, from any screen. A commit from the TUI always has a confirm window (30 s, 2, 5 or 10 min) and asks for a reason first.
 
 The TUI cannot edit rules or save candidates yet. Write the config in a file and use `ox candidate save`. Run it without `--socket` to see the eleven designed screens with sample data.
 
@@ -46,7 +51,7 @@ Start the daemon with an HTTPS listener (`OXD_ARGS=--listen [::]:8443` in `/etc/
 | Screen | What it is for |
 | --- | --- |
 | Setup | Three steps: the code, which port is the internet and which are yours, and a review of what the box will do |
-| Home | Status in one line, your networks with what each can reach, "Is something blocked?", and the common tasks |
+| Home | Status in one line, your networks with what each can reach, "Is something blocked?", and the common tasks: add a network, let something in, give a device remote access, block a device |
 | Access | Who can reach what, as a grid, and what is let in from the internet |
 | Review | One waiting change in a sentence, with Apply safely, Discard and Not now |
 | Settings | The basics, and the switches for the advanced screens |

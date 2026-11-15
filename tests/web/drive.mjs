@@ -101,6 +101,11 @@ const type = async (selector, value) => {
   })()`);
   if (!ok) await fail(`no field ${selector}`);
 };
+// Clicks the control with this accessible name, as a screen reader user would.
+const press = async (name) => {
+  if (!(await js(`(() => { const e = document.querySelector('[aria-label=${JSON.stringify(name)}]'); if (!e) return false; e.click(); return true; })()`))) await fail('nothing is labelled "' + name + '"');
+  await sleep(350);
+};
 // Turns an advanced feature's switch over.
 const flip = async (id) => {
   if (!(await js(`(() => { const e = document.getElementById('adv-${id}'); if (!e) return false; e.click(); return true; })()`))) await fail('no switch for ' + id);
@@ -219,16 +224,39 @@ for (const id of ['nat', 'network', 'changes', 'explain', 'audit', 'admin']) {
   await flip(id);
 }
 if ((await tabs()).join(',') !== 'Home,Access,Settings') await fail('with every switch off, only the simple tabs remain, got ' + (await tabs()));
+// Add a guest network in one step and see it in the grid, kept apart.
+await click('Home');
+await click('Add a network, such as one for guests');
+await see('Add a network');
+await type('#f-name', 'Guest Wi-Fi');
+await type('#f-vlan', '20');
+await shot('task-network');
+await click('Review');
+await see('A new network: Guest Wi-Fi');
+await see('Guest Wi-Fi can reach Internet');
+await shot('review-network');
+await click('Apply safely');
+await see('Applied. Check things still work');
+await click('Keep it');
+await see('Kept.');
+await click('Access');
+await see('Guest Wi-Fi');
+if (!(await js(`[...document.querySelectorAll('tbody tr')].some((r) => r.innerText.startsWith('Guest Wi-Fi') && r.innerText.includes('Blocked') && r.innerText.includes('Allowed'))`))) {
+  await fail('the guest network reaches the internet and is blocked from the inside network');
+}
+await shot('access-with-guest');
+
 // Allow the inside network out again, the same way it was blocked.
 await click('Access');
-await click('allow');
+await press('Allow Inside network to Internet');
 await see('Inside network can reach Internet');
 await click('Apply safely');
 await see('Applied. Check things still work');
 await click('Keep it');
 await see('Kept.');
 await click('Access');
-await see('block');
+await see('Who can reach what');
+if (!(await js(`!!document.querySelector('[aria-label="Block Inside network to Internet"]')`))) await fail('the inside network is allowed out again');
 await shot('access-allowed');
 await click('Home');
 await see('Common tasks');

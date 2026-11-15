@@ -23,6 +23,176 @@ use ox_schema::{
 };
 
 pub use detect::{Detected, detect};
+#[cfg(test)]
+mod network_tests {
+    use super::*;
+
+    const HOME: &str = include_str!("../../../examples/home.toml");
+
+    fn guest() -> NetworkRequest {
+        NetworkRequest {
+            name: "Guest Wi-Fi".into(),
+            port: "eth1".into(),
+            vlan: 20,
+            address: None,
+            internet: true,
+        }
+    }
+
+    #[test]
+    fn a_guest_network_is_one_step_and_kept_apart() {
+        let old = Config::from_toml(HOME).unwrap();
+        let mut config = old.clone();
+        let done = add_network(&mut config, &guest()).unwrap();
+        let all = done.join("\n");
+        assert!(
+            all.contains("VLAN 20 on eth1, where the box is 192.168.20.1/24"),
+            "{all}"
+        );
+        assert!(all.contains("192.168.20.100 to 192.168.20.199"), "{all}");
+        assert!(
+            all.contains("answers DNS") && all.contains("Guest Wi-Fi can reach Internet"),
+            "{all}"
+        );
+        assert!(all.contains("cannot reach your other networks"), "{all}");
+
+        // It is ordinary config, valid after a trip through text.
+        let config = Config::from_toml(&config.to_toml()).unwrap();
+        let iface = &config.interfaces["eth1.20"];
+        assert_eq!(iface.zone, "guest-wi-fi");
+        assert_eq!(
+            iface.vlan.as_ref().map(|v| (v.parent.as_str(), v.id)),
+            Some(("eth1", 20))
+        );
+
+        // In the grid it reaches the internet and nothing else, and nothing reaches it.
+        let g = grid(&config);
+        let at = |from: &str, to: &str| {
+            let i = |z: &str| g.networks.iter().position(|n| n.zone == z).unwrap();
+            g.cells[i(from)][i(to)].clone()
+        };
+        assert_eq!(at("guest-wi-fi", "wan"), Cell::Allowed);
+        assert_eq!(at("guest-wi-fi", "lan"), Cell::Blocked);
+        assert_eq!(at("lan", "guest-wi-fi"), Cell::Blocked);
+        assert_eq!(at("wan", "guest-wi-fi"), Cell::Blocked);
+        let lines = headline(&old, &config);
+        assert!(
+            lines.contains(&"A new network: Guest Wi-Fi".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"Guest Wi-Fi can reach Internet".to_string()),
+            "{lines:?}"
+        );
+
+        // A guest may use the box for DNS and an address, and not manage it.
+        let ruleset = compile(&config).unwrap();
+        let verdict = |dst: &str, l4: L4, dport: u16| {
+            explain(
+                &ruleset,
+                &Packet {
+                    src: "192.168.20.50".parse().unwrap(),
+                    dst: dst.parse().unwrap(),
+                    l4,
+                    dport: Some(dport),
+                    iif: "eth1.20".into(),
+                    box_addrs: vec![],
+                },
+            )
+            .unwrap()
+            .verdict
+        };
+        assert_eq!(verdict("192.168.20.1", L4::Udp, 53), Verdict::Accept);
+        assert_eq!(verdict("192.168.20.1", L4::Tcp, 22), Verdict::Drop);
+        assert_eq!(verdict("192.168.10.5", L4::Tcp, 445), Verdict::Drop);
+        assert_eq!(verdict("1.1.1.1", L4::Tcp, 443), Verdict::Accept);
+    }
+
+    #[test]
+    fn a_network_without_internet_and_the_ways_it_is_refused() {
+        let mut config = Config::from_toml(HOME).unwrap();
+        let cameras = NetworkRequest {
+            name: "Cameras".into(),
+            vlan: 30,
+            address: Some("10.30.0.1/24".parse().unwrap()),
+            internet: false,
+            ..guest()
+        };
+        let done = add_network(&mut config, &cameras).unwrap().join("\n");
+        assert!(done.contains("Cameras cannot reach the internet"), "{done}");
+        assert!(!config.to_toml().contains("n-cameras-out"));
+
+        let refused = |req: NetworkRequest, want: &str| {
+            let mut c = config.clone();
+            let e = add_network(&mut c, &req).unwrap_err();
+            assert!(e.contains(want), "wanted '{want}' in: {e}");
+            assert_eq!(c, config, "a refused request changes nothing");
+        };
+        refused(cameras.clone(), "already a network called 'cameras'");
+        refused(
+            NetworkRequest {
+                name: "More".into(),
+                ..cameras.clone()
+            },
+            "eth1.30 already exists",
+        );
+        refused(
+            NetworkRequest {
+                port: "eth0".into(),
+                ..guest()
+            },
+            "faces the internet",
+        );
+        refused(
+            NetworkRequest {
+                port: "eth9".into(),
+                ..guest()
+            },
+            "the inside ports are eth1",
+        );
+        refused(
+            NetworkRequest {
+                port: "eth1.30".into(),
+                ..guest()
+            },
+            "itself a VLAN",
+        );
+        refused(
+            NetworkRequest {
+                name: "  ".into(),
+                ..guest()
+            },
+            "give the network a name",
+        );
+        refused(
+            NetworkRequest {
+                address: Some("192.168.10.129/25".parse().unwrap()),
+                ..guest()
+            },
+            "overlaps",
+        );
+        refused(
+            NetworkRequest {
+                vlan: 4095,
+                ..guest()
+            },
+            "1 to 4094",
+        );
+        // A name that starts with a digit still makes a valid zone.
+        let mut c = config.clone();
+        add_network(
+            &mut c,
+            &NetworkRequest {
+                name: "5G lab".into(),
+                vlan: 40,
+                ..guest()
+            },
+        )
+        .unwrap();
+        assert!(c.zones.contains_key("net-5g-lab"));
+    }
+}
+
 pub use simple::{
     Cell, Grid, LetIn, Network, grid, headline, interface_for, plain_changes, set_access,
 };
@@ -363,6 +533,220 @@ fn check(config: &Config) -> Result<(), String> {
             .join("; "));
     }
     compile(config).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// A new network of its own, such as one for guests or cameras.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkRequest {
+    /// What to call it, such as "Guest Wi-Fi".
+    pub name: String,
+    /// The port that carries it, such as `eth1`.
+    pub port: String,
+    /// Its VLAN number on that port, 1 to 4094. The switch or access point
+    /// on the port must use the same number for this network.
+    pub vlan: u16,
+    /// The box's address on it. Left out, a free 192.168.x.1/24 is chosen.
+    pub address: Option<IpNet>,
+    /// Whether devices on it may reach the internet.
+    pub internet: bool,
+}
+
+/// Adds a network as a VLAN in a zone of its own, with addresses handed
+/// out and DNS if the box serves them, and internet access if asked for.
+/// It can reach none of the other networks until that is allowed.
+pub fn add_network(config: &mut Config, req: &NetworkRequest) -> Result<Vec<String>, String> {
+    // Built on a copy, so a request that is refused part way changes nothing.
+    let mut next = config.clone();
+    let done = build_network(&mut next, req)?;
+    *config = next;
+    Ok(done)
+}
+
+fn build_network(config: &mut Config, req: &NetworkRequest) -> Result<Vec<String>, String> {
+    if !(1..=4094).contains(&req.vlan) {
+        return Err(format!(
+            "VLAN {} does not exist; the numbers are 1 to 4094",
+            req.vlan
+        ));
+    }
+    let title = req.name.trim();
+    if title.is_empty() || title.len() > 40 || title.chars().any(char::is_control) {
+        return Err("give the network a name of up to 40 characters, such as Guest Wi-Fi".into());
+    }
+    let mut zone: String = title
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    while zone.contains("--") {
+        zone = zone.replace("--", "-");
+    }
+    let zone = zone.trim_matches('-').to_string();
+    let zone = if zone.starts_with(|c: char| c.is_ascii_lowercase()) {
+        zone
+    } else {
+        format!("net-{zone}")
+    };
+    if !is_name(&zone) || zone == SELF_ZONE {
+        return Err(format!(
+            "'{title}' cannot be made into a network name; use letters and digits"
+        ));
+    }
+    if config.zones.contains_key(&zone) {
+        return Err(format!("there is already a network called '{zone}'"));
+    }
+    let port = req.port.trim();
+    match config.interfaces.get(port) {
+        Some(i) if i.vlan.is_some() => {
+            return Err(format!(
+                "{port} is itself a VLAN; put the new network on the physical port"
+            ));
+        }
+        Some(i) if i.default_route => {
+            return Err(format!(
+                "{port} faces the internet; put the new network on an inside port"
+            ));
+        }
+        Some(_) => {}
+        None => {
+            return Err(format!(
+                "this box has no port called {port} in its config; the inside ports are {}",
+                config
+                    .interfaces
+                    .iter()
+                    .filter(|(_, i)| !i.default_route && i.vlan.is_none())
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    let iface = format!("{port}.{}", req.vlan);
+    if iface.len() > 15 {
+        return Err(format!("{iface} is too long for an interface name"));
+    }
+    if config.interfaces.contains_key(&iface) {
+        return Err(format!(
+            "{iface} already exists; choose another VLAN number"
+        ));
+    }
+    let taken = |net: &IpNet| {
+        config
+            .interfaces
+            .values()
+            .flat_map(|i| i.addresses.iter())
+            .chain(config.wireguard.values().flat_map(|w| w.addresses.iter()))
+            .any(|a| a.0.contains(&net.network()) || net.contains(&a.0.network()))
+    };
+    let address = match req.address {
+        Some(a) if taken(&a.trunc()) => {
+            return Err(format!("{a} overlaps a network the box already has"));
+        }
+        Some(a) => a,
+        // Prefer the VLAN number as the third number, which is easy to remember.
+        None => std::iter::once(u32::from(req.vlan))
+            .chain(20..255)
+            .filter(|n| (1..255).contains(n))
+            .filter_map(|n| format!("192.168.{n}.1/24").parse::<IpNet>().ok())
+            .find(|n| !taken(&n.trunc()))
+            .ok_or("no free 192.168.x.0/24 network is left; give an address")?,
+    };
+    let internet = config
+        .interfaces
+        .values()
+        .find(|i| i.default_route)
+        .map(|i| i.zone.clone());
+
+    config.zones.insert(
+        zone.clone(),
+        Zone {
+            description: Some(title.to_string()),
+        },
+    );
+    config.interfaces.insert(
+        iface.clone(),
+        Interface {
+            zone: zone.clone(),
+            addresses: vec![IfaceAddr(address)],
+            default_route: false,
+            gateway: vec![],
+            dhcp_client: false,
+            vlan: Some(ox_schema::Vlan {
+                parent: port.to_string(),
+                id: req.vlan,
+            }),
+        },
+    );
+    let mut done = vec![format!(
+        "{title} is a new network: VLAN {} on {port}, where the box is {address}",
+        req.vlan
+    )];
+
+    // Addresses and names, if the box already serves them to another network.
+    let mut served = vec![];
+    let own_v4 = match address {
+        IpNet::V4(n) => Some(n),
+        IpNet::V6(_) => None,
+    };
+    if !config.dhcp.is_empty()
+        && let Some((first, last)) = own_v4.and_then(pool)
+    {
+        config.dhcp.insert(
+            iface.clone(),
+            DhcpPool {
+                first,
+                last,
+                lease: Default::default(),
+                dns: vec![],
+                statics: vec![],
+            },
+        );
+        config
+            .services
+            .entry("dhcp".into())
+            .or_insert_with(|| vec!["udp/67".parse().expect("built-in")]);
+        served.push("dhcp");
+        done.push(format!(
+            "devices on it get an address from {first} to {last}"
+        ));
+    }
+    if let Some(dns) = &mut config.dns {
+        dns.zones.push(zone.clone());
+        config.services.entry("dns".into()).or_insert_with(|| {
+            ["udp/53", "tcp/53"]
+                .iter()
+                .map(|p| p.parse().expect("built-in"))
+                .collect()
+        });
+        served.insert(0, "dns");
+        done.push("the box answers DNS for it".into());
+    }
+    if !served.is_empty() {
+        config.policies.push(Policy {
+            from: zone.clone(),
+            to: SELF_ZONE.into(),
+            log_default: true,
+            rules: vec![rule(
+                &format!("r-{zone}-services"),
+                &format!("{title}: use the box for DNS and for getting an address"),
+                vec![AddrRef::Any],
+                &served,
+                "added with the network",
+            )],
+        });
+    }
+    match (&internet, req.internet) {
+        (Some(wan), true) => done.extend(set_access(config, &zone, wan, true)?),
+        (None, true) => {
+            return Err("this box has no internet port in its config, so the network cannot be given internet access".into());
+        }
+        (_, false) => done.push(format!("{title} cannot reach the internet")),
+    }
+    done.push(format!(
+        "{title} cannot reach your other networks, and they cannot reach it, until you allow it"
+    ));
+    check(config)?;
+    Ok(done)
 }
 
 /// What a config does, in sentences a new user can read.

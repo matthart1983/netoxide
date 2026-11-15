@@ -32,6 +32,7 @@ Daemon commands. All take `--socket <path>` or the `OX_SOCKET` variable. The def
 | `ox remote add <name> <url>` / `list` / `remove <name>` | Boxes to manage from this machine with `ox --remote <name>` |
 | `ox access` | The networks and who can reach what, as a grid |
 | `ox access allow <from> <to>` / `block <from> <to>` | Let one network reach another, or stop it. Uses zone names. Refused for a pair with rules of its own |
+| `ox network add <name> --port <port> --vlan <n> [--address <addr/len>] [--no-internet]` | Add a network of its own as a VLAN on an inside port, with addresses and DNS from the box. It reaches no other network until allowed |
 | `ox apply [change]` | Commit a waiting change with a two-minute undo timer. The name is not needed when one change is waiting |
 | `ox keep` / `ox undo` | Keep or undo the change just applied. The same as `ox confirm` and `ox revert` |
 | `ox more` | List every command. `ox --help` shows the everyday ones |
@@ -104,6 +105,7 @@ HTTP and JSON on the Unix socket. Errors come back as `{"error": "..."}` with 40
 | `GET /metrics` | | Prometheus metrics |
 | `GET /v1/home` | | The simple view: networks, the grid of who can reach what, what is let in, device counts |
 | `POST /v1/actions/access` | `{"from", "to", "allow"}` | Lets one network reach another or stops it; saves a candidate |
+| `POST /v1/actions/network` | `{"name", "port", "vlan", "address", "internet"}` | Adds a network of its own; saves a candidate |
 | `GET /v1/setup` | | `{"needed": true}` while a box with no config can be set up from a browser. No token |
 | `GET /v1/setup/ports`, `POST /v1/setup/preview`, `POST /v1/setup/apply` | `{"internet", "inside": [{"port", "address"}], "name"}` | First-run setup. No token; needs the `X-Setup-Code` header and a caller on a private or local address |
 | `GET /v1/backup` | | The backup document. Needs `manage` |

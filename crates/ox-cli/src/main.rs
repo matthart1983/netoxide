@@ -105,6 +105,12 @@ enum Command {
         #[command(subcommand)]
         action: Option<AccessCmd>,
     },
+    /// Add a network of its own, such as one for guests or cameras
+    #[command(display_order = 4)]
+    Network {
+        #[command(subcommand)]
+        action: NetworkCmd,
+    },
     /// Apply a waiting change safely; it undoes itself unless you keep it
     #[command(display_order = 7)]
     Apply {
@@ -351,6 +357,30 @@ enum TokenCmd {
     List,
     /// Revoke a token
     Revoke { name: String },
+}
+
+#[derive(Subcommand)]
+enum NetworkCmd {
+    /// Add a network as a VLAN on an inside port. Devices on it get an
+    /// address and DNS from the box, and reach nothing else until allowed
+    Add {
+        /// What to call it, such as "Guest Wi-Fi"
+        name: String,
+        /// The inside port that carries it, such as eth1
+        #[arg(long)]
+        port: String,
+        /// Its VLAN number on that port. The switch or access point must
+        /// use the same number for this network
+        #[arg(long)]
+        vlan: u16,
+        /// The box's address on it, such as 192.168.20.1/24. Left out, a
+        /// free one is chosen
+        #[arg(long)]
+        address: Option<String>,
+        /// Do not let it reach the internet
+        #[arg(long)]
+        no_internet: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -806,6 +836,33 @@ fn daemon(cli: &Cli) -> Result<()> {
                 "\nNothing is applied yet. Apply it with: ox apply {}",
                 text(&v["candidate"])
             );
+        }
+        Command::Network {
+            action:
+                NetworkCmd::Add {
+                    name,
+                    port,
+                    vlan,
+                    address,
+                    no_internet,
+                },
+        } => {
+            let v = oxd.json(
+                "POST",
+                "/v1/actions/network",
+                Some(&json!({
+                    "name": name, "port": port, "vlan": vlan,
+                    "address": address, "internet": !no_internet,
+                })),
+            )?;
+            for line in strings(&v["done"]) {
+                out!("{line}");
+            }
+            out!(
+                "\nNothing is applied yet. Apply it with: ox apply {}",
+                text(&v["candidate"])
+            );
+            out!("Set the switch or access point on {port} to use VLAN {vlan} for this network.");
         }
         Command::Apply { change } => {
             let name = match change {

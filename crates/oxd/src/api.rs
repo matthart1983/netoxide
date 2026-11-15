@@ -252,6 +252,7 @@ pub fn router(shared: Shared, lease_file: PathBuf, state_dir: PathBuf) -> Router
             }),
         )
         .route("/v1/actions/access", post(action_access))
+        .route("/v1/actions/network", post(action_network))
         .merge(crate::setup::routes())
         .merge(web::routes())
         .with_state(shared)
@@ -510,6 +511,62 @@ async fn action_access(
     act(&s, &caller, &name, |c| {
         ox_setup::set_access(c, &body.from, &body.to, body.allow)
     })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetworkBody {
+    /// What to call the network, such as "Guest Wi-Fi".
+    name: String,
+    /// The inside port that carries it.
+    port: String,
+    /// Its VLAN number on that port.
+    vlan: u16,
+    /// The box's address on it, with a prefix length. Left out, one is chosen.
+    #[serde(default)]
+    address: Option<String>,
+    /// Whether it may reach the internet. Yes unless said otherwise.
+    #[serde(default = "yes")]
+    internet: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Adds a network of its own, such as one for guests, as a candidate.
+async fn action_network(
+    State(s): State<Shared>,
+    caller: Caller,
+    Json(body): Json<NetworkBody>,
+) -> Api<Response> {
+    caller.may(Action::Edit)?;
+    let address = match body
+        .address
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+    {
+        Some(text) => Some(text.parse().map_err(|_| {
+            invalid(format!(
+                "'{text}' is not an address with a prefix length, such as 192.168.20.1/24"
+            ))
+        })?),
+        None => None,
+    };
+    let req = ox_setup::NetworkRequest {
+        name: body.name.clone(),
+        port: body.port.clone(),
+        vlan: body.vlan,
+        address,
+        internet: body.internet,
+    };
+    act(
+        &s,
+        &caller,
+        &ox_setup::candidate_name("network", &body.name),
+        |c| ox_setup::add_network(c, &req),
+    )
 }
 
 /// The simple view of the running config: the networks, who can reach
