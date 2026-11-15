@@ -174,6 +174,16 @@ enum Command {
     /// Boxes on the network that `ox --remote <name>` can manage from here
     #[command(subcommand)]
     Remote(RemoteCmd),
+    /// Save what the box needs to be set up again: its config, VPN keys,
+    /// roles and settings. The file holds private keys
+    Backup {
+        /// Where to write it. The file is readable by you only
+        #[arg(long, short)]
+        out: PathBuf,
+    },
+    /// Put a backup's keys, roles and settings in place and save its config
+    /// as the candidate `restore`, for you to commit
+    Restore { file: PathBuf },
     /// Show who the daemon thinks you are
     Whoami,
     /// Print the Netoxide table as the kernel holds it
@@ -265,6 +275,9 @@ enum VpnCmd {
         /// the device and its private key is printed once
         #[arg(long)]
         public_key: Option<String>,
+        /// Also draw the config as a QR code, for a phone to scan
+        #[arg(long)]
+        qr: bool,
     },
 }
 
@@ -788,6 +801,49 @@ fn daemon(cli: &Cli) -> Result<()> {
                 out!("revoked token {name}");
             }
         },
+        Command::Backup { out } => {
+            let doc = oxd.get("/v1/backup")?;
+            // Private keys are inside, so the file is never wider than its owner.
+            use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
+            let _ = std::fs::remove_file(out);
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(out)
+                .map_err(|e| format!("{}: {e}", out.display()))?;
+            f.write_all(doc.as_bytes())
+                .and_then(|()| f.sync_all())
+                .map_err(|e| format!("{}: {e}", out.display()))?;
+            let v: Value = serde_json::from_str(&doc)?;
+            out!(
+                "wrote {}: {}, {} VPN key(s), {} role(s)",
+                out.display(),
+                if v["config"].is_string() {
+                    "the running config"
+                } else {
+                    "no config"
+                },
+                v["wireguard_keys"].as_object().map_or(0, |m| m.len()),
+                v["roles"].as_array().map_or(0, |a| a.len()),
+            );
+            out!("It holds the box's private VPN keys. Keep it somewhere only you can read.");
+            out!("Access tokens are not in it; make new ones after a restore.");
+        }
+        Command::Restore { file } => {
+            let doc: Value = serde_json::from_str(&read(file)?)
+                .map_err(|e| format!("{} is not a backup: {e}", file.display()))?;
+            let v = oxd.json("POST", "/v1/restore", Some(&doc))?;
+            for line in strings(&v["done"]) {
+                out!("{line}");
+            }
+            match v["candidate"].as_str() {
+                Some(name) => out!(
+                    "\nNothing is applied yet. Look at it with `ox plan {name}`, then `ox commit {name} --confirm 5m`."
+                ),
+                None => out!("\nThe backup held no config, so there is nothing to commit."),
+            }
+        }
         Command::Whoami => {
             let v = oxd.json("GET", "/v1/whoami", None)?;
             out!("{} ({})", text(&v["name"]), text(&v["role"]));
@@ -862,6 +918,7 @@ fn daemon(cli: &Cli) -> Result<()> {
                     name,
                     endpoint,
                     public_key,
+                    qr,
                 }),
             ..
         } => {
@@ -875,6 +932,20 @@ fn daemon(cli: &Cli) -> Result<()> {
             out!("Next: ox plan {candidate}  then  ox commit {candidate} --confirm 5m\n");
             out!("The config for the device. Import it into the WireGuard app:\n");
             out!("{}", text(&v["client_config"]));
+            if *qr {
+                match v["qr"].as_array() {
+                    Some(_) => {
+                        out!(
+                            "For a phone, scan this in the WireGuard app (Add a tunnel, Scan from QR code):\n"
+                        );
+                        outp!("{}", ox_setup::qr_text(&strings(&v["qr"])));
+                        out!("\nIf the phone cannot read it, use the config above as a file.");
+                    }
+                    None => out!(
+                        "No QR code: it would need the device's private key, which the box was not given."
+                    ),
+                }
+            }
             if v["key_made_here"] == true {
                 out!(
                     "This is the only copy of the device's private key. The box does not keep it."

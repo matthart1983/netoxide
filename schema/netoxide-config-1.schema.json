@@ -205,6 +205,17 @@
           },
           "type": "array"
         },
+        "vlan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Make this interface a VLAN on another one, such as\n`{ parent = \"eth1\", id = 20 }`. The box creates it. Without this,\nthe interface must already exist on the machine."
+        },
         "zone": {
           "type": "string"
         }
@@ -395,6 +406,28 @@
     "Translate": {
       "description": "\"masquerade\" or a source address",
       "type": "string"
+    },
+    "Vlan": {
+      "additionalProperties": false,
+      "description": "A tagged network on a physical port (IEEE 802.1Q).",
+      "properties": {
+        "id": {
+          "description": "The VLAN number, 1 to 4094.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parent": {
+          "description": "The port that carries the tagged traffic, such as `eth1`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parent",
+        "id"
+      ],
+      "type": "object"
     },
     "WgPeer": {
       "additionalProperties": false,

@@ -116,6 +116,58 @@ impl Checker<'_> {
                 self.add(&at, format!("zone '{}' is not defined", iface.zone));
             }
             self.uplink(&at, iface);
+            if let Some(vlan) = &iface.vlan {
+                let parent_ok = !vlan.parent.is_empty()
+                    && vlan.parent.len() <= IFNAMSIZ
+                    && vlan
+                        .parent
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'));
+                if !(1..=4094).contains(&vlan.id) {
+                    self.add(
+                        &at,
+                        format!("VLAN {} does not exist; the numbers are 1 to 4094", vlan.id),
+                    );
+                }
+                if !parent_ok {
+                    self.add(
+                        &at,
+                        format!(
+                            "'{}' is not an interface name for the VLAN's port",
+                            vlan.parent
+                        ),
+                    );
+                } else if vlan.parent == *name {
+                    self.add(
+                        &at,
+                        "a VLAN cannot sit on itself; name the physical port as its parent",
+                    );
+                } else if c
+                    .interfaces
+                    .get(&vlan.parent)
+                    .is_some_and(|p| p.vlan.is_some())
+                {
+                    self.add(
+                        &at,
+                        format!(
+                            "its port {} is itself a VLAN; schema 1 does not stack VLANs",
+                            vlan.parent
+                        ),
+                    );
+                }
+                let twin = c.interfaces.iter().find(|(other, i)| {
+                    other.as_str() < name.as_str() && i.vlan.as_ref() == Some(vlan)
+                });
+                if let Some((other, _)) = twin {
+                    self.add(
+                        &at,
+                        format!(
+                            "VLAN {} on {} is already interface {other}",
+                            vlan.id, vlan.parent
+                        ),
+                    );
+                }
+            }
         }
         for family in ["IPv4", "IPv6"] {
             let with_default: Vec<&str> = c
@@ -797,5 +849,46 @@ impl Checker<'_> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod vlan_tests {
+    #[test]
+    fn vlans_are_checked() {
+        let base = "schema = 1\nhostname = \"t\"\n[zones.a]\n[interfaces.eth1]\nzone = \"a\"\n";
+        let with = |extra: &str| crate::Config::from_toml(&format!("{base}{extra}"));
+        let vlan = |name: &str, parent: &str, id: u32| {
+            format!(
+                "[interfaces.\"{name}\"]\nzone = \"a\"\nvlan = {{ parent = \"{parent}\", id = {id} }}\n"
+            )
+        };
+        assert!(with(&vlan("eth1.20", "eth1", 20)).is_ok());
+        // The port does not have to be in the config.
+        assert!(with(&vlan("trunk.20", "eth7", 20)).is_ok());
+        let bad = |extra: String, want: &str| {
+            let e = with(&extra).expect_err(want).to_string();
+            assert!(e.contains(want), "wanted '{want}' in: {e}");
+        };
+        bad(vlan("eth1.0", "eth1", 0), "1 to 4094");
+        bad(vlan("eth1.4095", "eth1", 4095), "1 to 4094");
+        bad(vlan("eth1.20", "eth1.20", 20), "cannot sit on itself");
+        bad(vlan("eth1.20", "bad name", 20), "not an interface name");
+        bad(
+            format!(
+                "{}{}",
+                vlan("eth1.20", "eth1", 20),
+                vlan("q.5", "eth1.20", 5)
+            ),
+            "does not stack",
+        );
+        bad(
+            format!(
+                "{}{}",
+                vlan("eth1.20", "eth1", 20),
+                vlan("guest", "eth1", 20)
+            ),
+            "is already interface eth1.20",
+        );
     }
 }

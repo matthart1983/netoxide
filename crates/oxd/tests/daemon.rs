@@ -1514,6 +1514,124 @@ fn two_boxes_join_their_networks_with_a_tunnel() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The box makes VLAN interfaces from the config, tagged traffic crosses
+/// them over IPv4 and IPv6, and the box removes the ones it made.
+#[test]
+fn vlans_are_made_carry_traffic_and_are_removed() {
+    if !(have("nsenter", "--version") && have("ping", "-V")) {
+        skip("needs nsenter and ping");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("oxd-vlan-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let Some(lab) = Lab::start(&dir) else {
+        skip("needs unshare(1), unprivileged user namespaces and libnftables");
+        return;
+    };
+    let (client, bx) = (lab.client, lab.daemon.child.id());
+    let sh = |ns: u32, script: &str| -> (bool, String) {
+        let out = lab.cmd(ns, "sh").args(["-c", script]).output().unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+        )
+    };
+    // The client's side of VLAN 20, as a managed switch or an access point
+    // with a tagged network would present it.
+    assert!(
+        sh(
+            client,
+            "ip link add link c0 name c0.20 type vlan id 20 \
+             && ip addr add 192.168.20.50/24 dev c0.20 \
+             && ip -6 addr add 2001:db8:20::50/64 dev c0.20 nodad && ip link set c0.20 up"
+        )
+        .0
+    );
+    let guest = |vlan: &str| {
+        format!(
+            "{ROUTER}\n[zones.guest]\n\n[interfaces.\"eth1.20\"]\nzone = \"guest\"\n{vlan}\n\
+             addresses = [\"192.168.20.1/24\", \"2001:db8:20::1/64\"]\n\n\
+             [[policy]]\nfrom = \"guest\"\nto = \"self\"\n\n[[policy.rule]]\nid = \"r-guest-ping\"\n\
+             name = \"Guests may ping the box\"\naction = \"accept\"\nservice = [\"ping\"]\n"
+        )
+    };
+    let commit = |name: &str, text: &str| -> (u16, String) {
+        lab.daemon
+            .ok("PUT", &format!("/v1/candidates/{name}"), text);
+        lab.daemon
+            .call("POST", &format!("/v1/candidates/{name}/commit"), "{}")
+    };
+    let link = |name: &str| sh(bx, &format!("ip -d link show {name}"));
+
+    assert!(!link("eth1.20").0, "no VLAN before the config asks for one");
+    let (code, text) = commit("vlan", &guest("vlan = { parent = \"eth1\", id = 20 }"));
+    assert_eq!(code, 200, "{text}");
+    let (there, detail) = link("eth1.20");
+    assert!(there && detail.contains("id 20"), "{detail}");
+
+    // Tagged traffic reaches the box on both families, and the untagged
+    // network on the same port still works.
+    assert!(lab.ping(client, "192.168.20.1"));
+    // A new IPv6 address answers once the kernel has checked nobody else
+    // on the network has it, which takes a second or two.
+    assert!(
+        (0..5).any(|_| lab.ping(client, "2001:db8:20::1")),
+        "IPv6 over the VLAN"
+    );
+    assert!(lab.ping(client, "192.168.10.1"));
+    // The VLAN is its own zone: nothing lets guests reach the box's web port.
+    let explained = lab.daemon.ok(
+        "POST",
+        "/v1/explain",
+        r#"{"src":"192.168.20.50","dst":"192.168.20.1","proto":"icmp","in":"eth1.20"}"#,
+    );
+    assert!(
+        explained.to_string().contains("r-guest-ping"),
+        "{explained}"
+    );
+
+    // A new number: the box makes the interface again, and the client's
+    // VLAN 20 no longer reaches it.
+    let (code, text) = commit("renumber", &guest("vlan = { parent = \"eth1\", id = 30 }"));
+    assert_eq!(code, 200, "{text}");
+    assert!(link("eth1.20").1.contains("id 30"));
+    assert!(!lab.ping(client, "192.168.20.1"));
+
+    // A VLAN on a port the machine does not have: the commit fails and
+    // leaves the running config and its interface as they were.
+    let (code, text) = commit("nowhere", &guest("vlan = { parent = \"nope0\", id = 20 }"));
+    assert_ne!(code, 200);
+    assert!(text.contains("no interface called nope0"), "{text}");
+    assert!(link("eth1.20").1.contains("id 30"), "the old VLAN is back");
+
+    // An interface someone else made is used and never removed.
+    assert!(sh(bx, "ip link add link eth1 name eth1.20x type vlan id 40").0);
+    let own = guest("vlan = { parent = \"eth1\", id = 40 }").replace("eth1.20\"", "eth1.20x\"");
+    let (code, text) = commit("theirs", &own);
+    assert_eq!(code, 200, "{text}");
+    assert!(
+        !link("eth1.20").0,
+        "the box's own VLAN went with its config"
+    );
+    assert!(
+        link("eth1.20x").1.contains("192.168.20.1")
+            || sh(bx, "ip addr show eth1.20x").1.contains("192.168.20.1")
+    );
+
+    // Back to a config with no VLAN.
+    let (code, text) = commit("plain", ROUTER);
+    assert_eq!(code, 200, "{text}");
+    assert!(link("eth1.20x").0, "not ours to remove");
+    assert!(
+        !sh(bx, "ip addr show eth1.20x").1.contains("192.168.20.1"),
+        "our address is off it"
+    );
+
+    drop(lab);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Notes a test that cannot run here. With OX_REQUIRE_KERNEL_TESTS set, as
 /// in CI, a skip is a failure, so these tests cannot silently stop running.
 fn skip(why: &str) {

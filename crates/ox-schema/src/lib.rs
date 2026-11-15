@@ -112,6 +112,21 @@ pub struct Interface {
     /// interface with `default_route` and no fixed IPv4 address.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dhcp_client: bool,
+    /// Make this interface a VLAN on another one, such as
+    /// `{ parent = "eth1", id = 20 }`. The box creates it. Without this,
+    /// the interface must already exist on the machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vlan: Option<Vlan>,
+}
+
+/// A tagged network on a physical port (IEEE 802.1Q).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Vlan {
+    /// The port that carries the tagged traffic, such as `eth1`.
+    pub parent: String,
+    /// The VLAN number, 1 to 4094.
+    pub id: u16,
 }
 
 /// An interface address with its prefix length, such as `10.20.0.1/16`.

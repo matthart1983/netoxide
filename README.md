@@ -13,6 +13,7 @@ It is meant for two groups: home-lab users who want one box that is quick to set
 - [Install on a box](#install-on-a-box)
 - [Who it is for](#who-it-is-for)
 - [Limits](#limits)
+- [How the code is written](#how-the-code-is-written)
 - [Documents](#documents)
 - [Licence and name](#licence-and-name)
 
@@ -133,11 +134,19 @@ The short version. The full list is in [docs/status.md](docs/status.md#limits-to
 
 - It has never run on real hardware or carried real traffic. The furthest it has been is a virtual machine on one developer's computer, with SELinux off.
 - Nobody outside the project has reviewed the security of any of it.
-- The daemon does not create VLAN, bridge, bond or PPPoE interfaces. The operating system still does.
+- The daemon creates VLAN interfaces. It does not create bridge, bond or PPPoE interfaces; the operating system still does.
 - No IPv6 prefix delegation, no multi-WAN, no routing protocols, no traffic shaping, no intrusion detection, no high availability.
 - The VPN is WireGuard only. It has been tested between two Netoxide boxes, not against the official WireGuard apps.
 - No single sign-on. Access is by token.
 - No fleet controller, Terraform provider or OS image.
+
+## How the code is written
+
+Most of the code, tests and documentation here were written by an AI coding assistant, Claude, working under the direction of one human maintainer who decides what gets built and merges it. Commits made that way carry a `Co-Authored-By` trailer.
+
+A second person has not reviewed it line by line, and there has been no outside security audit. What stands in for that today is in the repository for you to check: 164 tests, including ones that send real packets through the kernel and compare the result with what the firewall says it will do, a virtual machine test of the installed system, and two internal review passes whose findings are fixed with tests. That is evidence, and it is not the same as an audit. The [threat model](docs/threat-model.md) says where to look first.
+
+There is no AI on the box. The firewall does not call a model, send data anywhere, or include an assistant.
 
 ## Documents
 
@@ -150,6 +159,9 @@ The short version. The full list is in [docs/status.md](docs/status.md#limits-to
 | [docs/access.md](docs/access.md) | Managing a box from another machine, tokens and roles |
 | [docs/reference.md](docs/reference.md) | Every command and every API route |
 | [docs/status.md](docs/status.md) | What works, the limits, and what is not built |
+| [docs/roadmap.md](docs/roadmap.md) | What comes next, in what order, and what stays free |
+| [docs/threat-model.md](docs/threat-model.md) | What it is built to resist, what it relies on, and what it does not defend against |
+| [docs/recovery.md](docs/recovery.md) | What to do if a change locks you out |
 | [docs/architecture.md](docs/architecture.md) | The crates, the design rules and the tests |
 | [CHANGELOG.md](CHANGELOG.md) | What each release changed |
 | [SECURITY.md](SECURITY.md) | How to report a vulnerability |

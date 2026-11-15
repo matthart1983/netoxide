@@ -153,6 +153,7 @@ impl FromRequestParts<Shared> for Caller {
 
 pub fn router(shared: Shared, lease_file: PathBuf, state_dir: PathBuf) -> Router {
     let key_dir = state_dir.clone();
+    let backup_dir = state_dir.clone();
     let vpn_dir = state_dir.clone();
     Router::new()
         .route(
@@ -176,6 +177,26 @@ pub fn router(shared: Shared, lease_file: PathBuf, state_dir: PathBuf) -> Router
             get(move |caller: Caller, Path(iface): Path<String>| {
                 let dir = key_dir.clone();
                 async move { wireguard_key(&caller, &dir, &iface) }
+            }),
+        )
+        .route(
+            "/v1/backup",
+            get({
+                let dir = backup_dir.clone();
+                move |state: State<Shared>, caller: Caller| {
+                    let dir = dir.clone();
+                    async move { backup(state, caller, &dir) }
+                }
+            }),
+        )
+        .route(
+            "/v1/restore",
+            post({
+                let dir = backup_dir;
+                move |state: State<Shared>, caller: Caller, body: Json<Backup>| {
+                    let dir = dir.clone();
+                    async move { restore(state, caller, &dir, body) }
+                }
             }),
         )
         .route("/v1/whoami", get(whoami))
@@ -429,6 +450,8 @@ fn action_vpn_peer(
     Ok(Json(json!({
         "candidate": candidate,
         "done": peer.done,
+        // A code to scan is only any use with the device's key inside it.
+        "qr": private.as_ref().and_then(|_| ox_setup::qr_rows(&client_config)),
         "client_config": client_config,
         "key_made_here": private.is_some(),
     }))
@@ -1135,6 +1158,123 @@ async fn revoke_token(
         .unwrap_or_else(|e| e.into_inner())
         .revoke_token(&name, who, now())?;
     Ok(Json(json!({ "revoked": name })).into_response())
+}
+
+/// What a box needs to be set up again on other hardware: its config and
+/// the things that are deliberately not in the config.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Backup {
+    /// The layout of this document. Always 1.
+    #[serde(default)]
+    format: u32,
+    /// Unix time the backup was taken.
+    #[serde(default)]
+    taken: u64,
+    /// The version of the daemon that made it.
+    #[serde(default)]
+    version: String,
+    /// The running config, as TOML. Absent when there was no commit.
+    #[serde(default)]
+    config: Option<String>,
+    /// Each tunnel's private key, by interface. With these, devices that
+    /// already have the box's public key keep connecting.
+    #[serde(default)]
+    wireguard_keys: std::collections::BTreeMap<String, String>,
+    /// Roles made on the box.
+    #[serde(default)]
+    roles: Vec<Role>,
+    #[serde(default)]
+    four_eyes: bool,
+}
+
+/// A backup of this box. It holds private keys, so it needs full control
+/// and is recorded.
+fn backup(State(s): State<Shared>, caller: Caller, dir: &std::path::Path) -> Api<Response> {
+    let who = caller.may(Action::Manage)?;
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    let keys = crate::wg::export_keys(dir);
+    let doc = Backup {
+        format: 1,
+        taken: now(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        config: e.running_config()?,
+        roles: e.roles().into_iter().filter(|r| !r.builtin).collect(),
+        four_eyes: e.settings()?.four_eyes,
+        wireguard_keys: keys,
+    };
+    e.note(
+        now(),
+        who,
+        "backup taken",
+        &format!(
+            "config {}, {} tunnel key(s), {} role(s)",
+            if doc.config.is_some() {
+                "included"
+            } else {
+                "none"
+            },
+            doc.wireguard_keys.len(),
+            doc.roles.len()
+        ),
+    )?;
+    Ok(Json(doc).into_response())
+}
+
+/// Puts a backup's keys, roles and settings in place and saves its config
+/// as the candidate `restore`. Nothing is applied until that is committed.
+fn restore(
+    State(s): State<Shared>,
+    caller: Caller,
+    dir: &std::path::Path,
+    Json(doc): Json<Backup>,
+) -> Api<Response> {
+    let who = caller.may(Action::Manage)?;
+    if doc.format != 1 {
+        return Err(invalid(if doc.format == 0 {
+            "this is not a Netoxide backup: it has no format number".to_string()
+        } else {
+            format!(
+                "this backup has format {}, and this version reads format 1",
+                doc.format
+            )
+        }));
+    }
+    let mut e = s.lock().unwrap_or_else(|e| e.into_inner());
+    // The config first: if it is not valid, nothing else is touched.
+    let mut done = vec![];
+    if let Some(text) = &doc.config {
+        e.put_candidate("restore", text, who, now())?;
+        done.push("saved the config as candidate restore".to_string());
+    }
+    for (iface, key) in &doc.wireguard_keys {
+        crate::wg::import_key(dir, iface, key).map_err(invalid)?;
+        done.push(format!("put the VPN key for {iface} in place"));
+    }
+    for role in &doc.roles {
+        if e.role(&role.name).is_some() {
+            done.push(format!("kept the role {} that is already here", role.name));
+            continue;
+        }
+        let can: Vec<Action> = role.can.iter().copied().collect();
+        let sections: Option<Vec<Section>> =
+            role.sections.as_ref().map(|s| s.iter().copied().collect());
+        e.create_role(&role.name, &can, sections.as_deref(), who, now())?;
+        done.push(format!("made the role {}", role.name));
+    }
+    if e.settings()?.four_eyes != doc.four_eyes {
+        e.set_four_eyes(doc.four_eyes, who, now())?;
+        done.push(format!(
+            "turned four-eyes approval {}",
+            if doc.four_eyes { "on" } else { "off" }
+        ));
+    }
+    e.note(now(), who, "backup restored", &done.join("; "))?;
+    Ok(Json(json!({
+        "done": done,
+        "candidate": doc.config.as_ref().map(|_| "restore"),
+    }))
+    .into_response())
 }
 
 /// Every role, with what it can do and where.

@@ -139,6 +139,7 @@ pub fn starter(a: &Answers) -> Result<Config, String> {
         default_route,
         gateway: vec![],
         dhcp_client: false,
+        vlan: None,
     };
     let mut wan = iface(&a.wan, "wan", true);
     if a.wan_dhcp {
@@ -357,6 +358,12 @@ pub fn describe(config: &Config) -> Vec<String> {
                 .join(", ")
         };
         out.push(format!("{name} is in zone {} ({addrs})", i.zone));
+        if let Some(v) = &i.vlan {
+            out.push(format!(
+                "{name} is VLAN {} on {}, made by the box",
+                v.id, v.parent
+            ));
+        }
         if i.dhcp_client {
             out.push(format!(
                 "{name}: the box asks the network there for its IPv4 address and router"
@@ -775,6 +782,49 @@ pub fn client_config(peer: &VpnPeer, private_key: &str, box_key: &str, endpoint:
         "\n[Peer]\nPublicKey = {box_key}\nEndpoint = {endpoint}\nAllowedIPs = {}\nPersistentKeepalive = 25\n",
         routes.join(", ")
     ));
+    out
+}
+
+/// A QR code of some text, as rows of `1` (dark) and `0` (light) with the
+/// blank border a scanner needs. The WireGuard phone apps read a device's
+/// config from one. `None` when the text is too long for a QR code.
+pub fn qr_rows(text: &str) -> Option<Vec<String>> {
+    const BORDER: usize = 4;
+    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    let width = code.width();
+    let colors = code.to_colors();
+    let blank = "0".repeat(width + 2 * BORDER);
+    let mut rows = vec![blank.clone(); BORDER];
+    for line in colors.chunks(width) {
+        let mut row = "0".repeat(BORDER);
+        row.extend(line.iter().map(|c| match c {
+            qrcode::Color::Dark => '1',
+            qrcode::Color::Light => '0',
+        }));
+        row.push_str(&"0".repeat(BORDER));
+        rows.push(row);
+    }
+    rows.extend(vec![blank; BORDER]);
+    Some(rows)
+}
+
+/// A QR code drawn with block characters, two rows of the code per line of
+/// text. Light squares are drawn and dark ones left empty, which reads
+/// correctly on a terminal with a dark background.
+pub fn qr_text(rows: &[String]) -> String {
+    let dark = |row: Option<&String>, x: usize| row.is_some_and(|r| r.as_bytes()[x] == b'1');
+    let mut out = String::new();
+    for pair in rows.chunks(2) {
+        for x in 0..pair[0].len() {
+            out.push(match (dark(pair.first(), x), dark(pair.get(1), x)) {
+                (false, false) => '█',
+                (false, true) => '▀',
+                (true, false) => '▄',
+                (true, true) => ' ',
+            });
+        }
+        out.push('\n');
+    }
     out
 }
 
@@ -1679,5 +1729,44 @@ mod tests {
         let mut c = home();
         let err = block(&mut c, "10.9.9.9".parse().unwrap(), "x").unwrap_err();
         assert!(err.contains("not on any network"));
+    }
+
+    #[test]
+    fn a_device_config_fits_a_qr_code() {
+        let config = "[Interface]\nPrivateKey = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\nAddress = 10.90.0.2/32, fd90::2/128\nDNS = 10.90.0.1\n\n[Peer]\nPublicKey = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=\nEndpoint = home.example.net:51820\nAllowedIPs = 192.168.10.0/24, 2001:db8:2::/64\nPersistentKeepalive = 25\n";
+        let rows = qr_rows(config).expect("fits");
+        // Square, with a blank border of four on every side.
+        assert!(rows.len() > 40 && rows.iter().all(|r| r.len() == rows.len()));
+        assert!(rows[..4].iter().all(|r| !r.contains('1')));
+        assert!(
+            rows.iter()
+                .all(|r| r.starts_with("0000") && r.ends_with("0000"))
+        );
+        // The finder pattern's top edge: seven dark squares at the corner.
+        assert_eq!(&rows[4][4..11], "1111111");
+        // The same text gives the same code, and other text another.
+        assert_eq!(qr_rows(config), Some(rows.clone()));
+        assert_ne!(qr_rows("other"), Some(rows.clone()));
+        let drawn = qr_text(&rows);
+        assert_eq!(drawn.lines().count(), rows.len().div_ceil(2));
+        assert!(drawn.lines().all(|l| l.chars().count() == rows.len()));
+        // Far too much for one code.
+        assert!(qr_rows(&"x".repeat(10_000)).is_none());
+
+        // An independent reader gets the config back from the picture, at
+        // four pixels a square as the web UI draws it.
+        const SCALE: usize = 4;
+        let side = rows.len() * SCALE;
+        let mut picture = rqrr::PreparedImage::prepare_from_greyscale(side, side, |x, y| {
+            if rows[y / SCALE].as_bytes()[x / SCALE] == b'1' {
+                0
+            } else {
+                255
+            }
+        });
+        let grids = picture.detect_grids();
+        assert_eq!(grids.len(), 1, "one code in the picture");
+        let (_, read) = grids[0].decode().expect("the code reads");
+        assert_eq!(read, config);
     }
 }

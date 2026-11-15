@@ -57,6 +57,12 @@ fn private_key(dir: &Path, iface: &str) -> Result<[u8; 32], String> {
             .ok_or_else(|| format!("{} does not hold a WireGuard key", path.display()));
     }
     let (private, _) = new_keypair()?;
+    store_key(&path, &private)?;
+    decode_key(&private).ok_or_else(|| "made an invalid key".to_string())
+}
+
+/// Writes a private key file, replacing one that is there.
+fn store_key(path: &Path, private: &str) -> Result<(), String> {
     let parent = path.parent().expect("the key path has a directory");
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     // Never on disk with wider permissions, and whole or not at all.
@@ -71,9 +77,49 @@ fn private_key(dir: &Path, iface: &str) -> Result<[u8; 32], String> {
             f.write_all(private.as_bytes())?;
             f.sync_all()
         })
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    decode_key(&private).ok_or_else(|| "made an invalid key".to_string())
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn is_iface(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 15
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && !matches!(name, "." | "..")
+}
+
+/// Every tunnel's private key on this box, by interface, for a backup.
+pub fn export_keys(dir: &Path) -> std::collections::BTreeMap<String, String> {
+    let mut keys = std::collections::BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(dir.join("wireguard")) else {
+        return keys;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(iface) = name.to_str().and_then(|n| n.strip_suffix(".key")) else {
+            continue;
+        };
+        if let Ok(text) = std::fs::read_to_string(entry.path())
+            && decode_key(text.trim()).is_some()
+        {
+            keys.insert(iface.to_string(), text.trim().to_string());
+        }
+    }
+    keys
+}
+
+/// Puts a private key from a backup in place for a tunnel. The tunnel
+/// uses it from the next commit that configures it.
+pub fn import_key(dir: &Path, iface: &str, private: &str) -> Result<(), String> {
+    if !is_iface(iface) {
+        return Err(format!("'{iface}' is not an interface name"));
+    }
+    if decode_key(private.trim()).is_none() {
+        return Err(format!("the key for {iface} is not a WireGuard key"));
+    }
+    store_key(&key_path(dir, iface), private.trim())
 }
 
 /// The box's public key for a tunnel. Makes the key pair if there is none,

@@ -80,21 +80,23 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 161 tests. Eleven of them run a daemon inside a private, rootless network namespace, nine of those against the real kernel:
+There are 164 tests. Twelve of them run a daemon inside a private, rootless network namespace, ten of those against the real kernel:
 
 - The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
 - The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.
 - The home example's resolver is queried with `dig` over IPv4 and IPv6, a record is changed with a confirm window, and the old answer returns when the window lapses.
 - A small DHCP client on the far end of a virtual cable gets an address from the pool and a fixed address through the firewall, and stops being answered when the rule is removed.
+- The box makes a VLAN interface from the config and a client on the tagged network reaches it over IPv4 and IPv6. Changing the number makes the interface again, a VLAN on a port that does not exist fails the commit and leaves the old one, and an interface someone else made is never removed.
 - A service that cannot start refuses the commit and leaves the kernel unchanged.
 - Two boxes, each with its own daemon, swap public keys and join their inside networks with a WireGuard tunnel. A device behind one fetches a page from the other over IPv4 and IPv6, a port the rules do not allow is dropped, explain follows the route through the tunnel, both ends report the peer as connected, narrowing a peer's networks stops that traffic only, and removing the tunnel removes the interface.
 - Real packets cross the box between three namespaces, a client inside, the box, and a server outside: web and ping are allowed out and the source is rewritten, another port is dropped, a forwarded port reaches the inside server, the kernel's counters land on the right rules, and each result matches what `ox explain` says for the same packet. A change that is not kept stops blocking traffic when its window lapses. Renumbering the inside network takes the old address off the port and leaves an address someone else put there.
 - The HTTPS listener is called with curl: tokens, roles, four-eyes approval and revocation.
+- A backup taken on one box is restored on a second: the second box has the same VPN public key and the same roles, runs nothing until the candidate is committed, and then runs the same config.
 - `ox` manages a box from a second machine over IPv4 and IPv6: a wrong fingerprint and a wrong token save nothing, a full change cycle runs, a certificate that is not the saved one stops `ox` before the token is sent, and roles held to sections are refused every change outside them, including keeping or undoing someone else's commit.
 - The HTTPS listener refuses the 33rd connection from one address, still serves another address, and closes connections that say nothing.
 - The web UI's endpoints and the page's security headers are checked.
 
-A separate test boots a virtual machine and checks the installed daemon under systemd: 129 checks across install, DHCP in both directions, DNS, IPv4 and IPv6 traffic, the undo timer, a killed daemon, a VPN device that connects and reaches the inside network, `ox` run from a client on the inside network with a pinned certificate, a role refused a change outside its sections, a reboot and removal. It needs QEMU with KVM and is not part of `cargo test`. See [`tests/vm/README.md`](../tests/vm/README.md).
+A separate test boots a virtual machine and checks the installed daemon under systemd: 137 checks across install, DHCP in both directions, DNS, IPv4 and IPv6 traffic, the undo timer, a killed daemon, a VPN device that connects and reaches the inside network, `ox` run from a client on the inside network with a pinned certificate, a role refused a change outside its sections, a VLAN the box makes, a backup, a reboot and removal. It needs QEMU with KVM and is not part of `cargo test`. See [`tests/vm/README.md`](../tests/vm/README.md).
 
 The importer test compares the pfSense model and the translated config on generated probes and allows only the one known difference.
 

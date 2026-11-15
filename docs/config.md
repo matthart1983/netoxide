@@ -142,6 +142,23 @@ DNSSEC checking is on unless you set `dnssec = false`. Clients are told to use t
 
 Validation catches things like unknown zones and groups, duplicate rule IDs, rules whose source and destination are different address families, and a forward that names a rule from the wrong zone. A typo such as `tcp/99999` or `10.20.4.17/16` fails with the value named and the fix suggested.
 
+### VLANs
+
+An interface is normally one the machine already has. Give it a `vlan` and the box creates it as a tagged network on another port:
+
+```toml
+[zones.guest]
+
+[interfaces."eth1.20"]          # any name up to 15 characters
+zone = "guest"
+vlan = { parent = "eth1", id = 20 }
+addresses = ["192.168.20.1/24", "2001:db8:20::1/64"]
+```
+
+The port named as `parent` does not need its own entry. It carries untagged traffic too if it has one. The box removes a VLAN interface it made when the config drops it, and makes it again if the port or the number changes. An interface of that name that something else made is used as it is and never removed. A VLAN cannot sit on another VLAN.
+
+Because rules are written between zones, putting a VLAN in its own zone is how you keep guests or cameras apart from the rest: with no policy from `guest` to `lan`, nothing crosses.
+
 ## How a change reaches the kernel
 
 1. `ox candidate save` stores a config under a name. The daemon refuses one that does not validate and compile.
