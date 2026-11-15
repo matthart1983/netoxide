@@ -292,6 +292,7 @@ impl Backend for SocketBackend {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
+    Home,
     Policy,
     Nat,
     Interfaces,
@@ -301,7 +302,8 @@ pub enum Screen {
 }
 
 impl Screen {
-    pub const ALL: [Screen; 6] = [
+    pub const ALL: [Screen; 7] = [
+        Screen::Home,
         Screen::Policy,
         Screen::Nat,
         Screen::Interfaces,
@@ -312,6 +314,7 @@ impl Screen {
 
     pub fn title(self) -> &'static str {
         match self {
+            Screen::Home => "Home",
             Screen::Policy => "Policy",
             Screen::Nat => "NAT",
             Screen::Interfaces => "Interfaces",
@@ -319,10 +322,6 @@ impl Screen {
             Screen::Explain => "Explain",
             Screen::Audit => "Audit",
         }
-    }
-
-    pub fn index(self) -> usize {
-        Screen::ALL.iter().position(|x| *x == self).unwrap()
     }
 
     pub fn from_name(name: &str) -> Option<Screen> {
@@ -335,8 +334,13 @@ impl Screen {
 /// Confirm windows the Changes screen offers, in seconds.
 pub const WINDOWS: [u64; 4] = [30, 120, 300, 600];
 
+/// The screens everyone sees. The rest appear when advanced is switched on.
+pub const SIMPLE: [Screen; 2] = [Screen::Home, Screen::Changes];
+
 pub struct LiveApp {
     pub screen: Screen,
+    /// Show the detailed screens as well. Off to begin with.
+    pub advanced: bool,
     pub running: bool,
     pub show_help: bool,
 
@@ -371,7 +375,8 @@ pub struct LiveApp {
 impl LiveApp {
     pub fn new(backend: &dyn Backend) -> LiveApp {
         let mut app = LiveApp {
-            screen: Screen::Policy,
+            screen: Screen::Home,
+            advanced: false,
             running: true,
             show_help: false,
             status: Status::default(),
@@ -567,11 +572,31 @@ impl LiveApp {
                 self.message = None;
                 self.refresh(backend);
             }
-            KeyCode::Tab => self.screen = Screen::ALL[(self.screen.index() + 1) % 6],
-            KeyCode::BackTab => self.screen = Screen::ALL[(self.screen.index() + 5) % 6],
-            KeyCode::Char(c @ '1'..='6') => {
-                self.screen = Screen::ALL[c as usize - '1' as usize];
+            KeyCode::Tab | KeyCode::BackTab => {
+                let tabs = self.tabs();
+                let at = tabs.iter().position(|s| *s == self.screen).unwrap_or(0);
+                let step = if key.code == KeyCode::Tab {
+                    1
+                } else {
+                    tabs.len() - 1
+                };
+                self.screen = tabs[(at + step) % tabs.len()];
             }
+            KeyCode::Char(c @ '1'..='9') => {
+                if let Some(screen) = self.tabs().get(c as usize - '1' as usize) {
+                    self.screen = *screen;
+                }
+            }
+            // The detailed screens are a switch, as in the web interface.
+            // It shows or hides tabs and changes nothing on the box.
+            KeyCode::Char('A') => {
+                self.advanced = !self.advanced;
+                if !self.tabs().contains(&self.screen) {
+                    self.screen = Screen::Home;
+                }
+            }
+            // From Home, straight to the waiting change.
+            KeyCode::Char('a') if self.screen == Screen::Home => self.screen = Screen::Changes,
             // A pending commit can be kept or undone from any screen.
             KeyCode::Char('y') if pending => {
                 let result = backend.confirm().map(|id| format!("kept #{id}"));
@@ -584,6 +609,15 @@ impl LiveApp {
                 self.act(backend, result);
             }
             code => self.on_screen_key(code, backend, pending),
+        }
+    }
+
+    /// The screens that have a tab right now.
+    pub fn tabs(&self) -> Vec<Screen> {
+        if self.advanced {
+            Screen::ALL.to_vec()
+        } else {
+            SIMPLE.to_vec()
         }
     }
 

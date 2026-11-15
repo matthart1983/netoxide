@@ -1109,6 +1109,7 @@ dependencies = [
  "ipnet",
  "ox-client",
  "ox-schema",
+ "ox-setup",
  "ratatui",
  "serde_json",
 ]
