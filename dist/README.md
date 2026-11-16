@@ -11,10 +11,37 @@ console access, not on a box you can only reach over the network.
 - `dnsmasq`, if the box will answer DNS or hand out addresses
 - Rust 1.88 or later to build
 
-## Install
+## Install from a package
 
-One script does it, from an unpacked release archive or from a source tree
-built with `cargo build --release`:
+Each release has a `.deb` and an `.rpm` for x86-64:
+
+```sh
+sudo apt install ./netoxide_*_amd64.deb      # Debian 12 or later, Ubuntu 22.04 or later
+sudo dnf install ./netoxide-*.x86_64.rpm     # Fedora, RHEL 9 and its rebuilds
+```
+
+The package brings in `nftables`, puts the programs in `/usr/bin` and the
+service unit in place, and starts the daemon with the web interface on port
+8443. A box with no config loads no rules, so installing changes no traffic.
+Run `ox status` for the setup code, then open `https://<the box>:8443/`, or
+run `ox init --save starter && ox apply starter` on the box. Install
+`dnsmasq` (`dnsmasq-base` on Debian and Ubuntu) if the box will answer DNS or
+hand out addresses.
+
+Removing the package stops the daemon and takes its rules out of the kernel.
+`apt purge netoxide` also deletes the state in `/var/lib/netoxide`: the config
+history, VPN keys and tokens. An rpm removal leaves that directory for you to
+delete. Example configs and the JSON Schema are in `/usr/share/netoxide`.
+
+CI installs both packages in clean containers of Debian 12 and 13, Ubuntu
+22.04 and 24.04, Fedora and AlmaLinux 9, loads a real ruleset with each
+distribution's own `nft`, and removes them. Nobody has installed one on
+hardware yet.
+
+## Install with the script
+
+On any other systemd distribution, from an unpacked release archive or from a
+source tree built with `cargo build --release`:
 
 ```sh
 sudo sh dist/install.sh              # add --packages to install nftables and dnsmasq too

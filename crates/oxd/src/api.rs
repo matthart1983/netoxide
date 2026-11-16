@@ -158,7 +158,32 @@ impl FromRequestParts<Shared> for Caller {
     }
 }
 
-pub fn router(shared: Shared, lease_file: PathBuf, state_dir: PathBuf) -> Router {
+/// What the box is doing right now: traffic, connections and what is being
+/// blocked, one reading a second. Asking is what keeps the readings coming.
+fn live_view(
+    State(s): State<Shared>,
+    caller: Caller,
+    live: &crate::live::SharedLive,
+) -> Api<Response> {
+    caller.may(Action::Read)?;
+    let text = s
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .running_config()?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "there is no commit yet".into()))?;
+    let config = Config::from_toml(&text).map_err(invalid)?;
+    let mut live = live.lock().unwrap_or_else(|e| e.into_inner());
+    // So the first answer already names the networks, before any reading.
+    live.set_plan(crate::live::Plan::new(&config));
+    Ok(Json(live.view(std::time::Instant::now())).into_response())
+}
+
+pub fn router(
+    shared: Shared,
+    lease_file: PathBuf,
+    state_dir: PathBuf,
+    live: crate::live::SharedLive,
+) -> Router {
     let key_dir = state_dir.clone();
     let backup_dir = state_dir.clone();
     let vpn_dir = state_dir.clone();
@@ -204,6 +229,13 @@ pub fn router(shared: Shared, lease_file: PathBuf, state_dir: PathBuf) -> Router
                     let dir = dir.clone();
                     async move { restore(state, caller, &dir, body) }
                 }
+            }),
+        )
+        .route(
+            "/v1/live",
+            get(move |state: State<Shared>, caller: Caller| {
+                let live = live.clone();
+                async move { live_view(state, caller, &live) }
             }),
         )
         .route("/v1/whoami", get(whoami))

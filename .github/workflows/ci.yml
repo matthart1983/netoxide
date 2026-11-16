@@ -67,3 +67,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  packages:
+    # Builds the .deb and .rpm the way a release does, then installs each
+    # in clean containers of the distributions it is for.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build against an old C library
+        # Debian 11's, so the programs run on older distributions too.
+        run: |
+          docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/target/compat \
+            rust:1-bullseye cargo build --release --locked
+      - name: Package
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm binutils
+          dist/package.sh target/compat/release "$RUNNER_TEMP/packages"
+      - name: Install and run on each distribution
+        run: dist/package-test.sh "$RUNNER_TEMP/packages"
+      - name: Keep the packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: ${{ runner.temp }}/packages

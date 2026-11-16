@@ -1,6 +1,6 @@
 # Netoxide web UI design
 
-There are two layers: 5 simple screens everyone sees, and 11 advanced screens that each switch on separately in Settings. All are made in Claude Design with mock data. The live canvas is
+There are two layers: 6 simple screens everyone sees, and 11 advanced screens that each switch on separately in Settings. All are made in Claude Design with mock data. The live canvas is
 <https://claude.ai/artifact/68bGaD4eiUpPPuTdvhMVjY> and needs a claude.ai login.
 
 The files in `source/` are Claude Design components (`.dc.html`). They render
@@ -16,6 +16,7 @@ opens in any browser.
 | --- | --- | --- |
 | `Setup.dc.html` | First-run setup | Three steps (internet, type of site, who manages it), then a list of what's on by default |
 | `Main.dc.html` | Home | One status, networks and what each can reach, one "worth a look" item, "Is something blocked?", common tasks |
+| `Live.dc.html` | Live view | NetWatch-style sparklines, one reading a second. KPI tiles (download, upload, connections, fibre latency, blocked per minute), each with its value plus a sparkline coloured by height. Mirrored traffic chart (download up, upload down, one shared scale) with a hover readout and a table view. In-row sparklines for networks, internet connections (latency), busiest devices and busiest destinations (named from DNS). "Just blocked" feed. Pause. |
 | `Access.dc.html` | Who can reach what | Network-to-network grid (click to allow or block), services reachable from the internet, exceptions as sentences, exception builder |
 | `Review.dc.html` | Review and apply | Change in one sentence, devices that would lose access, safe apply with a 2-minute keep-or-undo countdown |
 | `Settings.dc.html` | Settings | Basics, then 12 advanced features as switches; features in use stay on |

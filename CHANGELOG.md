@@ -2,6 +2,19 @@
 
 Releases are listed newest first. Versions follow [semantic versioning](https://semver.org). Before 1.0, a minor version may change the config schema, the API or the command line; each such change is listed under "Changed" with what to do about it.
 
+## 0.1.1 (16 November 2026)
+
+### Added
+
+- **Live view.** A Live screen in the browser and the terminal: download, upload, traffic per network, tracked connections and blocked packets, one reading a second over the last two minutes, and a list of what was just blocked. `GET /v1/live` serves it. Every number is a kernel counter.
+- **Blocks are named by network.** A pair of networks with no rules between them now gets a counted drop of its own in the ruleset, where it used to share one. What passes is unchanged.
+- **Packages.** A `.deb` and an `.rpm` for x86-64. Installing one starts the daemon and removing it takes the rules out of the kernel. Both are installed and exercised in CI on Debian 12 and 13, Ubuntu 22.04 and 24.04, Fedora and AlmaLinux 9.
+
+### Changed
+
+- **Release programs run on older systems.** They are now built against glibc 2.30, where 0.1.0 needed 2.39 and so would not start on Debian 12, Ubuntu 22.04 or RHEL 9.
+- When nftables refuses a ruleset, the message is no longer repeated once per rule, and it says to update `nftables` when the cause looks like an old `nft` program.
+
 ## 0.1.0 (15 November 2026)
 
 The first preview. A single-box firewall and router that passes its tests in network namespaces and in a virtual machine under systemd. It has not run on hardware and has had no outside security audit. See [docs/status.md](docs/status.md) for the limits.

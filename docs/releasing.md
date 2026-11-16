@@ -24,17 +24,17 @@ How a version goes out. The workflow in `.github/workflows/release.yml` does the
    git push origin v0.1.0
    ```
 
-6. The workflow tests, builds and creates a **draft** release with `netoxide-<version>-x86_64-linux.tar.gz` and its SHA-256. Download the archive, check `./oxd --version`, and install it in a VM by `dist/README.md`.
+6. The workflow tests, builds, installs the packages in containers of six distributions, and creates a **draft** release with the archive, the `.deb`, the `.rpm` and one file of SHA-256 sums. Download them, check the sums, and run `dist/package-systemd-test.sh` on the directory: it installs each package in a container that runs systemd.
 7. Paste the version's section of `CHANGELOG.md` into the draft and publish it.
 
 ## What a release contains
 
-`oxd`, `ox` and `netoxide-tui` built for x86-64 Linux against glibc, the systemd unit, the install steps, the example configs and the JSON Schema. The daemon runs the `nft` program to load rules, so the `nftables` package must be installed on the box.
+`oxd`, `ox` and `netoxide-tui` built for x86-64 Linux, the systemd unit, the install steps, the example configs and the JSON Schema, as a `.deb`, an `.rpm` and a tar archive. The programs are built in a Debian 11 container, so they need glibc 2.30 or later (`dist/package.sh` reads the number from the programs and puts it in the `.deb`). The daemon runs the `nft` program to load rules, so the `nftables` package must be installed on the box.
 
-The archive is not signed. Signing keys belong to the steward entity, which does not exist yet.
+Nothing is signed, and there is no package repository to add: a package is downloaded from the release page. Signing keys belong to the steward entity, which does not exist yet.
 
 ## Not done
 
-- No packages for any distribution, no container image, no OS image.
+- No apt or dnf repository, no container image, no OS image.
 - No builds for ARM.
 - No reproducible-build check.

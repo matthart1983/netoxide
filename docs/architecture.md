@@ -79,7 +79,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-There are 189 tests. Fourteen of them run a daemon inside a private, rootless network namespace, most of those against the real kernel:
+There are 203 tests. Fourteen of them run a daemon inside a private, rootless network namespace, most of those against the real kernel:
 
 - The compiled ruleset is loaded and the kernel's stored rules are counted, including a merged ruleset and one that filters the box's own traffic.
 - The daemon goes through a commit, an automatic revert after the window, a confirm, a rollback, and a restart with a commit still pending.
@@ -93,7 +93,7 @@ There are 189 tests. Fourteen of them run a daemon inside a private, rootless ne
 - A backup taken on one box is restored on a second: the second box has the same VPN public key and the same roles, runs nothing until the candidate is committed, and then runs the same config.
 - A box with no config is set up through the setup routes: no code and a wrong code show nothing, a preview changes nothing, applying returns a token and starts an undo timer, and setup shuts once a config runs. The grid then reads and changes who can reach what, and explain places a device on its network without being told the interface.
 - A website is blocked by name and real DNS queries get the null address for it and for names under it, over IPv4 and IPv6, while other names still resolve.
-- Headless Chrome and Firefox each set a blank box up from the setup code and walk Home, Access, Review, Settings and every advanced screen, add a guest network and block a website, against real rules in a namespace (`tests/web/run.sh`; it runs in CI and is not part of `cargo test`).
+- Headless Chrome and Firefox each set a blank box up from the setup code and walk Home, Live, Access, Review, Settings and every advanced screen, with real traffic crossing the box for Live, add a guest network and block a website, against real rules in a namespace (`tests/web/run.sh`; it runs in CI and is not part of `cargo test`).
 - `ox` manages a box from a second machine over IPv4 and IPv6: a wrong fingerprint and a wrong token save nothing, a full change cycle runs, a certificate that is not the saved one stops `ox` before the token is sent, and roles held to sections are refused every change outside them, including keeping or undoing someone else's commit.
 - The HTTPS listener refuses the 33rd connection from one address, still serves another address, and closes connections that say nothing.
 - The web UI's endpoints and the page's security headers are checked.
@@ -104,4 +104,4 @@ The importer test compares the pfSense model and the translated config on genera
 
 The TUI tests compare every mock screen with `tui/snapshots.txt` and every live screen, drawn against a test fixture, with `tui/snapshots-live.txt`. They also replay keys through each task and check the request the daemon would get, and draw every plain screen and form at 80×24.
 
-`tests/tui/run.sh` is separate from `cargo test`. It starts a daemon in a namespace and walks the terminal UI through setup, a new network, the access grid, a port forward, blocking, a check and a VPN device, 33 screens in all, checking each result with `ox`. CI runs it with real rules.
+`tests/tui/run.sh` is separate from `cargo test`. It starts a daemon in a namespace and walks the terminal UI through setup, a new network, the access grid, a port forward, blocking, a check and a VPN device, 35 screens in all, checking each result with `ox`. CI runs it with real rules.

@@ -24,8 +24,26 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 
+/** Builds an SVG element. Colours come from classes, never from attributes. */
+function svg(tag, attrs, ...kids) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === false || v == null) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+
 const state = {
   token: sessionStorage.getItem('ox-token') || '',
+  live: null,         // the live view: readings from /v1/live
+  livePaused: false,
+  liveHover: null,    // the reading under the pointer, counted back from now
   me: null,
   view: 'home',
   home: null,         // the simple view: networks, grid, what is let in
@@ -144,6 +162,12 @@ async function refresh(rerender) {
       if (e.status !== 404) throw e;
       state.running = null;
     }
+    // Live reads only its own readings. Asking is what keeps the box taking them.
+    if (state.view === 'live' && state.running) {
+      if (!state.livePaused) state.live = await call('GET', '/v1/live').catch(() => state.live);
+      state.problem = null;
+      return render();
+    }
     state.home = state.running ? await call('GET', '/v1/home').catch(() => null) : null;
     state.hits = parseHits(await call('GET', '/v1/kernel').catch(() => null));
     state.leases = await call('GET', '/v1/leases');
@@ -177,8 +201,8 @@ async function refresh(rerender) {
 
 // ── drawing ─────────────────────────────────────────────────────────────
 
-// Everyone sees these three.
-const SIMPLE = [['home', 'Home'], ['access', 'Access'], ['settings', 'Settings']];
+// Everyone sees these four.
+const SIMPLE = [['home', 'Home'], ['live', 'Live'], ['access', 'Access'], ['settings', 'Settings']];
 
 // Each advanced feature is a screen that stays out of the way until it is
 // switched on in Settings. A switch only shows or hides a screen. It never
@@ -267,7 +291,7 @@ function render() {
     app.replaceChildren(state.setup && state.setup.needed ? setupView() : signIn());
     return;
   }
-  const views = { home, access, settings, task, review: reviewView, rules, nat, network, changes, explain: explainView, audit, admin };
+  const views = { home, live: liveView, access, settings, task, review: reviewView, rules, nat, network, changes, explain: explainView, audit, admin };
   // A screen that was switched off, or one this role may not see, falls back to Home.
   const wanted = ADVANCED.some(([id]) => id === state.view) && !shown(state.view) ? 'home' : state.view;
   const draw = views[wanted] || home;
@@ -574,6 +598,152 @@ function home() {
     h('details', { class: 'panel' },
       h('summary', null, 'Everything this box does, line by line'),
       h('ul', { class: 'plain' }, state.running.describe.map((line) => h('li', null, line)))),
+  ];
+}
+
+// ── Live: what the box is doing right now ───────────────────────────────
+
+// Plots deepen in colour with height. The gradients are defined once and
+// coloured by the stylesheet. The upload half of the chart grows downwards,
+// so it has its own, turned over.
+document.body.append(svg('svg', { class: 'defs', width: 0, height: 0, 'aria-hidden': 'true' },
+  svg('defs', null, ['down', 'up', 'conns', 'blocked'].flatMap((kind) => [false, true].map((flip) =>
+    svg('linearGradient', { id: 'g-' + kind + (flip ? '-flip' : ''), x1: 0, x2: 0, y1: flip ? 0 : 1, y2: flip ? 1 : 0 },
+      svg('stop', { offset: 0, class: 'low ' + kind }),
+      svg('stop', { offset: 1, class: 'high ' + kind })))))));
+
+/** A rate in the largest unit that keeps it readable: [number, unit]. */
+function rate(bits) {
+  const figures = (n) => (n >= 100 ? n.toFixed(0) : n.toFixed(1));
+  if (bits >= 1e9) return [figures(bits / 1e9), 'Gb/s'];
+  if (bits >= 1e6) return [figures(bits / 1e6), 'Mb/s'];
+  if (bits >= 1e3) return [(bits / 1e3).toFixed(0), 'kb/s'];
+  return [String(bits), 'b/s'];
+}
+const whole = (bits) => rate(bits).join(' ');
+const lastOf = (a) => (a.length ? a[a.length - 1] : 0);
+
+/** The 95th percentile with a little headroom, so one spike cannot flatten the rest. */
+function robustMax(a) {
+  if (!a.length) return 1;
+  const v = a.slice().sort((x, y) => x - y);
+  return Math.max(1, Math.ceil(v[Math.round((v.length - 1) * 0.95)] * 1.1));
+}
+
+/** Points of an area plot in a W by H box. Only measured time is drawn, at the right. */
+function areaPoints(a, W, H, max, window, down) {
+  const n = Math.max(2, window);
+  const x = (i) => ((n - a.length + i) * W / (n - 1)).toFixed(1);
+  const y = (v) => {
+    const tall = Math.max(1, Math.min(v, max) / max * (H - 1));
+    return (down ? tall : H - tall).toFixed(1);
+  };
+  if (!a.length) return '';
+  const base = down ? 0 : H;
+  return x(0) + ',' + base + ' ' + a.map((v, i) => x(i) + ',' + y(v)).join(' ') + ' ' + x(a.length - 1) + ',' + base;
+}
+
+function sparkline(a, kind, window) {
+  return svg('svg', { class: 'spark ' + kind, viewBox: '0 0 120 28', preserveAspectRatio: 'none', 'aria-hidden': 'true' },
+    svg('polygon', { points: areaPoints(a, 120, 28, robustMax(a), window, false) }));
+}
+
+function liveView() {
+  if (!state.running) return noConfig();
+  const d = state.live;
+  if (!d) return h('div', { class: 'panel' }, h('p', { class: 'dim' }, 'Taking the first reading…'));
+  const window = d.window || 120;
+  const have = (d.download || (d.networks[0] && d.networks[0].down) || []).length;
+  const ago = (secs) => (secs === 0 ? 'now' : secs < 60 ? secs + ' s ago' : Math.floor(secs / 60) + ' min ago');
+  const count = (n) => n.toLocaleString();
+
+  // The tiles the box can fill. A series it cannot measure is absent, and so is its tile.
+  const tiles = [];
+  for (const [label, a, kind] of [['Download', d.download, 'down'], ['Upload', d.upload, 'up']]) {
+    if (a) tiles.push([label, rate(lastOf(a))[0], rate(lastOf(a))[1], 'peak ' + whole(Math.max(0, ...a)), a, kind]);
+  }
+  if (d.connections) {
+    tiles.push(['Connections', count(lastOf(d.connections)), 'open', 'peak ' + count(Math.max(0, ...d.connections)), d.connections, 'conns']);
+  }
+  if (d.blocked) {
+    const recent = d.blocked.slice(-60);
+    tiles.push(['Blocked', count(recent.reduce((x, y) => x + y, 0)), 'packets',
+      recent.length === 60 ? 'in the last minute' : 'in the last ' + recent.length + ' seconds', d.blocked, 'blocked']);
+  }
+
+  const chart = () => {
+    if (!d.download || !d.upload) {
+      return h('div', { class: 'panel' }, h('h2', null, 'Internet traffic'),
+        h('p', { class: 'dim' }, 'This box has no port that faces the internet, so there is no internet traffic to draw.'));
+    }
+    const scale = robustMax(d.download.concat(d.upload));
+    const W = 900, H = 120;
+    const hover = state.liveHover != null && state.liveHover < d.download.length ? state.liveHover : null;
+    const at = (a, back) => a[a.length - 1 - back];
+    const move = (e) => {
+      const box = e.currentTarget.getBoundingClientRect();
+      const back = Math.round((1 - (e.clientX - box.left) / box.width) * (window - 1));
+      const next = back >= 0 && back < d.download.length ? back : null;
+      if (next !== state.liveHover) { state.liveHover = next; render(); }
+    };
+    const hoverX = hover == null ? null : ((window - 1 - hover) * W / (window - 1)).toFixed(1);
+    return h('div', { class: 'panel' },
+      h('h2', null, 'Internet traffic, last ' + (window % 60 === 0 ? window / 60 + ' minutes' : window + ' seconds')),
+      h('p', { class: 'legend' },
+        h('span', { class: 'key down' }, '▲'), ' Download ' + whole(lastOf(d.download)), ' ',
+        h('span', { class: 'key up' }, '▼'), ' Upload ' + whole(lastOf(d.upload))),
+      h('div', { class: 'chart' },
+        h('div', { class: 'axis dim' }, h('span', null, whole(scale) + ' ▲'), h('span', null, '0'), h('span', null, whole(scale) + ' ▼')),
+        svg('svg', { class: 'traffic', viewBox: '0 0 ' + W + ' ' + 2 * H, preserveAspectRatio: 'none', role: 'img',
+          'aria-label': 'Download ' + whole(lastOf(d.download)) + ', upload ' + whole(lastOf(d.upload)) + '. The table below has the last readings.',
+          onmousemove: move, onmouseleave: () => { if (state.liveHover != null) { state.liveHover = null; render(); } } },
+          svg('polygon', { class: 'down', points: areaPoints(d.download, W, H, scale, window, false) }),
+          svg('g', { transform: 'translate(0 ' + H + ')' },
+            svg('polygon', { class: 'up', points: areaPoints(d.upload, W, H, scale, window, true) })),
+          svg('line', { class: 'zero', x1: 0, y1: H, x2: W, y2: H }),
+          hoverX == null ? null : svg('line', { class: 'cursor', x1: hoverX, y1: 0, x2: hoverX, y2: 2 * H }))),
+      h('div', { class: 'ticks dim' }, h('span', null, ago(window)), h('span', null, ago(window / 2)), h('span', null, 'now')),
+      h('p', { class: 'dim readout', 'aria-live': 'off' }, hover == null
+        ? 'Download grows up, upload grows down, on one shared scale. Point at the chart for a reading.'
+        : ago(hover) + ': download ' + whole(at(d.download, hover)) + ', upload ' + whole(at(d.upload, hover))),
+      h('details', null, h('summary', null, 'Last 10 readings as a table'),
+        table(['When', 'Download', 'Upload'], d.download.slice(-10).reverse().map((v, i) =>
+          [ago(i), whole(v), whole(at(d.upload, i))]))));
+  };
+
+  const pause = () => { state.livePaused = !state.livePaused; render(); };
+  return [
+    h('div', { class: 'live-head' },
+      h('span', { class: 'dot' + (state.livePaused ? ' paused' : '') }),
+      h('span', { class: 'grow dim' }, state.livePaused ? 'Paused. The numbers are frozen.'
+        : have < 2 ? 'Live. Taking the first readings, one a second.'
+          : 'Live. One reading a second, from the box\'s own counters.'),
+      h('button', { onclick: pause, 'aria-pressed': state.livePaused ? 'true' : 'false' }, state.livePaused ? 'Resume' : 'Pause')),
+    tiles.length ? h('div', { class: 'tiles' }, tiles.map(([label, value, unit, detail, a, kind]) => h('div', { class: 'panel tile ' + kind },
+      h('div', { class: 'tile-label' }, label),
+      h('div', { class: 'tile-value' }, h('b', null, value), ' ', h('span', { class: 'dim' }, unit)),
+      sparkline(a, kind, window),
+      h('div', { class: 'dim' }, detail)))) : null,
+    chart(),
+    h('div', { class: 'grid' },
+      h('div', { class: 'panel' },
+        h('h2', null, 'Your networks'),
+        d.networks.length ? d.networks.map((n) => h('div', { class: 'spark-row' },
+          h('b', null, n.name),
+          sparkline(n.down.map((v, i) => v + (n.up[i] || 0)), 'down', window),
+          h('span', { class: 'mono' }, h('span', { class: 'key down' }, '▲'), ' ' + whole(lastOf(n.down)), ' ',
+            h('span', { class: 'key up' }, '▼'), ' ' + whole(lastOf(n.up)))))
+          : h('p', { class: 'dim' }, 'This box has no inside network yet.')),
+      d.blocked ? h('div', { class: 'panel' },
+        h('h2', null, 'Just blocked'),
+        d.feed.length ? h('ul', { class: 'plain feed' }, d.feed.map((e) => h('li', null,
+          h('span', { class: 'dim when' }, ago(e.ago)), ' ',
+          h('span', { class: 'tag drop' }, 'Blocked'), ' ', e.text, ' ',
+          h('span', { class: 'dim' }, e.packets === 1 ? '1 packet' : count(e.packets) + ' packets'))))
+          : h('p', { class: 'dim' }, 'Nothing has been blocked while you have been watching.'),
+        h('p', { class: 'dim' }, count(d.blocked.reduce((x, y) => x + y, 0)) + ' packets blocked in the last '
+          + (d.blocked.length % 60 === 0 && d.blocked.length ? d.blocked.length / 60 + ' minutes' : d.blocked.length + ' seconds') + '.')) : null),
+    h('p', { class: 'dim' }, 'Every number here is a counter the kernel keeps: bytes on each port, tracked connections, and packets counted by the rules that block. Readings are taken only while this page is open.'),
   ];
 }
 
@@ -1236,4 +1406,6 @@ function admin() {
 }
 
 refresh(true);
-setInterval(() => { if (state.token) refresh(false); }, 2000);
+setInterval(() => { if (state.token && state.view !== 'live') refresh(false); }, 2000);
+// Live takes a reading a second.
+setInterval(() => { if (state.token && state.view === 'live' && !state.livePaused) refresh(false); }, 1000);

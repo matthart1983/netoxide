@@ -75,9 +75,9 @@ probe test must still pass with only the known "Pass association" difference.
 
 The maintainer's rule for adoption. Expert screens never come first.
 
-- **Default layer:** Setup, Home, Access, Review and Settings in the web UI;
-  Home, Access, Review and Settings in the terminal UI, with the same tasks
-  as a menu; a dozen everyday commands in `ox --help`. Plain words: networks, Allowed,
+- **Default layer:** Setup, Home, Live, Access, Review and Settings in the
+  web UI; Home, Live, Access, Review and Settings in the terminal UI, with
+  the same tasks as a menu; a dozen everyday commands in `ox --help`. Plain words: networks, Allowed,
   Blocked, apply safely, keep, undo.
 - **Advanced layer:** each detailed screen is a switch in Settings
   (`ADVANCED` in `app.js`, kept in the browser; `DETAILED` in `tui/src/live.rs`,
@@ -95,8 +95,52 @@ The maintainer's rule for adoption. Expert screens never come first.
   checks that block after allow gives back the same config.
 - **Always on:** safe apply. The simple layer applies with a two-minute timer.
 
+## Live view data rules
+
+- **Every number on Live is a real counter.** No estimates, no sample data,
+  and no throughput claim beyond what was measured. `crates/oxd/src/live.rs`
+  reads interface byte counters over netlink, the connection-tracking count
+  from `/proc/sys/net/netfilter/nf_conntrack_count`, and rule packet counters
+  from the ruleset listing.
+- **What cannot be measured is absent, not zero.** A series the daemon cannot
+  read is `null` in `/v1/live`, and both screens leave its tile out. A dry run
+  shows traffic and no "blocked".
+- **Not built, so not shown:** latency to the internet, traffic per device,
+  busiest destinations. The design (`docs/design/source/Live.dc.html`) has
+  them. Destinations would be named from the box's own DNS resolver, never
+  by inspecting traffic. Per-device figures need per-address counters in the
+  ruleset or connection accounting.
+- **Sampling is lazy.** A request to `/v1/live` marks the view as watched;
+  the sampler runs once a second while it was asked in the last 15 seconds,
+  then stops and forgets. A config change keeps the history (`set_plan`).
+- **A VLAN's bytes are also counted on its parent port.** `Plan` records each
+  port's VLANs and takes them off. A test covers it.
+- **Blocks are named from counters.** Each zone pair with a policy ends in
+  `default <from>-<to>`; pairs without one get the same comment from a counted
+  drop at the end of the base chain (`NAMED_DEFAULTS` in `ox-nft/src/render.rs`
+  caps how many). `Plan::blocks` maps those comments, and drop rules' IDs, to
+  sentences.
+- The terminal plots are `tui/src/spark.rs`: braille area plots coloured by
+  height, mirrored up and down on one scale, scaled to the 95th percentile.
+  Keep that look. The web view draws the same with SVG and gradients styled
+  from `app.css`; colours never go in attributes, because of the CSP.
+- `tests/tui/traffic.py` makes real traffic between the lab's namespaces for
+  the walk-throughs and the demo. Start it as `nsenter ... python3 ... &`
+  with its output sent to `/dev/null`, never through a shell function: a
+  generator that outlives the script holds the caller's pipe open for ever.
+
 When you add a feature, add its plain-language path first (a sentence on
 Home, a task, a grid cell, an everyday command) and its detailed screen second.
+
+`dist/package.sh` builds the `.deb` and `.rpm` from built programs, with the
+same files and the same behaviour as `dist/install.sh`; change the two
+together. `dist/package-test.sh` installs them in containers of six
+distributions (in CI) and `dist/package-systemd-test.sh` installs each under
+a real systemd (by hand, needs podman). Containers share the host kernel: on
+this development machine's 7.1 kernel the older `nft` in Debian 12 and Ubuntu
+fails to load the compiled rules, and the same test passes in CI. Trust CI for
+those. Release programs are built in a `rust:1-bullseye` container for an old
+glibc.
 
 `dist/install.sh` is the install path the docs lead with; the VM test installs
 and removes with it, so change the two together. `BROWSER=firefox` runs the
@@ -129,7 +173,7 @@ as a page to capture in a browser. The web pictures are browser captures of a `-
 with `examples/branch.toml` and `examples/branch-candidate.toml`. Retake them
 when a screen changes.
 
-The version is set once, in the workspace `Cargo.toml`. 0.1.0 was tagged on 15 Nov 2026 as a preview. `docs/releasing.md` has the checklist and the
+The version is set once, in the workspace `Cargo.toml`. 0.1.0 and 0.1.1 were tagged on 15 Nov 2026 as previews. `docs/releasing.md` has the checklist and the
 remaining steps.
 `.github/workflows/release.yml` builds a draft release from a `v*` tag. Do not
 tag or publish; that is the maintainer's step.
@@ -255,6 +299,7 @@ Live mode:
 
 - `src/live.rs` holds the `Backend` trait, the socket implementation, state and keys. Everything the screens show comes through `Backend`. The test fixture in the same file implements it in memory.
 - `src/tasks.rs` holds the plain-language tasks: each is a `Form` that ends in one request to an `/v1/actions/...` route the web UI also uses. Add a task there and in `MENU`, never as a new key to learn.
+- `src/live_view.rs` draws Live and parses `/v1/live`; `src/spark.rs` is the braille plotting. Live is the only screen that fetches its own data, and only while it is open.
 - `src/live_ui.rs` draws the screens. The plain ones (`SIMPLE`) must fit 80×24, footer keys included; a test draws every screen and every line of every form at that size. The detailed ones need 132×34.
 - Plain screens use plain words: change, apply safely, keep, undo. "Candidate", "commit" and rule IDs belong to the detailed screens. A test checks Home for them.
 - A change that is applied and not kept yet is past review: `waiting()` leaves it out, and Review offers keep or undo.

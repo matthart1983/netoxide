@@ -106,9 +106,8 @@ install -m 0755 "$bin_dir/oxd" "$bin_dir/ox" /usr/bin/
 install -m 0644 "$here/oxd.service" /etc/systemd/system/oxd.service
 mkdir -p /etc/netoxide
 if [ ! -e /etc/netoxide/oxd.env ]; then
-    # The web interface, so the box can be set up from a browser. Until a
-    # config runs, it only answers setup from a private address with the code.
-    say 'OXD_ARGS=--listen [::]:8443' >/etc/netoxide/oxd.env
+    # Turns on the web interface, so the box can be set up from a browser.
+    install -m 0644 "$here/oxd.env" /etc/netoxide/oxd.env
 fi
 systemctl daemon-reload
 systemctl enable --now oxd

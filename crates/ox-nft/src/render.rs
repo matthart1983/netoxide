@@ -351,10 +351,67 @@ fn dispatch(out: &mut Out, rs: &Ruleset) {
             vec![json!({ "vmap": { "key": meta("oifname"), "data": "@out_zones" } })],
         );
     }
-    // A packet for a zone pair with no policy reaches here and meets the chain's drop policy.
-    out.rule("input", None, vec![log("ox no-policy-in "), counter()]);
-    out.rule("forward", None, vec![log("ox no-policy "), counter()]);
+    // A packet for a zone pair with no policy reaches here. Each such pair
+    // gets a drop of its own, so the block can be counted and named: "guest
+    // tried to reach lan". The verdict is the chain's own policy, so this
+    // changes what is counted and nothing about what passes.
+    let mut zones: Vec<&str> = vec![];
+    for i in &rs.interfaces {
+        if !zones.contains(&i.zone.as_str()) {
+            zones.push(&i.zone);
+        }
+    }
+    let mut named: Vec<(&str, String, Vec<Value>)> = vec![];
+    for from in &zones {
+        let ins = rs.zone_interfaces(from);
+        if rs.chain(from, SELF_ZONE).is_none() {
+            named.push((
+                "input",
+                format!("default {from}-{SELF_ZONE}"),
+                vec![eq(meta("iifname"), ifaces(&ins))],
+            ));
+        }
+        for to in &zones {
+            if from != to && rs.chain(from, to).is_none() {
+                named.push((
+                    "forward",
+                    format!("default {from}-{to}"),
+                    vec![
+                        eq(meta("iifname"), ifaces(&ins)),
+                        eq(meta("oifname"), ifaces(&rs.zone_interfaces(to))),
+                    ],
+                ));
+            }
+        }
+    }
+    // With many zones the pairs would make a long list at the end of a base
+    // chain. Past this many, they share the two rules below.
+    if named.len() <= NAMED_DEFAULTS {
+        for (chain, comment, mut expr) in named {
+            expr.extend([
+                log(&format!("ox {comment} ")),
+                counter(),
+                verdict(Action::Drop),
+            ]);
+            out.rule(chain, Some(&comment), expr);
+        }
+    }
+    // Anything left meets the chain's drop policy: a port in no zone, or a
+    // pair past the limit above.
+    out.rule(
+        "input",
+        Some("no policy in"),
+        vec![log("ox no-policy-in "), counter()],
+    );
+    out.rule(
+        "forward",
+        Some("no policy"),
+        vec![log("ox no-policy "), counter()],
+    );
 }
+
+/// The most zone pairs without a policy that get a counted drop each.
+const NAMED_DEFAULTS: usize = 16;
 
 fn pair_chain(out: &mut Out, chain: &Chain) {
     let name = chain.name();
