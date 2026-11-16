@@ -13,6 +13,7 @@
 mod api;
 mod dhcp;
 mod limit;
+mod live;
 mod net;
 mod nft;
 mod services;
@@ -493,6 +494,10 @@ async fn serve(args: Args) -> Result<(), String> {
     std::fs::set_permissions(&args.socket, std::fs::Permissions::from_mode(0o660))
         .map_err(|e| format!("{}: {e}", args.socket.display()))?;
 
+    // Readings for the live view, taken only while someone is watching it.
+    let live = live::SharedLive::default();
+    live::start(live.clone(), shared.clone());
+
     // The commit-confirm clock. A pending commit past its deadline is reverted here.
     let ticker = shared.clone();
     tokio::spawn(async move {
@@ -547,7 +552,12 @@ async fn serve(args: Args) -> Result<(), String> {
             "fingerprint": fingerprint,
         }));
         // No connect info here, so every request must carry a token.
-        let app = api::router(shared.clone(), leases.clone(), args.state_dir.clone());
+        let app = api::router(
+            shared.clone(),
+            leases.clone(),
+            args.state_dir.clone(),
+            live.clone(),
+        );
         eprintln!("oxd: HTTPS on {addr} ({note}); every request needs an access token");
         eprintln!("oxd: certificate fingerprint {fingerprint}");
         tokio::spawn(async move {
@@ -588,7 +598,12 @@ async fn serve(args: Args) -> Result<(), String> {
         let plain = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| format!("{addr}: {e}"))?;
-        let app = api::router(shared.clone(), leases.clone(), args.state_dir.clone());
+        let app = api::router(
+            shared.clone(),
+            leases.clone(),
+            args.state_dir.clone(),
+            live.clone(),
+        );
         eprintln!("oxd: HTTP on {addr}, loopback only; every request needs an access token");
         tokio::spawn(async move {
             if let Err(e) = axum::serve(
@@ -604,7 +619,7 @@ async fn serve(args: Args) -> Result<(), String> {
     let socket = args.socket.clone();
     axum::serve(
         listener,
-        api::router(shared, leases, args.state_dir.clone())
+        api::router(shared, leases, args.state_dir.clone(), live)
             .into_make_service_with_connect_info::<api::Peer>(),
     )
     .with_graceful_shutdown(async {

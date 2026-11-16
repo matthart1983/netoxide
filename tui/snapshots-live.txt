@@ -1,6 +1,6 @@
 ── Home ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ status ────────────────────────────────────────────────────────────────────────────────────────────────────╮╭ what would you like to do? ────────────────────╮
 │ ✓ The firewall is running                                                                                  ││▸ Review and apply the waiting change           │
 │   1 thing is let in from the internet. Everything else is blocked.                                         ││  Add a network, such as one for guests         │
@@ -45,9 +45,56 @@
 │                                                                                                            ││                                                │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯
   ↑↓  choose   enter  open   tab  next screen   ?  help   q  quit
+── Live ──
+ Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
+ ● live · one reading a second, the last 2 minutes shown · p to pause
+╭ download ────────────────────────────╮╭ upload ──────────────────────────────╮╭ connections ─────────────────────────╮╭ blocked ─────────────────────────────╮
+│ 415 Mb/s  ⣿⣶⣶⣶⣶⣶⣶⣾⣿⣶⣶⣶⣶⣶⣶⣾⣿⣷⣶⣶⣶⣶⣶⣾⣿⣷⣶││ 121 Mb/s  ⣷⣷⣶⣷⣷⣶⣶⣷⣷⣶⣷⣷⣶⣶⣷⣷⣶⣷⣷⣷⣶⣷⣷⣶⣶⣷⣷││ 12,479 open  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││ 12 packets  ⣆⣀⣀⣰⣀⣀⣀⣆⣀⣀⣰⣀⣀⣀⣆⣀⣀⣰⣀⣀⣀⣆⣀⣀⣰│
+│ peak 470 Mb/s                        ││ peak 130 Mb/s                        ││ peak 12,700                          ││ in the last minute                   │
+╰──────────────────────────────────────╯╰──────────────────────────────────────╯╰──────────────────────────────────────╯╰──────────────────────────────────────╯
+╭ internet traffic   ▲ download 415 Mb/s   ▼ upload 121 Mb/s ──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                                                                                              │
+│⣿⣷⣶⣶⣤⣤⣤⣀⣀⡀                             ⢀⣀⣀⣠⣤⣤⣶⣶⣾⣿⣶⣶⣦⣤⣤⣀⣀⣀                              ⣀⣀⣀⣤⣤⣴⣶⣶⣿⣷⣶⣶⣤⣤⣄⣀⣀⡀                             ⢀⣀⣀⣤⣤⣤⣶⣶⣾⣿⣶⣶⣦⣤⣤⣀⣀⡀      │
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣦⣤⣤⣀⣀⡀           ⢀⣀⣀⣤⣤⣤⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣶⣤⣤⣄⣀⣀            ⣀⣀⣠⣤⣤⣶⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣤⣤⣤⣀⣀⡀           ⢀⣀⣀⣤⣤⣴⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⣤⣤│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣶⣶⣤⣴⣶⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣶⣶⣦⣴⣶⣶⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣶⣦⣤⣶⣶⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│⣿⣿⣿⣿⣿⡿⠿⣿⣿⣿⣿⣿⠿⢿⣿⣿⣿⣿⡿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⢿⣿⣿⣿⣿⣿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⢿⣿⣿⣿⣿⣿⠿⣿⣿⣿⣿⣿⡿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⢿⣿⣿⣿⣿⡿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⢿⣿⣿⣿⣿⡿⠿⣿⣿⣿⣿⣿⡿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⣿⣿⣿⣿⣿⡿⢿⣿⣿⣿⣿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠿⣿⣿⣿⣿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠿⣿⣿⣿⣿⣿│
+│⠿⠇ ⠉⠛⠃ ⠿ ⠈⠉⠛ ⠘⠋⠉ ⠸⠇ ⠛⠛⠃ ⠿⠇⠈⠉⠛ ⠸⠿⠉ ⠸⠿ ⠛⠋⠁ ⠿⠇⠈⠉⠛⠃⠸⠿ ⠈⠙⠛ ⠛⠋⠉ ⠿⠇ ⠛⠉⠁ ⠿ ⠈⠙⠛ ⠸⠇ ⠉⠹⠇ ⠛⠉⠁ ⠿ ⠘⠛⠛ ⠸⠿ ⠉⠙⠃ ⠛⠋⠁ ⠿⠇⠘⠛⠉⠁⠸⠿ ⠉⠙⠛ ⠿⠇ ⠉⠛⠃⠘⠛⠉⠁⠸⠿ ⠘⠛⠛ ⠸⠇ ⠉⠛⠃ ⠿⠉⠁ ⠿ ⠘⠛⠉ ⠸⠇ ⠉⠙⠃ ⠿⠇⠈⠉⠛│
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│2 min ago                                                                                                                                                  now│
+╰ both halves share one scale · edge = 506 Mb/s ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ your networks · traffic now ─────────────────────────────────────────╮╭ just blocked · × is packets ─────────────────────────────────────────────────────────╮
+│Servers        ⣷⣷⣷⣷⣿⣶⣿⣾⣾⣾⣾⣾⣾⣾⣾⣾⣾⣾⣷⣾⣷⣷⣷⣷⣷⣷⣷ ▲ 136 Mb/s   ▼ 29.0 Mb/s   ││ 3s ago ×14   Internet tried to reach the box itself. Nothing allows it.              │
+│Guest Wi-Fi    ⣷⣶⣷⣶⣾⣶⣾⣶⣶⣷⣶⣷⣶⣾⣶⣾⣶⣶⣷⣶⣷⣶⣾⣶⣾⣶⣶ ▲ 44.0 Mb/s  ▼ 9.0 Mb/s    ││41s ago ×2    Guest Wi-Fi tried to reach Staff network. Nothing allows it.            │
+│Staff network  ⣷⣾⣷⣶⣷⣶⣷⣾⣾⣶⣷⣾⣷⣾⣶⣾⣷⣾⣶⣶⣷⣾⣷⣾⣶⣷⣷ ▲ 248 Mb/s   ▼ 45.5 Mb/s   ││                                                                                      │
+╰──────────────────────────────────────────────────────────────────────╯╰ 24 packets blocked in the last 2 minutes ────────────────────────────────────────────╯
+  p  pause   tab  next screen   ?  help   q  quit
 ── Access ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ who can reach what · anything not allowed is blocked ────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │from ↓  to →   Servers                 Guest Wi-Fi             Staff network           Internet                                                               │
 │Servers         —                       Blocked                 Blocked                 Blocked                                                               │
@@ -94,7 +141,7 @@
   ↑↓←→  move   enter  allow or block   tab  next screen   ?  help   q  quit
 ── Review ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ what will change ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │• What Staff network can reach on Servers changes (4 rules)                                                                                                   │
 │                                                                                                                                                              │
@@ -141,7 +188,7 @@
   enter  apply safely   d  discard   tab  next screen   ?  help   q  quit
 ── Settings ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ basics ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │box name        syd-br-014-a                                                                                                                                  │
 │changes         applied safely: each undoes itself after 2 minutes unless kept                                                                                │
@@ -188,7 +235,7 @@
   ↑↓  choose   enter  switch on or off   tab  next screen   ?  help   q  quit
 ── Policy ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ zone pairs ──────────────╮╭ lan → dmz · 3 rules · first match wins ──────────────────────────────────────────────────────────────────────────────────────────╮
 │▸ lan → dmz            3  ││ #  rule                                                                                                 action packets    log    │
 │  lan → wan            1  ││▸1  r-0388 Finance to file servers                                                                       accept       1204        │
@@ -235,7 +282,7 @@
   ←→  zone pair   ↑↓  rule   x  explain   R  reload   tab  next screen   ?  help   q  quit
 ── NAT ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ port forwards · 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │id           name                                from zone  match                                translate to                        filter rule    packets   │
 │n-0010       Public web                          wan        203.0.113.10 tcp/443                 10.30.0.10                          r-0200             512880│
@@ -282,7 +329,7 @@
   R  reload   tab  next screen   ?  help   q  quit
 ── Interfaces ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ interfaces · 4 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │interface        zone         zone description                      addresses                                                                   route         │
 │lan0.20          lan          Staff network                         10.20.0.1/16, 2001:db8:4a00:1::1/64                                                       │
@@ -329,7 +376,7 @@
   R  reload   tab  next screen   ?  help   q  quit
 ── Changes ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ candidates ──────────────────────────────────────────────────────────────────────────────────╮╭ running ─────────────────────────────────────────────────────╮
 │▸ block-legacy-smb                                                                            ││#1  confirmed                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────╯│by              ana                                           │
@@ -376,7 +423,7 @@
   ↑↓  candidate   c  commit   w  confirm window   R  reload   tab  next screen   ?  help   q  quit
 ── Explain ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ why did this packet do that? ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │src —   dst —   proto tcp   dport —   in —                                                                                                                    │
 │                                                                                                                                                              │
@@ -423,7 +470,7 @@
   e  edit packet   enter  explain   m  compare candidate   R  reload   tab  next screen   ?  help   q  quit
 ── Audit ──
  Netoxide  syd-br-014-a  │  the firewall is running  │  1 change waiting
- 1 Home  2 Access  3 Review  4 Settings
+ 1 Home  2 Live  3 Access  4 Review  5 Settings
 ╭ audit log · 4 entries · hash chain verified by oxd ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ #    time (UTC)          who          event             detail                                                                                    hash       │
 │▸   4 2026-11-14 10:56:03 jun          candidate saved   block-legacy-smb sha256 762941b3                                                          049f3ca1e0…│

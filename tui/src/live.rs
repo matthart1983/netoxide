@@ -16,6 +16,7 @@ use ox_client::Client;
 use ox_schema::{AddrRef, Config, PortSpec, Rule, SELF_ZONE, ServiceRef};
 use serde_json::{Value, json};
 
+use crate::live_view::{self, LiveData};
 use crate::tasks::{self, Choice, Device, Form, MENU, Saved, Task};
 
 /// A commit as the daemon reports it.
@@ -128,6 +129,9 @@ pub trait Backend {
     fn action(&self, path: &str, body: &Value) -> Res<Saved>;
     /// Throws a waiting change away.
     fn discard(&self, candidate: &str) -> Res<()>;
+    /// What the box is doing right now. `None` before the first commit.
+    /// Asking is what keeps the daemon taking readings.
+    fn live(&self) -> Res<Option<LiveData>>;
 }
 
 pub struct SocketBackend(Client);
@@ -332,11 +336,20 @@ impl Backend for SocketBackend {
             .send("DELETE", &format!("/v1/candidates/{candidate}"), None)
             .map(|_| ())
     }
+
+    fn live(&self) -> Res<Option<LiveData>> {
+        match self.0.json("GET", "/v1/live", None) {
+            Ok(v) => Ok(Some(live_view::parse(&v))),
+            Err(e) if e.contains("no commit yet") => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Screen {
     Home,
+    Live,
     Access,
     Review,
     Settings,
@@ -349,8 +362,9 @@ pub enum Screen {
 }
 
 impl Screen {
-    pub const ALL: [Screen; 10] = [
+    pub const ALL: [Screen; 11] = [
         Screen::Home,
+        Screen::Live,
         Screen::Access,
         Screen::Review,
         Screen::Settings,
@@ -365,6 +379,7 @@ impl Screen {
     pub fn title(self) -> &'static str {
         match self {
             Screen::Home => "Home",
+            Screen::Live => "Live",
             Screen::Access => "Access",
             Screen::Review => "Review",
             Screen::Settings => "Settings",
@@ -388,8 +403,9 @@ impl Screen {
 pub const WINDOWS: [u64; 4] = [30, 120, 300, 600];
 
 /// The screens everyone sees.
-pub const SIMPLE: [Screen; 4] = [
+pub const SIMPLE: [Screen; 5] = [
     Screen::Home,
+    Screen::Live,
     Screen::Access,
     Screen::Review,
     Screen::Settings,
@@ -461,6 +477,10 @@ pub struct LiveApp {
     /// Set after one press of d on Review; a second press discards.
     pub discarding: bool,
     pub devices: Vec<usize>,
+    /// The Live screen's readings. Only fetched while that screen is open.
+    pub live: Option<LiveData>,
+    /// Live is frozen: nothing new is fetched until it is resumed.
+    pub paused: bool,
     pub running: bool,
     pub show_help: bool,
 
@@ -508,6 +528,8 @@ impl LiveApp {
             device_text: false,
             discarding: false,
             devices: vec![],
+            live: None,
+            paused: false,
             running: true,
             show_help: false,
             status: Status::default(),
@@ -560,6 +582,15 @@ impl LiveApp {
                     .map_err(|e| format!("the running config does not load here: {e}"))?,
             ),
         };
+        // Live reads only its own data, once a second, and nothing else:
+        // the daemon samples for it only while it is being asked.
+        if self.screen == Screen::Live && self.config.is_some() {
+            self.status = backend.status()?;
+            if !self.paused {
+                self.live = backend.live()?;
+            }
+            return Ok(());
+        }
         self.hits = backend.hits().unwrap_or_default();
         self.devices = backend.devices().unwrap_or_default();
         self.audit = backend.audit()?;
@@ -644,6 +675,15 @@ impl LiveApp {
     }
 
     pub fn on_key(&mut self, key: KeyEvent, backend: &dyn Backend) {
+        let before = self.screen;
+        self.handle_key(key, backend);
+        // A screen shows its own data as soon as it opens, not a second later.
+        if self.screen != before {
+            self.refresh(backend);
+        }
+    }
+
+    fn handle_key(&mut self, key: KeyEvent, backend: &dyn Backend) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.running = false;
             return;
@@ -1053,6 +1093,11 @@ impl LiveApp {
             .as_ref()
             .map_or(0, |c| ox_setup::grid(c).networks.len());
         match self.screen {
+            Screen::Live => {
+                if matches!(code, KeyCode::Char('p') | KeyCode::Char(' ')) {
+                    self.paused = !self.paused;
+                }
+            }
             Screen::Home => match code {
                 _ if up || down => self.menu = step(self.menu, self.menu_items().len(), down),
                 KeyCode::Enter | KeyCode::Char(' ') => {
@@ -1389,6 +1434,45 @@ pub mod fixture {
             }
             s.saved.retain(|c| c != candidate);
             Ok(())
+        }
+        fn live(&self) -> Res<Option<LiveData>> {
+            // Two minutes of readings with a shape, the same every time.
+            let wave = |base: u64, swing: u64, step: u64| -> std::collections::VecDeque<u64> {
+                (0..120u64)
+                    .map(|i| base + (i * step * 37 % (swing * 2)).abs_diff(swing))
+                    .collect()
+            };
+            Ok(Some(LiveData {
+                window: 120,
+                download: Some(wave(380_000_000, 90_000_000, 5_000_000)),
+                upload: Some(wave(90_000_000, 40_000_000, 3_000_000)),
+                connections: Some(wave(12_400, 300, 7)),
+                blocked: Some((0..120u64).map(|i| u64::from(i % 17 == 0) * 3).collect()),
+                networks: [
+                    ("Servers", 120_000_000),
+                    ("Guest Wi-Fi", 40_000_000),
+                    ("Staff network", 210_000_000),
+                ]
+                .into_iter()
+                .map(|(name, base)| live_view::NetSeries {
+                    name: name.to_string(),
+                    down: wave(base, base / 4, 2_000_000),
+                    up: wave(base / 5, base / 20, 1_000_000),
+                })
+                .collect(),
+                feed: vec![
+                    live_view::Blocked {
+                        ago: 3,
+                        packets: 14,
+                        text: "Internet tried to reach the box itself. Nothing allows it.".into(),
+                    },
+                    live_view::Blocked {
+                        ago: 41,
+                        packets: 2,
+                        text: "Guest Wi-Fi tried to reach Staff network. Nothing allows it.".into(),
+                    },
+                ],
+            }))
         }
         fn audit(&self) -> Res<Vec<AuditRow>> {
             let row = |seq, who: &str, event: &str, detail: &str| AuditRow {

@@ -8,7 +8,7 @@ Built for home labs first, Netoxide makes everyday tasks straightforward while k
 
 **0.1.1 preview — available for lab evaluation.** Validated in network namespaces and a systemd VM, with automated CLI, terminal and browser checks. Hardware validation, broader user testing and an independent security audit are still ahead; production use is outside the current release scope. [Release status and supported scope](docs/status.md).
 
-![A recording of the terminal interface: adding a guest network, reviewing and applying the change, and checking access between networks](docs/images/tui-demo.gif)
+![A recording of the terminal interface: live traffic and blocked connections, adding a guest network, reviewing and applying the change, and checking access between networks](docs/images/tui-demo.gif)
 
 *Create a guest network, review the change, and check which connections are allowed—all from the terminal.*
 
@@ -18,6 +18,7 @@ Built for home labs first, Netoxide makes everyday tasks straightforward while k
 - **Run your home-lab router.** DNS, DHCP, VLANs, IPv6 router announcements and WireGuard VPN access in the same configuration.
 - **Review and confirm changes.** See the proposed change in plain language. `ox apply` rolls it back after two minutes unless you confirm with `ox keep`; advanced commits support a configurable confirmation window.
 - **Complete everyday tasks directly.** Add a guest network, forward a service, block a device or domain, or connect a phone to the VPN.
+- **Watch it live.** Traffic per network, open connections and what is being blocked, one reading a second from the kernel's own counters.
 - **Understand a connection's outcome.** Check a packet against the configuration to see the verdict and the rule that decides it, including changes you have not applied yet.
 - **Manage and inspect the box.** Role-based access tokens, configuration history, an audit log, Prometheus metrics and a pfSense configuration importer.
 
@@ -34,6 +35,10 @@ Choose the interface that fits the task. The browser and terminal start with eve
 ![The browser's Access screen, showing allowed and blocked connections between the guest network, inside network and internet](docs/images/web-access.png)
 
 *The Access grid shows which networks can reach each other. Review and apply changes before they take effect.*
+
+![The browser's Live screen: download, upload, connections and blocked packets, a mirrored traffic chart of the last two minutes, traffic per network, and a list of what was just blocked](docs/images/web-live.png)
+
+*Live shows what the box is doing now. Every number is a kernel counter; nothing is estimated.*
 
 On a configured box, adding a guest network follows the same review-and-confirm workflow:
 

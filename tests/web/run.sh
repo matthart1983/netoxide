@@ -23,20 +23,33 @@ work=$(mktemp -d)
 cat >"$work/inside.sh" <<INSIDE
 set -eu
 ip link set lo up
-# Two cables. The far ends go into a second namespace, so the box has
-# exactly two ports: eth0 towards a provider's router, eth1 for the inside.
-(unshare -n sleep 300 & echo \$! >"$work/far")
+# Two cables, each into a namespace of its own, so traffic between them
+# has to cross the box: eth0 goes to a provider's router, eth1 to a client
+# on the inside network.
+(unshare -n sleep 600 & echo \$! >"$work/isp")
+(unshare -n sleep 600 & echo \$! >"$work/client")
 sleep 0.3
-far=\$(cat "$work/far")
-ip link add eth0 type veth peer name isp0 && ip link set isp0 netns \$far
-ip link add eth1 type veth peer name cli0 && ip link set cli0 netns \$far
-nsenter -t \$far -n sh -c 'ip link set isp0 up; ip addr add 203.0.113.1/24 dev isp0; ip link set cli0 up'
+isp=\$(cat "$work/isp")
+client=\$(cat "$work/client")
+ip link add eth0 type veth peer name isp0 && ip link set isp0 netns \$isp
+ip link add eth1 type veth peer name cli0 && ip link set cli0 netns \$client
+nsenter -t \$isp -n sh -c 'ip link set lo up; ip link set isp0 up; ip addr add 203.0.113.1/24 dev isp0'
+nsenter -t \$client -n sh -c 'ip link set lo up; ip link set cli0 up; ip addr add 192.168.10.50/24 dev cli0; ip route add default via 192.168.10.1'
 ip addr add 203.0.113.10/24 dev eth0 && ip link set eth0 up && ip route add default via 203.0.113.1
 ip addr add 192.168.10.1/24 dev eth1 && ip link set eth1 up
+# Real traffic for the Live screen: a server on the provider's side, a
+# device inside that uses it once the box lets it, and something outside
+# that keeps trying ports the box should block.
+nsenter -t \$isp -n python3 "$repo/tests/tui/traffic.py" serve 203.0.113.1 8080 >/dev/null 2>&1 &
+traffic="\${traffic:-} \$!"
+nsenter -t \$isp -n python3 "$repo/tests/tui/traffic.py" knock 203.0.113.10 22 23 3389 >/dev/null 2>&1 &
+traffic="\${traffic:-} \$!"
+nsenter -t \$client -n python3 "$repo/tests/tui/traffic.py" use http://203.0.113.1:8080 >/dev/null 2>&1 &
+traffic="\${traffic:-} \$!"
 "$repo/target/debug/oxd" --state-dir "$work/state" --socket "$work/oxd.sock" \\
     --listen-http 127.0.0.1:8098 $mode 2>"$work/oxd.log" &
 daemon=\$!
-trap 'kill \$daemon \$far 2>/dev/null' EXIT
+trap 'kill \$daemon \$isp \$client \$traffic 2>/dev/null || true' EXIT
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$work/state/setup-code" ] && break; sleep 0.3; done
 BROWSER_ARGS="$browser_args" HOME="$work" node "$here/drive.mjs" http://127.0.0.1:8098 "\$(cat "$work/state/setup-code")" "$out"
 INSIDE
