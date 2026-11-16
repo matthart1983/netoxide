@@ -29,15 +29,20 @@ nsenter -t "$OX_LAB_CLIENT" -n sh -c 'ip link add link cli0 name cli0.30 type vl
 # trap below can stop it. A program left running would keep this script's
 # output open and whatever waits on it would wait for ever.
 nsenter -t "$OX_LAB_ISP" -n python3 "$here/traffic.py" serve 203.0.113.1 8080 >/dev/null 2>&1 &
+traffic="${traffic:-} $!"
 nsenter -t "$OX_LAB_ISP" -n python3 "$here/traffic.py" knock 203.0.113.10 22 23 3389 >/dev/null 2>&1 &
+traffic="${traffic:-} $!"
 nsenter -t "$OX_LAB_CLIENT" -n python3 "$here/traffic.py" use http://203.0.113.1:8080 from=192.168.10.50 >/dev/null 2>&1 &
+traffic="${traffic:-} $!"
 nsenter -t "$OX_LAB_CLIENT" -n python3 "$here/traffic.py" use http://203.0.113.1:8080 from=192.168.30.50 >/dev/null 2>&1 &
+traffic="${traffic:-} $!"
 nsenter -t "$OX_LAB_CLIENT" -n python3 "$here/traffic.py" knock 192.168.10.77 445 from=192.168.30.50 >/dev/null 2>&1 &
+traffic="${traffic:-} $!"
 # The box takes readings only while it is asked. Ask for a while first, so
 # the recording opens on a chart with some history in it.
 marker=$(mktemp)
 (while [ -e "$marker" ] && "$bin/netoxide-tui" --live --snapshot live >/dev/null 2>&1; do sleep 1; done) >/dev/null 2>&1 &
-trap 'rm -f "$marker"; kill $(jobs -p) 2>/dev/null' EXIT
+trap 'rm -f "$marker"; kill $traffic 2>/dev/null || true' EXIT
 sleep 50
 
 work=$(mktemp -d)

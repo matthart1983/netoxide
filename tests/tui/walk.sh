@@ -78,10 +78,15 @@ has "$running"
 # server on the provider's side, a device inside that uses it, and
 # something outside that keeps trying ports the box should block.
 here=$(cd "$(dirname "$0")" && pwd)
+# Their process IDs are kept, because `jobs -p` in a trap is not something
+# every sh can do, and a failing trap would fail the walk.
 nsenter -t "$OX_LAB_ISP" -n python3 "$here/traffic.py" serve 203.0.113.1 8080 >/dev/null 2>&1 &
+traffic=$!
 nsenter -t "$OX_LAB_ISP" -n python3 "$here/traffic.py" knock 203.0.113.10 22 23 3389 >/dev/null 2>&1 &
+traffic="$traffic $!"
 nsenter -t "$OX_LAB_CLIENT" -n python3 "$here/traffic.py" use http://203.0.113.1:8080 >/dev/null 2>&1 &
-trap 'kill $(jobs -p) 2>/dev/null' EXIT
+traffic="$traffic $!"
+trap 'kill $traffic 2>/dev/null || true' EXIT
 # The box takes readings only while it is asked, so ask for a few seconds.
 for _ in 1 2 3 4 5 6 7 8; do
     "$tui" --socket "$OX_SOCKET" --snapshot live --size 80x24 >/dev/null

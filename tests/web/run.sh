@@ -41,12 +41,15 @@ ip addr add 192.168.10.1/24 dev eth1 && ip link set eth1 up
 # device inside that uses it once the box lets it, and something outside
 # that keeps trying ports the box should block.
 nsenter -t \$isp -n python3 "$repo/tests/tui/traffic.py" serve 203.0.113.1 8080 >/dev/null 2>&1 &
+traffic="\${traffic:-} \$!"
 nsenter -t \$isp -n python3 "$repo/tests/tui/traffic.py" knock 203.0.113.10 22 23 3389 >/dev/null 2>&1 &
+traffic="\${traffic:-} \$!"
 nsenter -t \$client -n python3 "$repo/tests/tui/traffic.py" use http://203.0.113.1:8080 >/dev/null 2>&1 &
+traffic="\${traffic:-} \$!"
 "$repo/target/debug/oxd" --state-dir "$work/state" --socket "$work/oxd.sock" \\
     --listen-http 127.0.0.1:8098 $mode 2>"$work/oxd.log" &
 daemon=\$!
-trap 'kill \$daemon \$isp \$client \$(jobs -p) 2>/dev/null' EXIT
+trap 'kill \$daemon \$isp \$client \$traffic 2>/dev/null || true' EXIT
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$work/state/setup-code" ] && break; sleep 0.3; done
 BROWSER_ARGS="$browser_args" HOME="$work" node "$here/drive.mjs" http://127.0.0.1:8098 "\$(cat "$work/state/setup-code")" "$out"
 INSIDE

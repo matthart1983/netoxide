@@ -40,7 +40,7 @@ ip addr add 203.0.113.10/24 dev eth0 && ip link set eth0 up && ip route add defa
 ip addr add 192.168.10.1/24 dev eth1 && ip link set eth1 up
 "$repo/target/debug/oxd" --state-dir "$work/state" --socket "$work/oxd.sock" $mode 2>"$work/oxd.log" &
 daemon=\$!
-trap 'kill \$daemon \$isp \$client 2>/dev/null' EXIT
+trap 'kill \$daemon \$isp \$client 2>/dev/null || true' EXIT
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -S "$work/oxd.sock" ] && break; sleep 0.3; done
 # The walk reaches the two far ends with: nsenter -t <pid> -n
 export OX_SOCKET="$work/oxd.sock" HOME="$work" OX_LAB_ISP=\$isp OX_LAB_CLIENT=\$client
